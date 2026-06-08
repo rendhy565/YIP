@@ -13,6 +13,7 @@ export default function Costs() {
   const [open, setOpen] = useState(false);
 
   const isOp = user?.role === "operation";
+  const isAdmin = user?.role === "administrator";
   const defaultCategory = isOp ? "Vendor" : "Operational";
 
   const [form, setForm] = useState({
@@ -93,7 +94,7 @@ export default function Costs() {
                   </span>
                 </Td>
                 <Td className="text-right">
-                  {((isOp && c.cost_category === "Vendor") || !isOp) && (
+                  {((isOp && c.cost_category === "Vendor") || isAdmin || (!isOp && !isAdmin)) && (
                     <button onClick={() => del(c.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
                   )}
                 </Td>
@@ -122,7 +123,13 @@ export default function Costs() {
               <div>
                 <Label>Kategori Biaya *</Label>
                 <Select data-testid="cost-category-select" value={form.cost_category} onChange={(e) => setForm({ ...form, cost_category: e.target.value })} required>
-                  {isOp ? (
+                  {isAdmin ? (
+                    <>
+                      <option value="Vendor">Vendor (Accrue / Hutang)</option>
+                      <option value="Operational">Operational (Cash)</option>
+                      <option value="Lintas">Lintas (Cash)</option>
+                    </>
+                  ) : isOp ? (
                     <option value="Vendor">Vendor (Accrue / Hutang)</option>
                   ) : (
                     <>

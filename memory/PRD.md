@@ -56,3 +56,18 @@ Build a complete, production-ready Order-to-Cash and Logistics Transportation Ma
 - Implement single-file Lampiran branching (P1).
 - Consider splitting backend into routers (P2).
 - Add edit & delete order screens (P2).
+
+## Iteration 2026-01-08 (later) — Administrator + Recurring Fixed Cost
+- New role **administrator** seeded as `admin / admin123` with full access + the new module `user_management`.
+- New collection `users.permissions[]` (per-user module access list) + `users.active` flag.
+- New page `/users` (admin-only) with create, edit (role + permission checkboxes), reset password, soft-disable (active toggle), delete. Guardrails: cannot delete/demote/disable the last administrator; cannot delete self.
+- `GET /api/modules` returns canonical module catalog (13 modules). Used by the User form to render permission checkboxes.
+- Sidebar (`Layout.js`) became **permission-driven** (`hasPerm(user, item.perm)`); administrator always shows everything; non-admin sees only the modules their `user.permissions[]` allows.
+- `App.js` `Protected` auto-allows administrator on any `roles={[...]}` route.
+- Backend `require_role` auto-includes administrator; `POST /api/costs` allows admin for both Vendor and Operational/Lintas categories.
+- New endpoint `POST /api/fixed-costs/copy` (Finance) with `{ source_month, target_month, overwrite }`. Frontend `FixedCosts.js` has new "Salin ke Bulan Berikutnya" button → modal with target month (defaulted to next month) + overwrite toggle. After copy the page auto-navigates to the target period and shows the copied rows (each with `copied_from_month` metadata).
+- Login page now has 3 demo buttons (Administrator / Operation / Finance).
+
+## Verified
+- API smoke: admin can post Vendor + Operational costs, operation cannot create users (403), cannot demote last admin (400 with proper message), copy fixed costs across months works, custom-permission users return only their allowed perms.
+- UI screenshots (desktop): User Management list, Create user dialog (13 perm checkboxes), FC copy dialog, FC after-copy view, admin Dashboard with full sidebar + ADMINISTRATOR section.

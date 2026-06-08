@@ -12,7 +12,7 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const token = localStorage.getItem("tms_token");
-    if (token && !user) {
+    if (token) {
       setLoading(true);
       api.get("/auth/me")
         .then((r) => {
@@ -22,6 +22,7 @@ export function AuthProvider({ children }) {
         .catch(() => {
           localStorage.removeItem("tms_token");
           localStorage.removeItem("tms_user");
+          setUser(null);
         })
         .finally(() => setLoading(false));
     }

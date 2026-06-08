@@ -61,6 +61,10 @@ export default function Login() {
           </div>
           <div className="space-y-2 text-xs text-slate-400">
             <div className="flex items-center gap-2">
+              <div className="h-1.5 w-1.5 bg-rose-400 rounded-full"></div>
+              <span>Administrator: Akses penuh + manajemen user & permission</span>
+            </div>
+            <div className="flex items-center gap-2">
               <div className="h-1.5 w-1.5 bg-blue-400 rounded-full"></div>
               <span>Role Operation: Input order, biaya vendor, rekap, invoice</span>
             </div>
@@ -119,7 +123,15 @@ export default function Login() {
 
           <div className="mt-8 pt-6 border-t border-slate-200">
             <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-400 mb-3">Akun Demo</div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <button
+                data-testid="demo-admin-btn"
+                onClick={() => applyDemo("admin", "admin123")}
+                className="text-left p-3 rounded border border-slate-200 hover:border-rose-500 hover:bg-rose-50 transition-colors"
+              >
+                <div className="text-xs font-bold text-slate-900">Administrator</div>
+                <div className="text-[11px] text-slate-500 font-mono">admin / admin123</div>
+              </button>
               <button
                 data-testid="demo-operation-btn"
                 onClick={() => applyDemo("operation", "operation123")}

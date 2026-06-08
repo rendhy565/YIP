@@ -89,10 +89,36 @@ async def get_current_user(request: Request) -> dict:
 
 def require_role(*roles: str):
     async def dep(user: dict = Depends(get_current_user)) -> dict:
+        # Administrator selalu diizinkan untuk semua route role
+        if user.get("role") == "administrator":
+            return user
         if user.get("role") not in roles:
             raise HTTPException(status_code=403, detail="Akses ditolak untuk role ini")
         return user
     return dep
+
+# Master katalog modul + default permissions per role
+MODULES = [
+    {"key": "orders_input", "label": "Input Order", "default_roles": ["operation"]},
+    {"key": "orders_list", "label": "Daftar AWB", "default_roles": ["operation", "finance"]},
+    {"key": "recap", "label": "Rekap & Rekonsiliasi", "default_roles": ["operation"]},
+    {"key": "invoices", "label": "Invoice", "default_roles": ["operation", "finance"]},
+    {"key": "payments", "label": "Pembayaran", "default_roles": ["finance"]},
+    {"key": "costs", "label": "Plotting Biaya", "default_roles": ["operation", "finance"]},
+    {"key": "accrue", "label": "Settle Hutang Vendor", "default_roles": ["finance"]},
+    {"key": "fixed_costs", "label": "Biaya Tetap (Overhead)", "default_roles": ["finance"]},
+    {"key": "customers", "label": "Master Customer", "default_roles": ["operation", "finance"]},
+    {"key": "contracts", "label": "Master Kontrak", "default_roles": ["operation", "finance"]},
+    {"key": "pnl", "label": "Laporan Laba Rugi", "default_roles": ["operation", "finance"]},
+    {"key": "settings", "label": "Pengaturan", "default_roles": ["operation", "finance"]},
+    {"key": "user_management", "label": "User Management", "default_roles": []},
+]
+MODULE_KEYS = [m["key"] for m in MODULES]
+
+def default_permissions(role: str) -> List[str]:
+    if role == "administrator":
+        return list(MODULE_KEYS)
+    return [m["key"] for m in MODULES if role in m["default_roles"]]
 
 # ---------------------------------------------------------------------------
 # Pydantic Schemas
@@ -106,6 +132,24 @@ class UserOut(BaseModel):
     username: str
     role: str
     full_name: Optional[str] = None
+    permissions: List[str] = []
+    active: bool = True
+
+class UserCreateIn(BaseModel):
+    username: str
+    password: str
+    full_name: Optional[str] = None
+    role: str  # administrator | operation | finance
+    permissions: Optional[List[str]] = None  # if None → use default_permissions(role)
+
+class UserUpdateIn(BaseModel):
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    permissions: Optional[List[str]] = None
+    active: Optional[bool] = None
+
+class PasswordResetIn(BaseModel):
+    password: str
 
 class CustomerIn(BaseModel):
     name: str
@@ -195,6 +239,12 @@ async def seed_data():
     # Users
     seeds = [
         {
+            "username": os.environ.get("SEED_ADMIN_USERNAME", "admin"),
+            "password": os.environ.get("SEED_ADMIN_PASSWORD", "admin123"),
+            "role": "administrator",
+            "full_name": "Administrator",
+        },
+        {
             "username": os.environ.get("SEED_OPERATION_USERNAME", "operation"),
             "password": os.environ.get("SEED_OPERATION_PASSWORD", "operation123"),
             "role": "operation",
@@ -214,17 +264,25 @@ async def seed_data():
             "password_hash": hash_password(s["password"]),
             "role": s["role"],
             "full_name": s["full_name"],
+            "permissions": default_permissions(s["role"]),
+            "active": True,
             "created_at": datetime.now(timezone.utc),
         }
         if not existing:
             await db.users.insert_one(doc)
         else:
-            # keep password in sync with .env
+            # keep password & role in sync with .env; ensure permissions field exists
+            updates = {"role": s["role"]}
             if not verify_password(s["password"], existing.get("password_hash", "")):
-                await db.users.update_one(
-                    {"_id": existing["_id"]},
-                    {"$set": {"password_hash": doc["password_hash"], "role": s["role"]}},
-                )
+                updates["password_hash"] = doc["password_hash"]
+            if "permissions" not in existing or not existing.get("permissions"):
+                updates["permissions"] = doc["permissions"]
+            if "active" not in existing:
+                updates["active"] = True
+            await db.users.update_one(
+                {"_id": existing["_id"]},
+                {"$set": updates},
+            )
 
     # Tax settings
     for key, val in [("tax_ppn_0", "0"), ("tax_ppn_11", "11"), ("tax_ppn_12", "12")]:
@@ -355,11 +413,13 @@ app.add_middleware(
 async def login(data: LoginIn):
     user = await db.users.find_one({"username": data.username.strip().lower()})
     if not user:
-        # also try as-is for backward compat
         user = await db.users.find_one({"username": data.username})
     if not user or not verify_password(data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Username atau password salah")
+    if user.get("active") is False:
+        raise HTTPException(status_code=403, detail="User dinonaktifkan oleh administrator")
     token = create_access_token(str(user["_id"]), user["username"], user["role"])
+    perms = user.get("permissions") or default_permissions(user["role"])
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -368,12 +428,22 @@ async def login(data: LoginIn):
             "username": user["username"],
             "role": user["role"],
             "full_name": user.get("full_name"),
+            "permissions": perms,
+            "active": user.get("active", True),
         },
     }
 
 @app.get("/api/auth/me", response_model=UserOut)
 async def me(user: dict = Depends(get_current_user)):
-    return UserOut(id=user["id"], username=user["username"], role=user["role"], full_name=user.get("full_name"))
+    perms = user.get("permissions") or default_permissions(user["role"])
+    return UserOut(
+        id=user["id"],
+        username=user["username"],
+        role=user["role"],
+        full_name=user.get("full_name"),
+        permissions=perms,
+        active=user.get("active", True),
+    )
 
 # ---------------------------------------------------------------------------
 # Customers
@@ -566,15 +636,16 @@ async def list_costs(
 @app.post("/api/costs")
 async def create_cost(data: CostIn, user: dict = Depends(get_current_user)):
     role = user["role"]
+    is_admin = role == "administrator"
     # Business rule enforcement
     if data.cost_category == "Vendor":
-        if role != "operation":
-            raise HTTPException(403, "Hanya role Operation yang dapat input biaya Vendor")
+        if not (is_admin or role == "operation"):
+            raise HTTPException(403, "Hanya role Operation/Administrator yang dapat input biaya Vendor")
         payment_type = "Accrue"
         is_settled = False
     elif data.cost_category in ("Operational", "Lintas"):
-        if role != "finance":
-            raise HTTPException(403, "Hanya role Finance yang dapat input biaya Operational/Lintas")
+        if not (is_admin or role == "finance"):
+            raise HTTPException(403, "Hanya role Finance/Administrator yang dapat input biaya Operational/Lintas")
         payment_type = "Cash"
         is_settled = True
     else:
@@ -614,8 +685,10 @@ async def delete_cost(cid: str, user: dict = Depends(get_current_user)):
     cost = await db.awb_costs.find_one({"_id": _oid(cid)})
     if not cost:
         raise HTTPException(404, "Biaya tidak ditemukan")
-    # operation can only delete their own vendor (unsettled), finance can delete any cash
-    if user["role"] == "operation" and cost["cost_category"] != "Vendor":
+    # operation can only delete their own vendor (unsettled), finance can delete any cash, admin can delete any
+    if user["role"] == "administrator":
+        pass
+    elif user["role"] == "operation" and cost["cost_category"] != "Vendor":
         raise HTTPException(403, "Tidak diizinkan")
     await db.awb_costs.delete_one({"_id": _oid(cid)})
     return {"ok": True}
@@ -910,3 +983,160 @@ async def kpis(user: dict = Depends(get_current_user)):
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+# ---------------------------------------------------------------------------
+# User Management (Administrator only)
+# ---------------------------------------------------------------------------
+VALID_ROLES = ["administrator", "operation", "finance"]
+
+@app.get("/api/modules")
+async def list_modules(user: dict = Depends(get_current_user)):
+    return MODULES
+
+@app.get("/api/users")
+async def list_users(user: dict = Depends(require_role("administrator"))):
+    docs = await db.users.find().sort("created_at", -1).to_list(2000)
+    out = []
+    for d in docs:
+        s = serialize(d)
+        s.pop("password_hash", None)
+        if not s.get("permissions"):
+            s["permissions"] = default_permissions(s.get("role", ""))
+        if "active" not in s:
+            s["active"] = True
+        out.append(s)
+    return out
+
+@app.post("/api/users")
+async def create_user(data: UserCreateIn, user: dict = Depends(require_role("administrator"))):
+    if data.role not in VALID_ROLES:
+        raise HTTPException(400, f"Role tidak valid. Pilih: {', '.join(VALID_ROLES)}")
+    uname = data.username.strip().lower()
+    if not uname or len(uname) < 3:
+        raise HTTPException(400, "Username minimal 3 karakter")
+    if len(data.password) < 6:
+        raise HTTPException(400, "Password minimal 6 karakter")
+    existing = await db.users.find_one({"username": uname})
+    if existing:
+        raise HTTPException(400, "Username sudah dipakai")
+    perms = data.permissions if data.permissions is not None else default_permissions(data.role)
+    # validate permission keys
+    invalid = [p for p in perms if p not in MODULE_KEYS]
+    if invalid:
+        raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid)}")
+    doc = {
+        "username": uname,
+        "password_hash": hash_password(data.password),
+        "role": data.role,
+        "full_name": data.full_name or uname,
+        "permissions": perms,
+        "active": True,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": user["id"],
+    }
+    r = await db.users.insert_one(doc)
+    new = await db.users.find_one({"_id": r.inserted_id})
+    s = serialize(new)
+    s.pop("password_hash", None)
+    return s
+
+@app.put("/api/users/{uid}")
+async def update_user(uid: str, data: UserUpdateIn, user: dict = Depends(require_role("administrator"))):
+    target = await db.users.find_one({"_id": _oid(uid)})
+    if not target:
+        raise HTTPException(404, "User tidak ditemukan")
+    updates = {}
+    if data.full_name is not None:
+        updates["full_name"] = data.full_name
+    if data.role is not None:
+        if data.role not in VALID_ROLES:
+            raise HTTPException(400, "Role tidak valid")
+        # prevent demoting the last administrator
+        if target.get("role") == "administrator" and data.role != "administrator":
+            admin_count = await db.users.count_documents({"role": "administrator", "active": {"$ne": False}})
+            if admin_count <= 1:
+                raise HTTPException(400, "Tidak dapat menonaktifkan administrator terakhir")
+        updates["role"] = data.role
+    if data.permissions is not None:
+        invalid = [p for p in data.permissions if p not in MODULE_KEYS]
+        if invalid:
+            raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid)}")
+        updates["permissions"] = data.permissions
+    if data.active is not None:
+        if target.get("role") == "administrator" and data.active is False:
+            admin_count = await db.users.count_documents({"role": "administrator", "active": {"$ne": False}})
+            if admin_count <= 1:
+                raise HTTPException(400, "Tidak dapat menonaktifkan administrator terakhir")
+        updates["active"] = data.active
+    if updates:
+        await db.users.update_one({"_id": _oid(uid)}, {"$set": updates})
+    new = await db.users.find_one({"_id": _oid(uid)})
+    s = serialize(new)
+    s.pop("password_hash", None)
+    return s
+
+@app.put("/api/users/{uid}/password")
+async def reset_password(uid: str, data: PasswordResetIn, user: dict = Depends(require_role("administrator"))):
+    if len(data.password) < 6:
+        raise HTTPException(400, "Password minimal 6 karakter")
+    target = await db.users.find_one({"_id": _oid(uid)})
+    if not target:
+        raise HTTPException(404, "User tidak ditemukan")
+    await db.users.update_one(
+        {"_id": _oid(uid)},
+        {"$set": {"password_hash": hash_password(data.password)}},
+    )
+    return {"ok": True}
+
+@app.delete("/api/users/{uid}")
+async def delete_user(uid: str, user: dict = Depends(require_role("administrator"))):
+    if uid == user["id"]:
+        raise HTTPException(400, "Tidak dapat menghapus diri sendiri")
+    target = await db.users.find_one({"_id": _oid(uid)})
+    if not target:
+        raise HTTPException(404, "User tidak ditemukan")
+    if target.get("role") == "administrator":
+        admin_count = await db.users.count_documents({"role": "administrator"})
+        if admin_count <= 1:
+            raise HTTPException(400, "Tidak dapat menghapus administrator terakhir")
+    await db.users.delete_one({"_id": _oid(uid)})
+    return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# Copy Fixed Costs to next/target month
+# ---------------------------------------------------------------------------
+class CopyFixedCostIn(BaseModel):
+    source_month: str
+    target_month: str
+    overwrite: bool = False  # if True, delete target month items before copying
+
+@app.post("/api/fixed-costs/copy")
+async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_role("finance"))):
+    for m in (data.source_month, data.target_month):
+        try:
+            y, mm = m.split("-")
+            int(y)
+            int(mm)
+        except Exception:
+            raise HTTPException(400, "Format periode harus YYYY-MM")
+    if data.source_month == data.target_month:
+        raise HTTPException(400, "Bulan sumber dan target tidak boleh sama")
+    src = await db.fixed_costs.find({"period_month": data.source_month}).to_list(2000)
+    if not src:
+        raise HTTPException(400, f"Tidak ada biaya tetap di periode {data.source_month}")
+    if data.overwrite:
+        await db.fixed_costs.delete_many({"period_month": data.target_month})
+    new_docs = []
+    for f in src:
+        new_docs.append({
+            "category": f["category"],
+            "description": f.get("description"),
+            "amount": f.get("amount", 0),
+            "period_month": data.target_month,
+            "created_by": user["id"],
+            "copied_from_month": data.source_month,
+            "created_at": datetime.now(timezone.utc),
+        })
+    if new_docs:
+        await db.fixed_costs.insert_many(new_docs)
+    return {"copied": len(new_docs), "target_month": data.target_month, "overwrite": data.overwrite}

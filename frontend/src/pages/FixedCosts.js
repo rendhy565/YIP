@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, currentMonth, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, Trash2, X, Banknote, Receipt } from "lucide-react";
+import { Plus, Trash2, X, Banknote, Receipt, Copy } from "lucide-react";
 
 const CATEGORY_COLORS = {
   Gaji: "text-blue-700 bg-blue-50 border-blue-200",
@@ -19,6 +19,9 @@ export default function FixedCosts() {
   const [categories, setCategories] = useState([]);
   const [month, setMonth] = useState(currentMonth());
   const [open, setOpen] = useState(false);
+  const [openCopy, setOpenCopy] = useState(false);
+  const [copyTarget, setCopyTarget] = useState("");
+  const [copyOverwrite, setCopyOverwrite] = useState(false);
   const [form, setForm] = useState({ category: "Gaji", description: "", amount: "", period_month: currentMonth() });
 
   const load = () => api.get("/fixed-costs", { params: { month } }).then((r) => setRows(r.data));
@@ -42,6 +45,36 @@ export default function FixedCosts() {
     catch (e) { toast.error(errMsg(e)); }
   };
 
+  const nextMonth = (ym) => {
+    const [y, m] = ym.split("-").map((x) => parseInt(x, 10));
+    const d = new Date(y, m, 1); // m as 0-indexed month + 1 = next month
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  };
+
+  const openCopyDialog = () => {
+    if (rows.length === 0) {
+      toast.error("Tidak ada biaya untuk disalin di periode ini");
+      return;
+    }
+    setCopyTarget(nextMonth(month));
+    setCopyOverwrite(false);
+    setOpenCopy(true);
+  };
+
+  const doCopy = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api.post("/fixed-costs/copy", {
+        source_month: month,
+        target_month: copyTarget,
+        overwrite: copyOverwrite,
+      });
+      toast.success(`${r.data.copied} biaya tetap disalin ke ${r.data.target_month}`);
+      setOpenCopy(false);
+      setMonth(copyTarget); // pindah view ke periode target
+    } catch (e2) { toast.error(errMsg(e2)); }
+  };
+
   const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
   const byCat = rows.reduce((acc, r) => { acc[r.category] = (acc[r.category] || 0) + r.amount; return acc; }, {});
 
@@ -51,9 +84,14 @@ export default function FixedCosts() {
         title="Biaya Tetap (Fixed Cost / Overhead)"
         subtitle="Biaya operasional bulanan di luar AWB. Akan mengurangi Gross Margin di Laporan Laba Rugi."
         action={
-          <Button data-testid="add-fixed-cost-btn" onClick={() => { setForm({ category: "Gaji", description: "", amount: "", period_month: month }); setOpen(true); }}>
-            <Plus size={16}/> Tambah Biaya Tetap
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
+              <Copy size={16}/> Salin ke Bulan Berikutnya
+            </Button>
+            <Button data-testid="add-fixed-cost-btn" onClick={() => { setForm({ category: "Gaji", description: "", amount: "", period_month: month }); setOpen(true); }}>
+              <Plus size={16}/> Tambah Biaya Tetap
+            </Button>
+          </div>
         }
       />
 
@@ -138,6 +176,42 @@ export default function FixedCosts() {
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="secondary" type="button" onClick={() => setOpen(false)}>Batal</Button>
                 <Button data-testid="save-fixed-cost-btn" type="submit"><Receipt size={14}/> Simpan</Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+      {openCopy && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md p-6">
+            <div className="flex items-start justify-between mb-4">
+              <h3 className="font-heading font-bold text-xl">Salin Biaya Tetap</h3>
+              <button onClick={() => setOpenCopy(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <p className="text-sm text-slate-600 mb-4">
+              Akan menyalin <strong>{rows.length} item</strong> biaya tetap dari <span className="font-mono font-bold">{month}</span> ke periode tujuan.
+            </p>
+            <form onSubmit={doCopy} className="space-y-3">
+              <div>
+                <Label>Periode Tujuan *</Label>
+                <Input data-testid="copy-target-month-input" type="month" value={copyTarget} onChange={(e) => setCopyTarget(e.target.value)} required />
+              </div>
+              <label className="flex items-start gap-2 p-3 rounded border border-slate-200 cursor-pointer hover:bg-slate-50">
+                <input
+                  data-testid="copy-overwrite-toggle"
+                  type="checkbox"
+                  checked={copyOverwrite}
+                  onChange={(e) => setCopyOverwrite(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <div className="text-sm">
+                  <div className="font-semibold text-slate-800">Hapus dulu item di periode tujuan</div>
+                  <div className="text-[11px] text-slate-500">Jika belum dicentang, item baru ditambahkan (mungkin menghasilkan duplikat).</div>
+                </div>
+              </label>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="secondary" type="button" onClick={() => setOpenCopy(false)}>Batal</Button>
+                <Button data-testid="confirm-copy-btn" type="submit"><Copy size={14}/> Salin Sekarang</Button>
               </div>
             </form>
           </Card>

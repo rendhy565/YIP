@@ -4,27 +4,36 @@ import { useAuth } from "../lib/auth";
 import {
   LayoutDashboard, PackagePlus, ListChecks, Users, FileText,
   Wallet, ClipboardCheck, BadgeDollarSign, TrendingUp, Settings as SettingsIcon,
-  LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote
+  LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck
 } from "lucide-react";
 
 const NAV = [
-  { to: "/", label: "Dashboard", icon: LayoutDashboard, roles: ["operation", "finance"] },
+  { to: "/", label: "Dashboard", icon: LayoutDashboard, perm: "*" },
   { type: "section", label: "Order to Cash" },
-  { to: "/orders/new", label: "Input Order", icon: PackagePlus, roles: ["operation"] },
-  { to: "/orders", label: "Daftar AWB", icon: ListChecks, roles: ["operation", "finance"] },
-  { to: "/recap", label: "Rekap & Rekonsiliasi", icon: FileSpreadsheet, roles: ["operation"] },
-  { to: "/invoices", label: "Invoice", icon: FileText, roles: ["operation", "finance"] },
-  { to: "/payments", label: "Pembayaran", icon: BadgeDollarSign, roles: ["finance"] },
+  { to: "/orders/new", label: "Input Order", icon: PackagePlus, perm: "orders_input" },
+  { to: "/orders", label: "Daftar AWB", icon: ListChecks, perm: "orders_list" },
+  { to: "/recap", label: "Rekap & Rekonsiliasi", icon: FileSpreadsheet, perm: "recap" },
+  { to: "/invoices", label: "Invoice", icon: FileText, perm: "invoices" },
+  { to: "/payments", label: "Pembayaran", icon: BadgeDollarSign, perm: "payments" },
   { type: "section", label: "Biaya" },
-  { to: "/costs", label: "Plotting Biaya", icon: Coins, roles: ["operation", "finance"] },
-  { to: "/accrue", label: "Settle Hutang Vendor", icon: Wallet, roles: ["finance"] },
-  { to: "/fixed-costs", label: "Biaya Tetap (Overhead)", icon: Banknote, roles: ["finance"] },
+  { to: "/costs", label: "Plotting Biaya", icon: Coins, perm: "costs" },
+  { to: "/accrue", label: "Settle Hutang Vendor", icon: Wallet, perm: "accrue" },
+  { to: "/fixed-costs", label: "Biaya Tetap (Overhead)", icon: Banknote, perm: "fixed_costs" },
   { type: "section", label: "Master & Laporan" },
-  { to: "/customers", label: "Customer", icon: Users, roles: ["operation", "finance"] },
-  { to: "/contracts", label: "Kontrak", icon: ClipboardCheck, roles: ["operation", "finance"] },
-  { to: "/pnl", label: "Laporan Laba Rugi", icon: TrendingUp, roles: ["operation", "finance"] },
-  { to: "/settings", label: "Pengaturan", icon: SettingsIcon, roles: ["operation", "finance"] },
+  { to: "/customers", label: "Customer", icon: Users, perm: "customers" },
+  { to: "/contracts", label: "Kontrak", icon: ClipboardCheck, perm: "contracts" },
+  { to: "/pnl", label: "Laporan Laba Rugi", icon: TrendingUp, perm: "pnl" },
+  { to: "/settings", label: "Pengaturan", icon: SettingsIcon, perm: "settings" },
+  { type: "section", label: "Administrator", adminOnly: true },
+  { to: "/users", label: "User Management", icon: ShieldCheck, perm: "user_management" },
 ];
+
+function hasPerm(user, perm) {
+  if (!user) return false;
+  if (user.role === "administrator") return true;
+  if (perm === "*") return true;
+  return Array.isArray(user.permissions) && user.permissions.includes(perm);
+}
 
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
@@ -32,7 +41,9 @@ export default function Layout({ children }) {
   const [open, setOpen] = useState(false);
 
   // close sidebar on route change (mobile)
-  useEffect(() => { setOpen(false); }, [loc.pathname]);
+  useEffect(() => {
+    setOpen(false);
+  }, [loc.pathname]);
 
   const SidebarBody = (
     <>
@@ -59,13 +70,14 @@ export default function Layout({ children }) {
       <nav className="flex-1 overflow-y-auto py-3 px-2 text-sm">
         {NAV.map((item, i) => {
           if (item.type === "section") {
+            if (item.adminOnly && user?.role !== "administrator") return null;
             return (
               <div key={i} className="mt-4 mb-1 px-3 text-[10px] uppercase tracking-[0.18em] text-slate-500 font-bold">
                 {item.label}
               </div>
             );
           }
-          if (item.roles && user && !item.roles.includes(user.role)) return null;
+          if (!hasPerm(user, item.perm)) return null;
           const Icon = item.icon;
           const active = loc.pathname === item.to;
           return (

@@ -18,10 +18,13 @@ import Payments from "./pages/Payments";
 import ProfitLoss from "./pages/ProfitLoss";
 import FixedCosts from "./pages/FixedCosts";
 import Settings from "./pages/Settings";
+import Users from "./pages/Users";
 
 function Protected({ children, roles }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
+  // Administrator can access everything
+  if (user.role === "administrator") return children;
   if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
   return children;
 }
@@ -50,6 +53,7 @@ export default function App() {
           <Route path="/payments" element={<Protected roles={["finance"]}><Shell><Payments /></Shell></Protected>} />
           <Route path="/fixed-costs" element={<Protected roles={["finance"]}><Shell><FixedCosts /></Shell></Protected>} />
           <Route path="/pnl" element={<Protected><Shell><ProfitLoss /></Shell></Protected>} />
+          <Route path="/users" element={<Protected roles={["administrator"]}><Shell><Users /></Shell></Protected>} />
           <Route path="/settings" element={<Protected><Shell><Settings /></Shell></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
