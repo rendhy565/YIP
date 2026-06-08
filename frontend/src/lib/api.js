@@ -1,0 +1,31 @@
+import axios from "axios";
+
+const BASE = process.env.REACT_APP_BACKEND_URL;
+
+const api = axios.create({
+  baseURL: `${BASE}/api`,
+  timeout: 20000,
+});
+
+api.interceptors.request.use((cfg) => {
+  const token = localStorage.getItem("tms_token");
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  return cfg;
+});
+
+api.interceptors.response.use(
+  (r) => r,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem("tms_token");
+      localStorage.removeItem("tms_user");
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+    return Promise.reject(err);
+  }
+);
+
+export default api;
+export const BACKEND_URL = BASE;

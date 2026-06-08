@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --primary: #1d4ed8;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: #1d4ed8; color: white; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Print styles for Invoice / Faktur Pajak / Lampiran / PO */
+@media print {
+  body { background: white; }
+  .no-print { display: none !important; }
+  .print-page {
+    page-break-after: always;
+    padding: 24px;
+  }
+  .print-page:last-child { page-break-after: auto; }
+  aside, header.app-header { display: none !important; }
+  main { margin: 0 !important; padding: 0 !important; }
+}
+
+/* Login bg overlay */
+.login-bg {
+  background-image:
+    linear-gradient(rgba(15,23,42,0.78), rgba(15,23,42,0.92)),
+    url('https://images.pexels.com/photos/1427541/pexels-photo-1427541.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=900&w=1600');
+  background-size: cover;
+  background-position: center;
+}
+
+/* tiny utility */
+.kbd {
+  font-family: 'IBM Plex Mono', monospace;
+  background: #0f172a;
+  color: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
