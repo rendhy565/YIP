@@ -144,6 +144,12 @@ class SettingIn(BaseModel):
 class PaymentMarkIn(BaseModel):
     awb_id: str
 
+class FixedCostIn(BaseModel):
+    category: str  # Gaji, Sewa, Utilities, Marketing, Lainnya
+    description: Optional[str] = None
+    amount: float
+    period_month: str  # format YYYY-MM
+
 # ---------------------------------------------------------------------------
 # AWB number generator
 # ---------------------------------------------------------------------------
@@ -184,6 +190,7 @@ async def seed_data():
     await db.awb_orders.create_index("awb_number", unique=True)
     await db.invoices.create_index("invoice_number", unique=True)
     await db.settings.create_index("key_name", unique=True)
+    await db.fixed_costs.create_index("period_month")
 
     # Users
     seeds = [
@@ -311,6 +318,19 @@ async def seed_data():
                         "invoice_number": await next_invoice_number(),
                         "created_at": datetime.now(timezone.utc),
                     })
+
+    # Sample fixed costs (current month)
+    if await db.fixed_costs.count_documents({}) == 0:
+        cur_month = datetime.now(timezone.utc).strftime("%Y-%m")
+        for f in [
+            {"category": "Gaji", "description": "Gaji bulanan tim operasional & finance", "amount": 25000000},
+            {"category": "Sewa", "description": "Sewa kantor & gudang", "amount": 8000000},
+            {"category": "Utilities", "description": "Listrik, air, internet", "amount": 1500000},
+            {"category": "Marketing", "description": "Iklan & promosi B2B", "amount": 2500000},
+        ]:
+            f["period_month"] = cur_month
+            f["created_at"] = datetime.now(timezone.utc)
+            await db.fixed_costs.insert_one(f)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -717,6 +737,51 @@ async def mark_paid(oid: str, user: dict = Depends(require_role("finance"))):
     return {"ok": True}
 
 # ---------------------------------------------------------------------------
+# Fixed Costs (Overhead — Finance only)
+# ---------------------------------------------------------------------------
+FIXED_COST_CATEGORIES = ["Gaji", "Sewa", "Utilities", "Marketing", "Administrasi", "Lainnya"]
+
+@app.get("/api/fixed-costs/categories")
+async def fixed_cost_categories(user: dict = Depends(get_current_user)):
+    return FIXED_COST_CATEGORIES
+
+@app.get("/api/fixed-costs")
+async def list_fixed_costs(month: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {}
+    if month:
+        q["period_month"] = month
+    docs = await db.fixed_costs.find(q).sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/fixed-costs")
+async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role("finance"))):
+    if data.category not in FIXED_COST_CATEGORIES:
+        raise HTTPException(400, f"Kategori tidak valid. Pilih: {', '.join(FIXED_COST_CATEGORIES)}")
+    # validate period_month
+    try:
+        y, m = data.period_month.split("-")
+        int(y)
+        int(m)
+    except Exception:
+        raise HTTPException(400, "Format periode harus YYYY-MM")
+    doc = {
+        "category": data.category,
+        "description": data.description,
+        "amount": data.amount,
+        "period_month": data.period_month,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.fixed_costs.insert_one(doc)
+    new = await db.fixed_costs.find_one({"_id": r.inserted_id})
+    return serialize(new)
+
+@app.delete("/api/fixed-costs/{fid}")
+async def delete_fixed_cost(fid: str, user: dict = Depends(require_role("finance"))):
+    await db.fixed_costs.delete_one({"_id": _oid(fid)})
+    return {"ok": True}
+
+# ---------------------------------------------------------------------------
 # Profit & Loss (Module 7)
 # ---------------------------------------------------------------------------
 @app.get("/api/reports/profit-loss")
@@ -741,6 +806,7 @@ async def profit_loss(
     awb_ids = [o["_id"] for o in orders]
     cust_ids = list({o.get("customer_id") for o in orders})
 
+    # Aggregate COGS per AWB
     cost_pipeline = [
         {"$match": {"awb_id": {"$in": awb_ids}}},
         {"$group": {"_id": "$awb_id", "total_cost": {"$sum": "$amount"}}},
@@ -749,14 +815,21 @@ async def profit_loss(
     cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": cust_ids}}).to_list(1000)}
 
     rows = []
-    total_revenue = 0.0
-    total_cost = 0.0
+    total_revenue = 0.0  # only AWBs with cost contribute
+    total_cogs = 0.0
+    revenue_excluded = 0.0  # AWBs without cost (informational)
+    excluded_count = 0
     for o in orders:
         rev = o.get("total_tariff", 0) or 0
         cst = cost_agg.get(o["_id"], 0) or 0
-        net = rev - cst
-        total_revenue += rev
-        total_cost += cst
+        has_cost = cst > 0
+        gross = rev - cst
+        if has_cost:
+            total_revenue += rev
+            total_cogs += cst
+        else:
+            revenue_excluded += rev
+            excluded_count += 1
         c = cmap.get(o.get("customer_id"))
         rows.append({
             "awb_id": str(o["_id"]),
@@ -766,16 +839,45 @@ async def profit_loss(
             "status": o["status"],
             "revenue": rev,
             "total_cost": cst,
-            "net_profit": net,
-            "margin_pct": (net / rev * 100) if rev else 0,
+            "has_cost": has_cost,
+            "gross_profit": gross if has_cost else 0,
+            "margin_pct": (gross / rev * 100) if (has_cost and rev) else 0,
         })
+
+    # Fixed costs for the period (month-scoped only; ignored if no month filter is given because
+    # they are not customer-specific)
+    fixed_q = {}
+    if month:
+        fixed_q["period_month"] = month
+    fixed_rows = await db.fixed_costs.find(fixed_q).sort("created_at", -1).to_list(2000)
+    fixed_breakdown = {}
+    total_fixed = 0.0
+    for f in fixed_rows:
+        amt = f.get("amount", 0) or 0
+        total_fixed += amt
+        fixed_breakdown[f["category"]] = fixed_breakdown.get(f["category"], 0) + amt
+
+    gross_margin = total_revenue - total_cogs
+    net_profit = gross_margin - total_fixed
+
     return {
         "rows": rows,
+        "fixed_costs": [serialize(f) for f in fixed_rows],
+        "fixed_breakdown": fixed_breakdown,
         "summary": {
             "total_revenue": total_revenue,
-            "total_cost": total_cost,
-            "net_profit": total_revenue - total_cost,
+            "total_cogs": total_cogs,
+            "gross_margin": gross_margin,
+            "gross_margin_pct": (gross_margin / total_revenue * 100) if total_revenue else 0,
+            "total_fixed_cost": total_fixed,
+            "net_profit": net_profit,
+            "net_profit_pct": (net_profit / total_revenue * 100) if total_revenue else 0,
             "count": len(rows),
+            "count_with_cost": len(rows) - excluded_count,
+            "excluded_count": excluded_count,
+            "excluded_revenue": revenue_excluded,
+            # backwards compat keys
+            "total_cost": total_cogs,
         },
     }
 

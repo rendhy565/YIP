@@ -16,6 +16,7 @@ import Invoices from "./pages/Invoices";
 import InvoicePrint from "./pages/InvoicePrint";
 import Payments from "./pages/Payments";
 import ProfitLoss from "./pages/ProfitLoss";
+import FixedCosts from "./pages/FixedCosts";
 import Settings from "./pages/Settings";
 
 function Protected({ children, roles }) {
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="/invoices" element={<Protected><Shell><Invoices /></Shell></Protected>} />
           <Route path="/invoices/:id/print" element={<Protected><InvoicePrint /></Protected>} />
           <Route path="/payments" element={<Protected roles={["finance"]}><Shell><Payments /></Shell></Protected>} />
+          <Route path="/fixed-costs" element={<Protected roles={["finance"]}><Shell><FixedCosts /></Shell></Protected>} />
           <Route path="/pnl" element={<Protected><Shell><ProfitLoss /></Shell></Protected>} />
           <Route path="/settings" element={<Protected><Shell><Settings /></Shell></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -4,7 +4,7 @@ import { useAuth } from "../lib/auth";
 import {
   LayoutDashboard, PackagePlus, ListChecks, Users, FileText,
   Wallet, ClipboardCheck, BadgeDollarSign, TrendingUp, Settings as SettingsIcon,
-  LogOut, FileSpreadsheet, Coins, Building2, Menu, X
+  LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote
 } from "lucide-react";
 
 const NAV = [
@@ -18,6 +18,7 @@ const NAV = [
   { type: "section", label: "Biaya" },
   { to: "/costs", label: "Plotting Biaya", icon: Coins, roles: ["operation", "finance"] },
   { to: "/accrue", label: "Settle Hutang Vendor", icon: Wallet, roles: ["finance"] },
+  { to: "/fixed-costs", label: "Biaya Tetap (Overhead)", icon: Banknote, roles: ["finance"] },
   { type: "section", label: "Master & Laporan" },
   { to: "/customers", label: "Customer", icon: Users, roles: ["operation", "finance"] },
   { to: "/contracts", label: "Kontrak", icon: ClipboardCheck, roles: ["operation", "finance"] },
