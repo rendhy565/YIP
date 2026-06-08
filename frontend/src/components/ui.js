@@ -19,12 +19,12 @@ export function Card({ children, className = "" }) {
 
 export function PageHeader({ title, subtitle, action }) {
   return (
-    <div className="flex items-end justify-between mb-6 pb-4 border-b border-slate-200">
-      <div>
-        <h1 className="font-heading font-black text-3xl md:text-4xl tracking-tight text-slate-900">{title}</h1>
-        {subtitle && <p className="text-sm text-slate-500 mt-1">{subtitle}</p>}
+    <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-5 md:mb-6 pb-4 border-b border-slate-200">
+      <div className="min-w-0">
+        <h1 className="font-heading font-black text-2xl md:text-3xl lg:text-4xl tracking-tight text-slate-900 break-words">{title}</h1>
+        {subtitle && <p className="text-xs md:text-sm text-slate-500 mt-1">{subtitle}</p>}
       </div>
-      {action && <div>{action}</div>}
+      {action && <div className="flex-shrink-0">{action}</div>}
     </div>
   );
 }
@@ -77,8 +77,8 @@ export function Label({ children, htmlFor }) {
 
 export function Table({ children, className = "" }) {
   return (
-    <div className={`overflow-x-auto ${className}`}>
-      <table className="w-full text-sm text-left">{children}</table>
+    <div className={`overflow-x-auto -mx-px ${className}`}>
+      <table className="w-full text-sm text-left min-w-[640px]">{children}</table>
     </div>
   );
 }

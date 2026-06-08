@@ -39,43 +39,64 @@ export default function Invoices() {
   const bulkExport = async () => {
     const ids = selected.size > 0 ? Array.from(selected) : invoices.map((i) => i.id);
     if (ids.length === 0) { toast.error("Tidak ada invoice"); return; }
+
+    const buildSheetData = (invoice, awb, customer, company) => ([
+      ["LAMPIRAN INVOICE", ""],
+      ["No. Invoice", invoice.invoice_number],
+      ["Tanggal", fmtDate(invoice.created_at)],
+      [],
+      ["Penerbit", company.name],
+      ["NPWP", company.npwp],
+      ["Alamat", company.address],
+      [],
+      ["Customer", customer?.name || ""],
+      ["NPWP Customer", customer?.npwp || ""],
+      ["Alamat Customer", customer?.address || ""],
+      [],
+      ["No. AWB", awb.awb_number],
+      ["Origin", awb.origin],
+      ["Destination", awb.destination],
+      ["Item", awb.item_description],
+      ["Goods Content", awb.goods_content],
+      ["Qty (Kg)", awb.qty_kg],
+      ["Tarif/Kg (IDR)", awb.tariff_per_kg],
+      ["Total Tarif (IDR)", awb.total_tariff],
+      [`PPN ${awb.tax_percentage}%`, awb.tax_amount],
+      ["Grand Total (IDR)", awb.grand_total],
+    ]);
+
+    // Single invoice → 1 file (1 sheet)
+    if (ids.length === 1) {
+      try {
+        const r = await api.get(`/invoices/${ids[0]}/full`);
+        const { invoice, awb, customer, company } = r.data;
+        const ws = XLSX.utils.aoa_to_sheet(buildSheetData(invoice, awb, customer, company));
+        ws["!cols"] = [{ wch: 24 }, { wch: 36 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Lampiran");
+        XLSX.writeFile(wb, `Lampiran_${invoice.invoice_number}.xlsx`);
+        toast.success(`Lampiran ${invoice.invoice_number} ter-export`);
+      } catch (e) { toast.error(errMsg(e)); }
+      return;
+    }
+
+    // Bulk → single file with multi-tab (one tab per invoice)
     const wb = XLSX.utils.book_new();
+    let count = 0;
     for (const id of ids) {
       try {
         const r = await api.get(`/invoices/${id}/full`);
         const { invoice, awb, customer, company } = r.data;
-        const sheetData = [
-          ["LAMPIRAN INVOICE", ""],
-          ["No. Invoice", invoice.invoice_number],
-          ["Tanggal", fmtDate(invoice.created_at)],
-          [],
-          ["Penerbit", company.name],
-          ["NPWP", company.npwp],
-          ["Alamat", company.address],
-          [],
-          ["Customer", customer?.name || ""],
-          ["NPWP Customer", customer?.npwp || ""],
-          ["Alamat Customer", customer?.address || ""],
-          [],
-          ["No. AWB", awb.awb_number],
-          ["Origin", awb.origin],
-          ["Destination", awb.destination],
-          ["Item", awb.item_description],
-          ["Goods Content", awb.goods_content],
-          ["Qty (Kg)", awb.qty_kg],
-          ["Tarif/Kg (IDR)", awb.tariff_per_kg],
-          ["Total Tarif (IDR)", awb.total_tariff],
-          [`PPN ${awb.tax_percentage}%`, awb.tax_amount],
-          ["Grand Total (IDR)", awb.grand_total],
-        ];
-        const ws = XLSX.utils.aoa_to_sheet(sheetData);
+        const ws = XLSX.utils.aoa_to_sheet(buildSheetData(invoice, awb, customer, company));
         ws["!cols"] = [{ wch: 24 }, { wch: 36 }];
         const sheetName = invoice.invoice_number.slice(0, 31);
         XLSX.utils.book_append_sheet(wb, ws, sheetName);
+        count++;
       } catch (e) { /* skip */ }
     }
-    XLSX.writeFile(wb, `Lampiran_Invoice_${new Date().toISOString().slice(0, 10)}.xlsx`);
-    toast.success("Lampiran ter-export");
+    if (count === 0) { toast.error("Tidak ada data terexport"); return; }
+    XLSX.writeFile(wb, `Lampiran_Bulk_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    toast.success(`Bulk Lampiran ter-export (${count} tab)`);
   };
 
   return (
