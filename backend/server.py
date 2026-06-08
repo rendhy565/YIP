@@ -639,11 +639,12 @@ async def create_invoice(data: InvoiceCreateIn, user: dict = Depends(require_rol
     o = await db.awb_orders.find_one({"_id": _oid(data.awb_id)})
     if not o:
         raise HTTPException(404, "Order tidak ditemukan")
-    if o["status"] != "Reconciled":
-        raise HTTPException(400, "Hanya order dengan status Reconciled yang bisa dibuat invoice")
+    # Idempotent: if invoice already exists for this AWB, return it
     existing = await db.invoices.find_one({"awb_id": o["_id"]})
     if existing:
         return serialize(existing)
+    if o["status"] != "Reconciled":
+        raise HTTPException(400, "Hanya order dengan status Reconciled yang bisa dibuat invoice")
     doc = {
         "awb_id": o["_id"],
         "invoice_number": await next_invoice_number(),
