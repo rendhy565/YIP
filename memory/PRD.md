@@ -136,3 +136,22 @@ User connected GitHub repo `rendhy565/ARC` (TMS — Trucking Management System f
 - `balanced` check di balance-sheet pakai tolerance < Rp 0,5 (floating-point rounding-safe)
 - Disable auto-dummy-seed setelah wipe (via `settings.skip_dummy_seed` flag) — backend restart tidak akan re-seed dummy
 - Sidebar menu items also respect `adminOnly` flag (sebelumnya cuma section-level)
+
+### Iteration 4 (2026-06-09) — Dashboard Analitik dengan Multi-Filter
+
+#### A. Backend Analytics
+- `GET /api/analytics/dashboard` — KPI + monthly_series + region/customer/fleet/armada/status breakdown. Accepts filters: period_from, period_to, customer_id, region, status, fleet_type, armada_type
+- `GET /api/analytics/awbs-detail` — Paginated wide table dengan 22+ kolom. Supports filter + search (awb_number/wo_number/external_invoice/destination/destination_city) + sort by created_at/awb_number/grand_total/total_tariff/status
+
+#### B. Frontend `/analytics` page
+- **Multi-filter bar** (8 dimensi): tanggal range, customer dropdown, wilayah, status, jenis armada, tipe armada, search
+- **6 KPI cards** berwarna (blue/emerald/cyan/orange/purple/rose): Total AWB · Selling · Inv+PPN · Biaya · Gross Margin · Piutang
+- **Charts (recharts)**:
+  - Tren Bulanan (BarChart Selling vs Biaya vs Margin)
+  - Distribusi Status (PieChart donut)
+  - Breakdown Wilayah (horizontal BarChart top 10)
+  - Top 10 Customer (horizontal BarChart)
+- **Detail AWB wide table** (22 kolom, sticky AWB column kiri, sortable, paginated 25/50/100/200): AWB · WO · Pickup · Customer · Wilayah · Kota/Tujuan · Tipe Armada · Jenis Armada · Vendor Utama · Item Lines · Kg · Selling · PPN · Inv+PPN · Cashback · PPh 2% · Total Biaya · Margin Rp · Margin % · Status · No Inv Eksternal · Tgl Bayar
+
+#### C. Dependencies added
+- `recharts` (frontend)

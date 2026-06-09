@@ -3095,3 +3095,230 @@ async def list_sheets(
         else (["DATA ALL BASE"] if "DATA ALL BASE" in wb.sheetnames else [s for s in wb.sheetnames if s not in SKIP_SHEETS])
     )}
 
+
+# ===========================================================================
+# ANALYTICS DASHBOARD (filtered KPIs + breakdowns + paginated detail)
+# ===========================================================================
+
+def _parse_iso_date(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s).replace(tzinfo=timezone.utc) if "T" not in s else datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+async def _build_awb_filter(
+    period_from: Optional[str],
+    period_to: Optional[str],
+    customer_id: Optional[str],
+    region: Optional[str],
+    status: Optional[str],
+    fleet_type: Optional[str],
+    armada_type: Optional[str],
+    search: Optional[str],
+) -> dict:
+    q: dict = {}
+    df = _parse_iso_date(period_from)
+    dt = _parse_iso_date(period_to)
+    if df or dt:
+        date_q = {}
+        if df: date_q["$gte"] = df
+        if dt: date_q["$lte"] = dt
+        q["created_at"] = date_q
+    if customer_id:
+        try: q["customer_id"] = _oid(customer_id)
+        except: pass
+    if region: q["region"] = region
+    if status: q["status"] = status
+    if fleet_type: q["fleet_type"] = fleet_type
+    if armada_type: q["armada_type"] = armada_type
+    if search:
+        # search by awb_number or wo_number or external_invoice_number
+        q["$or"] = [
+            {"awb_number": {"$regex": search, "$options": "i"}},
+            {"wo_number": {"$regex": search, "$options": "i"}},
+            {"external_invoice_number": {"$regex": search, "$options": "i"}},
+            {"destination": {"$regex": search, "$options": "i"}},
+            {"destination_city": {"$regex": search, "$options": "i"}},
+        ]
+    return q
+
+@app.get("/api/analytics/dashboard")
+async def analytics_dashboard(
+    period_from: Optional[str] = None,
+    period_to: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    region: Optional[str] = None,
+    status: Optional[str] = None,
+    fleet_type: Optional[str] = None,
+    armada_type: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    q = await _build_awb_filter(period_from, period_to, customer_id, region, status, fleet_type, armada_type, None)
+    awbs = await db.awb_orders.find(q).to_list(20000)
+    # Aggregate costs per AWB
+    awb_ids = [a["_id"] for a in awbs]
+    cost_map: dict = {}
+    if awb_ids:
+        async for c in db.awb_costs.find({"awb_id": {"$in": awb_ids}}):
+            cost_map[c["awb_id"]] = cost_map.get(c["awb_id"], 0) + float(c.get("amount", 0))
+
+    # Customer lookup
+    cust_ids = list({a.get("customer_id") for a in awbs if a.get("customer_id")})
+    cust_map: dict = {}
+    if cust_ids:
+        async for c in db.customers.find({"_id": {"$in": cust_ids}}):
+            cust_map[c["_id"]] = c.get("name", "?")
+
+    # KPIs
+    total_awbs = len(awbs)
+    total_selling = sum(float(a.get("total_tariff", 0)) for a in awbs)
+    total_inv = sum(float(a.get("grand_total", 0)) for a in awbs)
+    total_ppn = sum(float(a.get("tax_amount", 0)) for a in awbs)
+    total_costs = sum(cost_map.get(a["_id"], 0) for a in awbs)
+    gross_margin = total_selling - total_costs
+    margin_pct = (gross_margin / total_selling * 100) if total_selling > 0 else 0.0
+
+    paid_count = sum(1 for a in awbs if a.get("status") == "Paid")
+    paid_amount = sum(float(a.get("grand_total", 0)) for a in awbs if a.get("status") == "Paid")
+    unpaid_amount = total_inv - paid_amount
+
+    # Breakdowns
+    def bucket(key, label_fn=None):
+        m: dict = {}
+        for a in awbs:
+            k = a.get(key) or "(N/A)"
+            label = label_fn(a) if label_fn else k
+            row = m.setdefault(label, {"label": label, "awbs": 0, "selling": 0, "costs": 0, "margin": 0})
+            row["awbs"] += 1
+            row["selling"] += float(a.get("total_tariff", 0))
+            row["costs"] += cost_map.get(a["_id"], 0)
+        for r in m.values():
+            r["margin"] = r["selling"] - r["costs"]
+            r["margin_pct"] = (r["margin"] / r["selling"] * 100) if r["selling"] > 0 else 0
+        return sorted(m.values(), key=lambda x: x["selling"], reverse=True)
+
+    # Monthly series
+    monthly: dict = {}
+    for a in awbs:
+        dt = a.get("created_at")
+        if not dt:
+            continue
+        key = dt.strftime("%Y-%m") if hasattr(dt, "strftime") else str(dt)[:7]
+        row = monthly.setdefault(key, {"month": key, "awbs": 0, "selling": 0, "costs": 0})
+        row["awbs"] += 1
+        row["selling"] += float(a.get("total_tariff", 0))
+        row["costs"] += cost_map.get(a["_id"], 0)
+    for r in monthly.values():
+        r["margin"] = r["selling"] - r["costs"]
+        r["margin_pct"] = (r["margin"] / r["selling"] * 100) if r["selling"] > 0 else 0
+    monthly_series = sorted(monthly.values(), key=lambda x: x["month"])
+
+    region_breakdown = bucket("region")
+    fleet_breakdown = bucket("fleet_type")
+    armada_breakdown = bucket("armada_type")
+    status_breakdown = bucket("status")
+    customer_breakdown = bucket(
+        "customer_id",
+        label_fn=lambda a: cust_map.get(a.get("customer_id"), "(N/A)"),
+    )
+
+    return {
+        "filters": {
+            "period_from": period_from, "period_to": period_to,
+            "customer_id": customer_id, "region": region, "status": status,
+            "fleet_type": fleet_type, "armada_type": armada_type,
+        },
+        "kpis": {
+            "total_awbs": total_awbs,
+            "total_selling": round(total_selling, 2),
+            "total_inv": round(total_inv, 2),
+            "total_ppn": round(total_ppn, 2),
+            "total_costs": round(total_costs, 2),
+            "gross_margin": round(gross_margin, 2),
+            "margin_pct": round(margin_pct, 2),
+            "paid_count": paid_count,
+            "paid_amount": round(paid_amount, 2),
+            "unpaid_amount": round(unpaid_amount, 2),
+        },
+        "monthly_series": monthly_series,
+        "region_breakdown": region_breakdown[:20],
+        "fleet_breakdown": fleet_breakdown[:20],
+        "armada_breakdown": armada_breakdown[:20],
+        "status_breakdown": status_breakdown,
+        "customer_breakdown": customer_breakdown[:15],
+    }
+
+@app.get("/api/analytics/awbs-detail")
+async def analytics_awbs_detail(
+    period_from: Optional[str] = None,
+    period_to: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    region: Optional[str] = None,
+    status: Optional[str] = None,
+    fleet_type: Optional[str] = None,
+    armada_type: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+    user: dict = Depends(get_current_user),
+):
+    q = await _build_awb_filter(period_from, period_to, customer_id, region, status, fleet_type, armada_type, search)
+    total = await db.awb_orders.count_documents(q)
+    sort_field = sort_by if sort_by in {"created_at", "awb_number", "grand_total", "total_tariff", "status"} else "created_at"
+    sort_d = -1 if str(sort_dir).lower() == "desc" else 1
+    skip = max(0, (page - 1) * page_size)
+    cursor = db.awb_orders.find(q).sort(sort_field, sort_d).skip(skip).limit(min(page_size, 200))
+    awbs = await cursor.to_list(page_size)
+    # Get costs aggregate per AWB & primary vendor
+    awb_ids = [a["_id"] for a in awbs]
+    cost_agg: dict = {}
+    primary_vendor: dict = {}
+    if awb_ids:
+        async for c in db.awb_costs.find({"awb_id": {"$in": awb_ids}}):
+            cost_agg[c["awb_id"]] = cost_agg.get(c["awb_id"], 0) + float(c.get("amount", 0))
+            if c["awb_id"] not in primary_vendor and c.get("vendor_name"):
+                primary_vendor[c["awb_id"]] = c["vendor_name"]
+    # Customer names
+    cust_ids = list({a.get("customer_id") for a in awbs if a.get("customer_id")})
+    cust_map = {}
+    if cust_ids:
+        async for c in db.customers.find({"_id": {"$in": cust_ids}}):
+            cust_map[c["_id"]] = c.get("name", "?")
+    rows = []
+    for a in awbs:
+        costs = cost_agg.get(a["_id"], 0)
+        selling = float(a.get("total_tariff", 0))
+        margin = selling - costs
+        rows.append({
+            "id": str(a["_id"]),
+            "awb_number": a.get("awb_number"),
+            "wo_number": a.get("wo_number"),
+            "pickup_date": a.get("created_at"),
+            "customer_name": cust_map.get(a.get("customer_id"), "-"),
+            "destination": a.get("destination"),
+            "destination_city": a.get("destination_city"),
+            "region": a.get("region"),
+            "fleet_type": a.get("fleet_type"),
+            "armada_type": a.get("armada_type"),
+            "intracity": a.get("intracity"),
+            "vendor_name": primary_vendor.get(a["_id"]),
+            "items_count": len(a.get("items", [])),
+            "qty_kg": a.get("qty_kg") or 0,
+            "selling": selling,
+            "ppn": float(a.get("tax_amount", 0)),
+            "inv_ppn": float(a.get("grand_total", 0)),
+            "cashback": float(a.get("cashback_amount") or 0),
+            "pph_final": float(a.get("pph_final") or 0),
+            "total_costs": round(costs, 2),
+            "margin": round(margin, 2),
+            "margin_pct": round((margin / selling * 100) if selling > 0 else 0, 2),
+            "status": a.get("status"),
+            "external_invoice": a.get("external_invoice_number"),
+            "paid_at": a.get("paid_at"),
+        })
+    return {"page": page, "page_size": page_size, "total": total, "rows": rows}
+

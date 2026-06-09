@@ -35,6 +35,7 @@ import TaxModule from "./pages/TaxModule";
 import AssetModule from "./pages/AssetModule";
 import BankReconciliation from "./pages/BankReconciliation";
 import ImportExcel from "./pages/ImportExcel";
+import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 
 function Protected({ children, roles }) {
   const { user } = useAuth();
@@ -96,6 +97,7 @@ export default function App() {
             <Route path="/bank-recon" element={<Protected roles={["finance"]}><FeatureGate feature="bank_recon"><Shell><BankReconciliation /></Shell></FeatureGate></Protected>} />
 
             <Route path="/import" element={<Protected roles={["administrator"]}><Shell><ImportExcel /></Shell></Protected>} />
+            <Route path="/analytics" element={<Protected><Shell><AnalyticsDashboard /></Shell></Protected>} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
