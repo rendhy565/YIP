@@ -96,3 +96,43 @@ User connected GitHub repo `rendhy565/ARC` (TMS — Trucking Management System f
 ## Future Enhancements (user-suggested)
 - User akan kembangkan format laporan akunting sendiri di iterasi berikutnya
 - Consider: Tax module needs deeper PPh21 calculation per PTKP (currently flat 5%)
+
+### Iteration 3 (2026-06-09) — Excel Import Pipeline + Real Master Data
+
+#### A. Schema Extension
+- **`vendors`** collection baru (master vendor): name, code, armada_type, npwp, address, bank_account, pph_type
+- **`awb_orders`** tambah field: `wo_number`, `destination_city`, `region`, `intracity`, `cashback_amount`, `pph_final`, `fleet_type`, `armada_type`, `external_invoice_number`, `notes`, `items[]` (array multi-line per AWB)
+- **`customers`** tambah field: `short_name`, `region`, `category`
+- **`awb_costs`** tambah field: `vendor_id`, `armada_type`, `fleet_type`
+- **`invoices`** tambah field: `external_invoice_number` (preserve customer's invoice format)
+- **Master constants**: `/api/masters/regions` (16 wilayah), `/api/masters/fleet-types` (CDE/CDD/TRONTON/dll), `/api/masters/armada-types`
+
+#### B. Wipe & Import Endpoints
+- `POST /api/admin/wipe-transactions` (admin only, requires `confirm: "HAPUS SEMUA DATA"`) — clears 15 collections, sets `skip_dummy_seed` flag so backend restart never re-seeds
+- `POST /api/import/excel/list-sheets` — returns all sheets with row counts & is_data_sheet detection + recommended sheet
+- `POST /api/import/excel` (multipart): file + dry_run + sheet_names. Smart auto-pick prefers `DATA ALL BASE (2)` to avoid overlap
+
+#### C. Import Logic
+- Header detection: 50+ aliases mapped to canonical keys (`'NO. WO'→wo_number`, `'TGL. PICK UP'→pickup_date`, dll)
+- Auto-create customer (with short_name, region, category) & vendor (with armada_type) on first encounter
+- Duplicate AWB → appends to `items[]` array + increments `total_tariff`/`tax_amount`/`grand_total`
+- Auto-generate journal entries: Sales (1201/4101/2210), Cost (5xxx-6xxx/2101 or 1101), Payment (1101/1201)
+- Status mapping: Excel `STATUS PENAGIHAN`/`STATUS PEMBAYARAN` → ARC `status` (Open/Reconciled/Invoiced/Paid)
+
+#### D. Import Wizard UI (`/import` — admin only)
+- Danger Zone: typed-confirmation wipe button
+- 4-step stepper: Upload → Pick Sheets → Preview (dry-run) → Execute
+- KPI cards with green/amber/white based on status (created/errors/skipped)
+- Per-sheet drill-down with row count breakdown
+- Sample errors shown with limit
+
+#### E. Real Data Imported (REPORT PENJUALAN.xlsx)
+- 30 Customer, 17 Vendor, 592 AWB unik
+- 413 cost entries, 198 invoice records
+- **1028 journal entries** auto-posted
+- Result: Revenue Rp 2,57 M · Gross Profit 66.9% · Balance Sheet seimbang Rp 2,06 M
+
+#### F. Fixes
+- `balanced` check di balance-sheet pakai tolerance < Rp 0,5 (floating-point rounding-safe)
+- Disable auto-dummy-seed setelah wipe (via `settings.skip_dummy_seed` flag) — backend restart tidak akan re-seed dummy
+- Sidebar menu items also respect `adminOnly` flag (sebelumnya cuma section-level)

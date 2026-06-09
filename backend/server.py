@@ -454,7 +454,11 @@ async def seed_data():
         upsert=True,
     )
 
-    # Sample customers + contracts
+    # Sample customers + contracts (skip if user has disabled dummy seeding)
+    skip_dummy = await db.settings.find_one({"key_name": "skip_dummy_seed"})
+    if skip_dummy:
+        return  # do not seed any sample/dummy data
+
     if await db.customers.count_documents({}) == 0:
         cust_ids = []
         for c in [
@@ -1580,7 +1584,7 @@ async def balance_sheet(as_of: Optional[str] = None, user: dict = Depends(get_cu
         "total_assets": round(totals["asset"], 2),
         "total_liabilities": round(totals["liability"], 2),
         "total_equity": round(totals["equity"], 2),
-        "balanced": round(totals["asset"], 2) == round(totals["liability"] + totals["equity"], 2),
+        "balanced": abs(round(totals["asset"], 2) - round(totals["liability"] + totals["equity"], 2)) < 0.5,
     }
 
 @app.get("/api/reports/income-statement")
@@ -2469,4 +2473,625 @@ async def match_candidates(bid: str, user: dict = Depends(require_feature("bank_
 @app.on_event("startup")
 async def _startup_feature_flags():
     await ensure_feature_flags()
+
+
+# ===========================================================================
+# IMPORT EXCEL & MASTER VENDORS  (extension v2)
+# ===========================================================================
+import io
+import openpyxl
+
+# ---- Master Vendor ----
+class VendorIn(BaseModel):
+    name: str
+    code: Optional[str] = None
+    armada_type: Optional[str] = None     # FREELANCE / AR / VENDOR / KONSUL
+    npwp: Optional[str] = None
+    address: Optional[str] = None
+    bank_account: Optional[str] = None
+    pph_type: Optional[str] = None        # PPh23 / PPh15 / PP23UMKM / None
+    notes: Optional[str] = None
+    active: bool = True
+
+@app.get("/api/vendors")
+async def list_vendors(user: dict = Depends(get_current_user)):
+    docs = await db.vendors.find().sort("name", 1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/vendors")
+async def create_vendor(data: VendorIn, user: dict = Depends(get_current_user)):
+    if await db.vendors.find_one({"name": data.name}):
+        raise HTTPException(400, "Vendor dengan nama tersebut sudah ada")
+    doc = data.model_dump()
+    doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.vendors.insert_one(doc)
+    return serialize(await db.vendors.find_one({"_id": r.inserted_id}))
+
+@app.put("/api/vendors/{vid}")
+async def update_vendor(vid: str, data: VendorIn, user: dict = Depends(get_current_user)):
+    await db.vendors.update_one({"_id": _oid(vid)}, {"$set": data.model_dump()})
+    return serialize(await db.vendors.find_one({"_id": _oid(vid)}))
+
+@app.delete("/api/vendors/{vid}")
+async def delete_vendor(vid: str, user: dict = Depends(require_role("administrator"))):
+    await db.vendors.delete_one({"_id": _oid(vid)})
+    return {"ok": True}
+
+# ---- Master Region & Fleet Type (constants) ----
+REGIONS = [
+    "JABODETABEK", "JAWA BARAT", "JAWA TENGAH", "JAWA TIMUR", "DI YOGYAKARTA", "BALI",
+    "SUMATRA", "ACEH", "KALIMANTAN BARAT", "KALIMANTAN TENGAH", "KALIMANTAN SELATAN",
+    "KALIMANTAN TIMUR", "SULAWESI", "PAPUA", "NUSA TENGGARA", "MALUKU",
+]
+FLEET_TYPES = ["CDE", "CDD", "TRONTON", "BV", "PICKUP", "WINGBOX", "FUSO", "CONTAINER"]
+ARMADA_TYPES = ["AR", "FREELANCE", "VENDOR", "KONSUL"]
+
+@app.get("/api/masters/regions")
+async def list_regions(user: dict = Depends(get_current_user)):
+    return REGIONS
+
+@app.get("/api/masters/fleet-types")
+async def list_fleet_types(user: dict = Depends(get_current_user)):
+    return FLEET_TYPES
+
+@app.get("/api/masters/armada-types")
+async def list_armada_types(user: dict = Depends(get_current_user)):
+    return ARMADA_TYPES
+
+# ---- WIPE Transactional Data (Admin only, with explicit confirm) ----
+class WipeIn(BaseModel):
+    confirm: str  # must equal "HAPUS SEMUA DATA"
+
+@app.post("/api/admin/wipe-transactions")
+async def wipe_transactions(data: WipeIn, user: dict = Depends(require_role("administrator"))):
+    if data.confirm != "HAPUS SEMUA DATA":
+        raise HTTPException(400, "Konfirmasi tidak valid. Ketik tepat 'HAPUS SEMUA DATA'")
+    collections_to_clear = [
+        "awb_orders", "awb_costs", "invoices",
+        "customers", "contracts", "vendors",
+        "fixed_costs", "journal_entries", "period_closings",
+        "payroll", "employees", "assets", "depreciation_runs",
+        "bank_statements", "pph_records",
+    ]
+    summary = {}
+    for c in collections_to_clear:
+        res = await db[c].delete_many({})
+        summary[c] = res.deleted_count
+    # Prevent dummy seeding from re-creating sample data after restart
+    await db.settings.update_one(
+        {"key_name": "skip_dummy_seed"},
+        {"$set": {"key_name": "skip_dummy_seed", "key_value": "1"}},
+        upsert=True,
+    )
+    return {"ok": True, "deleted": summary, "by": user["username"]}
+
+# ---- AWB extended fields update helper ----
+class AwbExtendedUpdate(BaseModel):
+    """Patch endpoint to update extra fields on an existing AWB."""
+    wo_number: Optional[str] = None
+    destination_city: Optional[str] = None
+    region: Optional[str] = None
+    intracity: Optional[bool] = None
+    cashback_amount: Optional[float] = None
+    pph_final: Optional[float] = None
+    notes: Optional[str] = None
+    fleet_type: Optional[str] = None
+    armada_type: Optional[str] = None
+    external_invoice_number: Optional[str] = None
+
+@app.patch("/api/orders/{oid}/extended")
+async def patch_awb_extended(oid: str, data: AwbExtendedUpdate, user: dict = Depends(get_current_user)):
+    upd = {k: v for k, v in data.model_dump().items() if v is not None}
+    if upd:
+        await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
+    return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
+
+# ---------------------------------------------------------------------------
+# EXCEL IMPORT
+# ---------------------------------------------------------------------------
+# Recognized header aliases (Excel column name -> normalized key)
+_HEADER_ALIAS = {
+    "no.": "no", "nomor": "no",
+    "no. wo": "wo_number", "no wo": "wo_number",
+    "bulan": "month",
+    "tgl. pick up": "pickup_date", "tgl pick up": "pickup_date",
+    "no awb": "awb_number", "no. awb": "awb_number",
+    "customer": "customer_short",
+    "customer name": "customer_name",
+    "tujuan": "destination",
+    "city": "destination_city", "kota": "destination_city",
+    "wilayah": "region",
+    "item": "item_description",
+    "tarif/kg": "pricing_desc", "tarif / kg": "pricing_desc",
+    "kg": "qty_kg",
+    "selling": "selling",
+    "ppn": "ppn",
+    "inv+ppn": "inv_ppn", "inv +ppn": "inv_ppn",
+    "vendor 1": "vendor1_name", "vendor": "vendor1_name",
+    "vendor 2": "vendor2_name",
+    "tipe armada": "armada_type",
+    "jenis armada": "fleet_type",
+    "biaya ops": "biaya_ops",
+    "uang jalan\n(lintas)": "uang_jalan", "uang jalan (lintas)": "uang_jalan", "uang jalan": "uang_jalan",
+    "t. biaya ops": "total_biaya_ops",
+    "inv vendor": "vendor1_invoice",
+    "ppn2": "vendor1_ppn",
+    "pph ps 23\npph ps 15/ pp 23 umkm": "vendor1_pph", "pph ps 23": "vendor1_pph",
+    "t. tagihan": "vendor1_total",
+    "status bayar\n(v1)": "vendor1_status", "status bayar (v1)": "vendor1_status",
+    "inv vendor2": "vendor2_invoice",
+    "ppn4": "vendor2_ppn",
+    "pph ps 23\npph ps 15/ pp 23 umkm5": "vendor2_pph",
+    "t. tagihan6": "vendor2_total",
+    "status bayar\n(v2)": "vendor2_status", "status bayar (v2)": "vendor2_status",
+    "j. biaya vendor": "total_vendor_cost",
+    "status bayar vendor": "vendor_pay_status",
+    "kategori cust": "customer_category",
+    "dalam/luar kota": "intracity_flag",
+    "cashback": "cashback_amount",
+    "total tagihan": "total_tagihan",
+    "pph 2%": "pph_final",
+    "selling net": "selling_net",
+    "no. inv": "external_invoice_number", "no inv": "external_invoice_number",
+    "tgl. inv": "invoice_date", "tgl inv": "invoice_date",
+    "status penagihan": "billing_status",
+    "status pembayaran": "payment_status",
+    "tgl. bayar": "paid_at",
+    "ket.": "notes", "keterangan": "notes",
+}
+
+# Excel status -> ARC status (awb_orders.status)
+def _map_status(billing: Optional[str], payment: Optional[str]) -> str:
+    b = (billing or "").strip().upper()
+    p = (payment or "").strip().upper()
+    if p == "SUDAH BAYAR" or p == "LUNAS" or "BAYAR" in p and "BELUM" not in p:
+        return "Paid"
+    if "SUDAH INV" in b or "INVOICED" in b:
+        return "Invoiced"
+    if "BELUM" in b or b == "" or "PO BELUM" in b:
+        return "Reconciled"
+    return "Open"
+
+def _norm(s):
+    if s is None:
+        return ""
+    return str(s).strip().lower()
+
+def _to_float(v):
+    if v is None or v == "":
+        return 0.0
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
+def _to_str(v):
+    if v is None:
+        return None
+    return str(v).strip() if str(v).strip() else None
+
+def _to_date(v):
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v
+    try:
+        return datetime.fromisoformat(str(v)).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+def _find_header_row(ws, max_search=10):
+    """Find the row that contains the most known header aliases. Returns (row_idx, header_map)."""
+    best = (1, {})
+    best_count = 0
+    for r in range(1, min(max_search, ws.max_row) + 1):
+        row_vals = [c.value for c in ws[r]]
+        header_map = {}
+        count = 0
+        for col_idx, v in enumerate(row_vals, 1):
+            key = _norm(v)
+            if key in _HEADER_ALIAS:
+                header_map[_HEADER_ALIAS[key]] = col_idx
+                count += 1
+        if count > best_count:
+            best = (r, header_map)
+            best_count = count
+    return best
+
+class ImportPreviewIn(BaseModel):
+    sheet_names: Optional[List[str]] = None  # if None → all data sheets
+
+@app.post("/api/import/excel/preview")
+async def import_excel_preview(
+    file_b64: str = None,
+    user: dict = Depends(require_role("administrator")),
+):
+    """Stub kept for compatibility; main entry is /api/import/excel which accepts multipart."""
+    raise HTTPException(501, "Gunakan endpoint /api/import/excel (multipart upload)")
+
+from fastapi import UploadFile, File, Form
+
+async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_names: Optional[List[str]] = None) -> dict:
+    """Parse Excel content and (optionally) import. Returns summary."""
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    SKIP_SHEETS = {"REPORT", "DASHBOARD", "PIVOT TABLE", "SUMMARY", "Sheet4"}
+    # Default smart selection: prefer "DATA ALL BASE (2)" → "DATA ALL BASE" → month sheets,
+    # to avoid double-importing overlapping data.
+    if sheet_names:
+        candidate_sheets = [s for s in wb.sheetnames if s in sheet_names]
+    else:
+        if "DATA ALL BASE (2)" in wb.sheetnames:
+            candidate_sheets = ["DATA ALL BASE (2)"]
+        elif "DATA ALL BASE" in wb.sheetnames:
+            candidate_sheets = ["DATA ALL BASE"]
+        else:
+            candidate_sheets = [s for s in wb.sheetnames if s.upper() not in {x.upper() for x in SKIP_SHEETS}]
+
+    # Aggregate caches to avoid duplicate inserts within the same run
+    customer_cache: dict = {}   # name -> ObjectId
+    vendor_cache: dict = {}      # name -> ObjectId
+    awb_cache: dict = {}          # awb_number -> ObjectId
+    
+    summary = {
+        "sheets_processed": [],
+        "customers_created": 0,
+        "vendors_created": 0,
+        "awbs_created": 0,
+        "awb_items_added": 0,
+        "costs_created": 0,
+        "invoices_created": 0,
+        "journals_posted": 0,
+        "skipped_rows": 0,
+        "errors": [],
+    }
+
+    async def get_or_create_customer(name: str, short: Optional[str], category: Optional[str], region: Optional[str]) -> Optional[ObjectId]:
+        if not name:
+            return None
+        if name in customer_cache:
+            return customer_cache[name]
+        existing = await db.customers.find_one({"name": name})
+        if existing:
+            customer_cache[name] = existing["_id"]
+            return existing["_id"]
+        if dry_run:
+            customer_cache[name] = None
+            summary["customers_created"] += 1
+            return None
+        doc = {
+            "name": name,
+            "short_name": short,
+            "category": category,
+            "region": region,
+            "company_details": None,
+            "address": None,
+            "npwp": None,
+            "created_at": datetime.now(timezone.utc),
+        }
+        r = await db.customers.insert_one(doc)
+        customer_cache[name] = r.inserted_id
+        summary["customers_created"] += 1
+        return r.inserted_id
+
+    async def get_or_create_vendor(name: str, armada_type: Optional[str]) -> Optional[ObjectId]:
+        if not name:
+            return None
+        if name in vendor_cache:
+            return vendor_cache[name]
+        existing = await db.vendors.find_one({"name": name})
+        if existing:
+            vendor_cache[name] = existing["_id"]
+            return existing["_id"]
+        if dry_run:
+            vendor_cache[name] = None
+            summary["vendors_created"] += 1
+            return None
+        doc = {
+            "name": name,
+            "armada_type": armada_type,
+            "active": True,
+            "created_at": datetime.now(timezone.utc),
+        }
+        r = await db.vendors.insert_one(doc)
+        vendor_cache[name] = r.inserted_id
+        summary["vendors_created"] += 1
+        return r.inserted_id
+
+    for sheet_name in candidate_sheets:
+        ws = wb[sheet_name]
+        if ws.max_row < 3:
+            continue
+        header_row, header_map = _find_header_row(ws)
+        if not header_map or "awb_number" not in header_map:
+            continue  # not a data sheet
+        sheet_info = {"sheet": sheet_name, "rows_read": 0, "awbs": 0, "items": 0, "costs": 0}
+
+        for row_idx in range(header_row + 1, ws.max_row + 1):
+            row = [c.value for c in ws[row_idx]]
+            def col(key):
+                idx = header_map.get(key)
+                if idx is None or idx > len(row):
+                    return None
+                return row[idx - 1]
+
+            awb_no_raw = col("awb_number")
+            if awb_no_raw is None or _norm(awb_no_raw) in ("", "-"):
+                continue
+            awb_no = str(awb_no_raw).strip()
+            sheet_info["rows_read"] += 1
+
+            try:
+                customer_name = _to_str(col("customer_name"))
+                customer_short = _to_str(col("customer_short"))
+                customer_cat = _to_str(col("customer_category"))
+                region = _to_str(col("region"))
+
+                customer_id = await get_or_create_customer(customer_name, customer_short, customer_cat, region)
+
+                pickup_date = _to_date(col("pickup_date")) or datetime.now(timezone.utc)
+                wo_number = _to_str(col("wo_number"))
+                destination = _to_str(col("destination"))
+                destination_city = _to_str(col("destination_city"))
+                fleet_type = _to_str(col("fleet_type"))
+                armada_type = _to_str(col("armada_type"))
+                cashback = _to_float(col("cashback_amount"))
+                pph_final = _to_float(col("pph_final"))
+                ext_inv = _to_str(col("external_invoice_number"))
+                inv_date = _to_date(col("invoice_date"))
+                paid_at = _to_date(col("paid_at"))
+                notes = _to_str(col("notes"))
+                intracity = _norm(col("intracity_flag")) == "dalam kota"
+                billing_status = _to_str(col("billing_status"))
+                payment_status = _to_str(col("payment_status"))
+
+                # Item line for this row
+                item_desc = _to_str(col("item_description")) or "ITEM"
+                pricing_desc = _to_str(col("pricing_desc"))
+                qty_kg = _to_float(col("qty_kg"))
+                selling = _to_float(col("selling"))
+                ppn = _to_float(col("ppn"))
+                inv_ppn = _to_float(col("inv_ppn")) or (selling + ppn)
+
+                # Find existing AWB or create new
+                existing_awb = await db.awb_orders.find_one({"awb_number": awb_no})
+
+                if existing_awb is None:
+                    awb_doc = {
+                        "awb_number": awb_no,
+                        "customer_id": customer_id,
+                        "contract_id": None,
+                        "wo_number": wo_number,
+                        "destination": destination,
+                        "destination_city": destination_city,
+                        "region": region,
+                        "fleet_type": fleet_type,
+                        "armada_type": armada_type,
+                        "intracity": intracity,
+                        "cashback_amount": cashback,
+                        "pph_final": pph_final,
+                        "external_invoice_number": ext_inv,
+                        "notes": notes,
+                        "status": _map_status(billing_status, payment_status),
+                        "created_at": pickup_date,
+                        "paid_at": paid_at,
+                        # legacy fields (single-line compat): we will compute from items later
+                        "items": [],
+                        "total_tariff": 0.0,
+                        "tax_amount": 0.0,
+                        "grand_total": 0.0,
+                        "tax_percentage": 11.0,
+                        "item_description": item_desc,
+                        "goods_content": item_desc,
+                        "origin": "JKT",
+                        "tariff_per_kg": 0,
+                        "qty_kg": qty_kg,
+                    }
+                    if dry_run:
+                        awb_id = None
+                    else:
+                        r = await db.awb_orders.insert_one(awb_doc)
+                        awb_id = r.inserted_id
+                    summary["awbs_created"] += 1
+                    sheet_info["awbs"] += 1
+                else:
+                    awb_id = existing_awb["_id"]
+
+                # Item / line append
+                item_line = {
+                    "item_description": item_desc,
+                    "pricing_desc": pricing_desc,
+                    "qty_kg": qty_kg,
+                    "selling": selling,
+                    "ppn": ppn,
+                    "inv_ppn": inv_ppn,
+                    "notes": notes,
+                }
+                if not dry_run and awb_id is not None:
+                    await db.awb_orders.update_one(
+                        {"_id": awb_id},
+                        {
+                            "$push": {"items": item_line},
+                            "$inc": {"total_tariff": selling, "tax_amount": ppn, "grand_total": inv_ppn},
+                        },
+                    )
+                summary["awb_items_added"] += 1
+                sheet_info["items"] += 1
+
+                # Costs (vendor 1 / vendor 2 / biaya ops / lintas)
+                v1_name = _to_str(col("vendor1_name"))
+                v1_amount = _to_float(col("vendor1_total")) or _to_float(col("vendor1_invoice"))
+                v1_status = _to_str(col("vendor1_status"))
+                v2_name = _to_str(col("vendor2_name"))
+                v2_amount = _to_float(col("vendor2_total")) or _to_float(col("vendor2_invoice"))
+                v2_status = _to_str(col("vendor2_status"))
+                biaya_ops = _to_float(col("biaya_ops"))
+                uang_jalan = _to_float(col("uang_jalan"))
+
+                async def add_cost(category: str, amount: float, vendor_name: Optional[str], status: Optional[str]):
+                    if amount <= 0:
+                        return
+                    is_settled = (_norm(status) == "sudah bayar")
+                    payment_type = "Cash" if is_settled else "Accrue"
+                    vendor_id = await get_or_create_vendor(vendor_name, armada_type) if vendor_name else None
+                    if dry_run:
+                        summary["costs_created"] += 1
+                        sheet_info["costs"] += 1
+                        return
+                    cost_doc = {
+                        "awb_id": awb_id,
+                        "cost_category": category,
+                        "amount": amount,
+                        "payment_type": payment_type,
+                        "vendor_name": vendor_name,
+                        "vendor_id": vendor_id,
+                        "armada_type": armada_type,
+                        "fleet_type": fleet_type,
+                        "is_settled": is_settled,
+                        "description": f"Imported from Excel — AWB {awb_no}",
+                        "created_by_role": "imported",
+                        "created_at": pickup_date,
+                    }
+                    if is_settled:
+                        cost_doc["cash_account_code"] = "1101"
+                    cr = await db.awb_costs.insert_one(cost_doc)
+                    summary["costs_created"] += 1
+                    sheet_info["costs"] += 1
+                    # auto-journal for cost
+                    expense_code = COST_CATEGORY_TO_COA.get(category, "5102")
+                    try:
+                        if is_settled:
+                            lines = [
+                                {"account_code": expense_code, "debit": amount, "credit": 0, "memo": awb_no},
+                                {"account_code": "1101", "debit": 0, "credit": amount, "memo": vendor_name or ""},
+                            ]
+                        else:
+                            lines = [
+                                {"account_code": expense_code, "debit": amount, "credit": 0, "memo": awb_no},
+                                {"account_code": "2101", "debit": 0, "credit": amount, "memo": vendor_name or ""},
+                            ]
+                        await post_journal(
+                            date=pickup_date, description=f"[Import] Biaya {category} {awb_no}",
+                            lines=lines, reference_type="cost", reference_id=str(cr.inserted_id),
+                            posted_by=posted_by, auto=True,
+                        )
+                        summary["journals_posted"] += 1
+                    except HTTPException:
+                        pass
+
+                # Map categories: Vendor invoice = "Vendor", Biaya Ops = "Operational", Uang Jalan = "Lintas"
+                await add_cost("Vendor", v1_amount, v1_name, v1_status)
+                await add_cost("Vendor", v2_amount, v2_name, v2_status)
+                await add_cost("Operational", biaya_ops, None, None)
+                await add_cost("Lintas", uang_jalan, None, None)
+
+                # Sales journal (Dr Piutang/Cr Pendapatan + PPN) — once per AWB line
+                if not dry_run and awb_id is not None:
+                    try:
+                        lines = [
+                            {"account_code": "1201", "debit": inv_ppn, "credit": 0, "memo": awb_no},
+                            {"account_code": "4101", "debit": 0, "credit": selling, "memo": awb_no},
+                        ]
+                        if ppn > 0:
+                            lines.append({"account_code": "2210", "debit": 0, "credit": ppn, "memo": "PPN"})
+                        await post_journal(
+                            date=pickup_date, description=f"[Import] Penjualan {awb_no} - {item_desc}",
+                            lines=lines, reference_type="awb_order", reference_id=str(awb_id),
+                            posted_by=posted_by, auto=True,
+                        )
+                        summary["journals_posted"] += 1
+                    except HTTPException:
+                        pass
+
+                # Invoice record (only once per AWB)
+                if ext_inv and existing_awb is None and not dry_run and awb_id is not None:
+                    if not await db.invoices.find_one({"awb_id": awb_id}):
+                        await db.invoices.insert_one({
+                            "awb_id": awb_id,
+                            "invoice_number": await next_invoice_number(),
+                            "external_invoice_number": ext_inv,
+                            "created_at": inv_date or pickup_date,
+                        })
+                        summary["invoices_created"] += 1
+
+                # Payment journal if status=Paid
+                if not dry_run and awb_id is not None and _map_status(billing_status, payment_status) == "Paid" and inv_ppn > 0:
+                    try:
+                        await post_journal(
+                            date=paid_at or pickup_date,
+                            description=f"[Import] Pelunasan {awb_no}",
+                            lines=[
+                                {"account_code": "1101", "debit": inv_ppn, "credit": 0, "memo": awb_no},
+                                {"account_code": "1201", "debit": 0, "credit": inv_ppn, "memo": awb_no},
+                            ],
+                            reference_type="payment", reference_id=str(awb_id),
+                            posted_by=posted_by, auto=True,
+                        )
+                        summary["journals_posted"] += 1
+                    except HTTPException:
+                        pass
+
+            except Exception as e:
+                summary["skipped_rows"] += 1
+                summary["errors"].append(f"Sheet '{sheet_name}' row {row_idx}: {str(e)[:120]}")
+                continue
+
+        summary["sheets_processed"].append(sheet_info)
+
+    return summary
+
+@app.post("/api/import/excel")
+async def import_excel(
+    file: UploadFile = File(...),
+    dry_run: str = Form("true"),
+    sheet_names: str = Form(""),
+    user: dict = Depends(require_role("administrator")),
+):
+    """Import Excel REPORT PENJUALAN. dry_run=true returns preview without writing.
+    sheet_names: comma-separated sheet names (e.g. "JAN,FEB"). Empty = auto smart pick."""
+    is_dry = str(dry_run).lower() in ("true", "1", "yes")
+    sheets = [s.strip() for s in sheet_names.split(",") if s.strip()] if sheet_names else None
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "File kosong")
+    try:
+        summary = await _parse_excel(content, dry_run=is_dry, posted_by=user["id"], sheet_names=sheets)
+    except Exception as e:
+        raise HTTPException(400, f"Gagal parse Excel: {str(e)[:200]}")
+    summary["dry_run"] = is_dry
+    summary["filename"] = file.filename
+    summary["sheets_selected"] = sheets or "auto"
+    return summary
+
+@app.post("/api/import/excel/list-sheets")
+async def list_sheets(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_role("administrator")),
+):
+    """Return all sheets in the uploaded file with row counts so user can choose."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "File kosong")
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File bukan Excel valid: {str(e)[:100]}")
+    SKIP_SHEETS = {"REPORT", "DASHBOARD", "PIVOT TABLE", "SUMMARY", "Sheet4"}
+    out = []
+    for s in wb.sheetnames:
+        ws = wb[s]
+        # Try to find header row to estimate data rows
+        hdr_row, hdr_map = _find_header_row(ws)
+        data_rows = max(0, ws.max_row - hdr_row) if hdr_map else 0
+        out.append({
+            "name": s,
+            "max_row": ws.max_row,
+            "max_col": ws.max_column,
+            "estimated_data_rows": data_rows,
+            "is_data_sheet": bool(hdr_map and "awb_number" in hdr_map),
+            "skipped_by_default": s in SKIP_SHEETS,
+        })
+    return {"sheets": out, "recommended": (
+        ["DATA ALL BASE (2)"] if "DATA ALL BASE (2)" in wb.sheetnames
+        else (["DATA ALL BASE"] if "DATA ALL BASE" in wb.sheetnames else [s for s in wb.sheetnames if s not in SKIP_SHEETS])
+    )}
 

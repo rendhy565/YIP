@@ -7,7 +7,7 @@ import {
   Wallet, ClipboardCheck, BadgeDollarSign, TrendingUp, Settings as SettingsIcon,
   LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck,
   BookOpen, BookText, Library, Scale, Building, LineChart, Lock,
-  UserCog, Percent, Briefcase, GitMerge,
+  UserCog, Percent, Briefcase, GitMerge, Upload,
 } from "lucide-react";
 
 const NAV = [
@@ -55,6 +55,7 @@ const NAV = [
   { type: "section", label: "Sistem" },
   { to: "/settings", label: "Pengaturan", icon: SettingsIcon, perm: "settings" },
   { type: "section", label: "Administrator", adminOnly: true },
+  { to: "/import", label: "Import Excel", icon: Upload, perm: "*", adminOnly: true },
   { to: "/users", label: "User Management", icon: ShieldCheck, perm: "user_management" },
 ];
 
@@ -99,6 +100,7 @@ export default function Layout({ children }) {
               </div>
             );
           }
+          if (item.adminOnly && user?.role !== "administrator") return null;
           if (item.feature && !flags[item.feature]) return null;
           if (!hasPerm(user, item.perm)) return null;
           const Icon = item.icon;
