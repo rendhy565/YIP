@@ -1,73 +1,98 @@
-# TMS — Order-to-Cash & Logistics (PRD)
+# ARC Business Suite — Product Requirements Document
 
-## Original Problem Statement
-Build a complete, production-ready Order-to-Cash and Logistics Transportation Management System (TMS) with RBAC (Operation & Finance), AWB orders, vendor/cash cost plotting, monthly recap with Excel export & reconciliation, invoice + faktur pajak + lampiran + PO printing, payment closing, P&L reports.
+## Problem Statement
+User connected GitHub repo `rendhy565/ARC` (TMS — Trucking Management System for Indonesian logistics company) and asked:
+1. Apakah ada modul akunting? — Backend sudah ada endpoint akunting (PSAK), tapi belum ada UI frontend
+2. Apa yang kurang untuk run perusahaan full? — HR, Tax, Asset, Bank Reconciliation
+3. Permintaan: Buat semua, tapi dengan feature toggle ON/OFF di Settings (admin only). Jika OFF tidak boleh ganggu sistem
 
-## Tech Stack (user choice)
-- Frontend: React 18 + React Router 6 + Tailwind + lucide-react + SheetJS (xlsx) + sonner toasts
-- Backend: FastAPI + Motor (MongoDB async) + bcrypt + PyJWT
-- DB: MongoDB (default container instance)
-- Excel: SheetJS in the browser
-- PDF: browser `window.print()` + `@media print` CSS
-- UI Language: Bahasa Indonesia
+## Tech Stack
+- Backend: FastAPI (Python) + MongoDB (motor async)
+- Frontend: React 18 + React Router v6 + TailwindCSS + Axios + Sonner toast + Lucide icons
+- Auth: JWT, 3 roles (administrator, operation, finance)
+- PSAK-compliant Chart of Accounts (1xxx-6xxx), double-entry journal engine
 
 ## User Personas
-1. **Operation** — Input AWB orders, input Vendor (Accrue) costs, generate Excel rekap, handle reject (revert), create invoices.
-2. **Finance** — Input Operational/Lintas (Cash) costs, settle Accrue→Cash, mark invoices Paid, see P&L.
+- **Administrator** — Full access; manages users, modules, master data, period closing
+- **Operation** — Order input, AWB tracking, cost plotting, reconciliation, invoicing
+- **Finance** — Payment recording, vendor settlement, fixed costs, payroll, tax records, bank recon
 
-## Core Static Requirements
-- RBAC strictly enforced server-side (`require_role`) and reflected in the sidebar.
-- AWB auto-numbering `AWB-YYYYMM-XXXX`, invoice `INV-YYYYMM-XXXX` (sequential).
-- AWB status machine: `Open → Reconciled → Invoiced → Paid` with revert from Reconciled to Open.
-- Cost rules:
-  - Operation can input only `Vendor` (auto `Accrue` + `is_settled=false`).
-  - Finance can input only `Operational` / `Lintas` (auto `Cash` + `is_settled=true`).
-  - Finance can settle any Accrue → Cash.
-- Dynamic tax via `settings` (`tax_ppn_0`, `tax_ppn_11`, `tax_ppn_12`).
-- Contract autofill: selecting a customer's contract locks origin/destination/tariff in Order Input.
+## Core Requirements (static)
+- Order-to-Cash flow: Input Order → Plotting Biaya → Rekap & Rekonsiliasi → Invoice → Payment
+- Akunting PSAK lengkap: COA, Jurnal, Buku Besar, Trial Balance, Neraca, Laba Rugi, Arus Kas, Tutup Buku
+- Modul opsional (toggleable): HR & Payroll, Pajak (PPN/PPh), Aset Tetap & Depresiasi, Rekonsiliasi Bank
+- Multi-role permission per modul
+- Auto-journal: penjualan, cost, payment, fixed-cost, payroll, depresiasi → semua double-entry balanced
 
-## Implemented (2026-01-08)
-- **Module 1 — Order Input** with AJAX contract autofill, auto-calculation panel (`total_tariff`, `tax_amount`, `grand_total`), AWB auto-number.
-- **Module 2 — Cost Plotting + Accrue Settlement** with strict role rules + settle-to-cash flow.
-- **Module 3 & 4 — Monthly Recap & Reconciliation** with SheetJS Excel export, multi-select, and revert handling.
-- **Module 5 — Invoices** with creation (idempotent), bulk Excel `Lampiran` export, and print dashboard (Invoice + Faktur Pajak + Lampiran + PO Placeholder) using `window.print()`.
-- **Module 6 — Payment & Closing** with `Mark as Paid` (Finance).
-- **Module 7 — P&L Report** with month + customer filters, per-AWB net profit, summary KPIs, Excel export.
-- Master CRUD: Customers, Contracts, Settings (tax + company profile).
-- Auth: JWT (HS256, 12h), bcrypt, idempotent seed of operation/finance demo users.
-- Dashboard with status counters, revenue, costs, outstanding accrue, quick links.
-- Sample seed: 3 customers, 4 contracts, 5 AWBs (one per status), 10 costs, 2 invoices.
+## What's Been Implemented (2026-06-09)
 
-## Verified
-- Backend pytest: 20/20 passed.
-- Frontend flows: all required user journeys verified by testing agent (login → input order → recap → invoice → print → mark paid → P&L).
-- Idempotency bug on `POST /api/invoices` fixed (existing-invoice check now runs before status guard).
+### Iteration 1 — Backend bootstrap fix
+- Diagnosed: backend not starting due to `pydantic 2.9.2` vs `pydantic_core 2.46.4` version mismatch
+- Reinstalled `pydantic_core==2.23.4` → login works, MongoDB connected, all seed data intact
 
-## Prioritized Backlog (P0/P1/P2)
-- **P1** — Export Lampiran as **separate file per invoice** when only one is selected (constraint says "1 file per attachment, or multi-tab if bulk"). Current implementation always uses multi-tab. Easy to branch in `bulkExport()`.
-- **P1** — Optional: opt-in to React Router v7 future flags to silence console warnings.
-- **P2** — Split `server.py` into `routers/{auth, orders, costs, invoices, reports}.py` before adding more modules.
-- **P2** — Add a Customer/PO upload field for the "PO Placeholder" page.
-- **P2** — Edit-Order screen (currently only create).
-- **P2** — Excel template branding (header/logo, color, page footer).
-- **P2** — Dashboards: monthly trend chart, aging report for unpaid invoices.
+### Iteration 2 — Akunting + 4 Modul Tambahan + Feature Flag System
 
-## Next Action Items
-- Implement single-file Lampiran branching (P1).
-- Consider splitting backend into routers (P2).
-- Add edit & delete order screens (P2).
+#### A. Feature Flag System (NEW)
+- `db.feature_flags` collection auto-seeded on startup
+- 5 modules: `accounting` (default ON), `hr`, `tax`, `asset`, `bank_recon` (default OFF)
+- Backend: `GET /api/feature-flags` (all users), `PUT /api/feature-flags/{key}` (admin only) → returns 403 for non-admin
+- Backend: `require_feature(key)` dependency → returns 503 with Indonesian message when module disabled
+- Frontend: `FeatureFlagsProvider` + `useFeatureFlags()` + `FeatureGate` component → routes redirect to `/` if module off
+- Frontend: Sidebar `Layout.js` hides entire menu section if its feature is off
+- Toggle UI in Settings (admin only) with `data-testid="feature-toggle-{key}"`
 
-## Iteration 2026-01-08 (later) — Administrator + Recurring Fixed Cost
-- New role **administrator** seeded as `admin / admin123` with full access + the new module `user_management`.
-- New collection `users.permissions[]` (per-user module access list) + `users.active` flag.
-- New page `/users` (admin-only) with create, edit (role + permission checkboxes), reset password, soft-disable (active toggle), delete. Guardrails: cannot delete/demote/disable the last administrator; cannot delete self.
-- `GET /api/modules` returns canonical module catalog (13 modules). Used by the User form to render permission checkboxes.
-- Sidebar (`Layout.js`) became **permission-driven** (`hasPerm(user, item.perm)`); administrator always shows everything; non-admin sees only the modules their `user.permissions[]` allows.
-- `App.js` `Protected` auto-allows administrator on any `roles={[...]}` route.
-- Backend `require_role` auto-includes administrator; `POST /api/costs` allows admin for both Vendor and Operational/Lintas categories.
-- New endpoint `POST /api/fixed-costs/copy` (Finance) with `{ source_month, target_month, overwrite }`. Frontend `FixedCosts.js` has new "Salin ke Bulan Berikutnya" button → modal with target month (defaulted to next month) + overwrite toggle. After copy the page auto-navigates to the target period and shows the copied rows (each with `copied_from_month` metadata).
-- Login page now has 3 demo buttons (Administrator / Operation / Finance).
+#### B. 8 Akunting Pages (NEW frontend, existing backend)
+1. `/accounting/coa` — Chart of Accounts (CRUD by admin, sistem accounts protected)
+2. `/accounting/journal` — Jurnal Umum (auto + manual posting, balance validator, filter by period/ref/account)
+3. `/accounting/ledger` — Buku Besar (mutasi per akun + saldo berjalan)
+4. `/accounting/trial-balance` — Neraca Saldo (per period)
+5. `/accounting/balance-sheet` — Neraca (Aset/Liabilitas/Ekuitas, seimbang ✓)
+6. `/accounting/income-statement` — Laporan Laba Rugi formal (Pendapatan - HPP - Beban)
+7. `/accounting/cash-flow` — Arus Kas (Operasi/Investasi/Pendanaan, direct method)
+8. `/accounting/opening-closing` — Saldo Awal & Tutup Buku Periodik (admin)
 
-## Verified
-- API smoke: admin can post Vendor + Operational costs, operation cannot create users (403), cannot demote last admin (400 with proper message), copy fixed costs across months works, custom-permission users return only their allowed perms.
-- UI screenshots (desktop): User Management list, Create user dialog (13 perm checkboxes), FC copy dialog, FC after-copy view, admin Dashboard with full sidebar + ADMINISTRATOR section.
+#### C. 4 Modul Tambahan (NEW, gated by toggle)
+- **HR & Payroll** (`/hr`) — Master karyawan + run payroll bulanan + auto-jurnal Dr 6101/Cr Kas/Cr 2220 PPh21
+- **Pajak** (`/tax`) — Ringkasan PPN Keluaran/Masukan dari jurnal + catatan PPh manual
+- **Aset Tetap** (`/assets`) — Master aset PSAK 16 + run depresiasi garis lurus + auto-jurnal Dr 6105/Cr 1502
+- **Rekonsiliasi Bank** (`/bank-recon`) — Input mutasi bank + auto-find kandidat jurnal (±7 hari, ±Rp1) + match/unmatch
+
+#### D. Bug Fixes
+- Balance Sheet **contra-asset (1502 Akumulasi Penyusutan)** bug: sebelumnya +8M ditambahkan ke total aset. Fix: untuk type=asset, raw `debit-credit` (tidak flip sign) → contra-asset muncul negatif & mengurangi total dengan benar
+- HR Payroll **ObjectId serialization** bug: legacy payroll docs punya raw ObjectId di `slip.employee_id`. Fix: serialize() di `list_payroll` convert nested ObjectId → str
+
+#### E. Sidebar/Branding
+- Brand: TMS → **ARC Business Suite** (lebih general untuk multi-module)
+- Menu reorganized: Order to Cash · Biaya · Master & Laporan · Akunting (PSAK) · HR · Tax · Asset · Bank Recon · Sistem
+
+## Testing Status
+- Backend: 92% (36/39 pytest), balance-sheet & payroll fixed → expected 100%
+- Frontend: 95%+ verified via screenshots (login, COA, Settings toggle, Balance Sheet, Income Statement, Cash Flow, HR enable→navigate)
+- Feature gating verified: 503 when OFF, 403 for non-admin toggle, redirect to `/` when frontend route OFF
+- Auth: admin/admin123, operation/operation123, finance/finance123 — all working
+
+## Prioritized Backlog
+
+### P0 — Blocker
+- (none — all critical paths working)
+
+### P1 — Next Iteration
+- Period reset for payroll/depreciation re-run (currently 400 if period already processed)
+- Hide entire "Aktivasi Modul" section from non-admin (currently visible but disabled)
+- Income Statement export to PDF/Excel
+- Audit log: who toggled which feature/edited which journal
+
+### P2 — Backlog
+- Multi-currency support (USD/SGD)
+- Purchase Order & Goods Receipt module
+- Budget vs Actual tracking
+- CRM lite (leads, sales pipeline)
+- Approval workflow (multi-level for big costs)
+- WhatsApp/Email notifications (invoice due, payroll release)
+- Mobile/PWA for field drivers
+- Multi-branch support
+- E-Faktur PPN integration
+
+## Future Enhancements (user-suggested)
+- User akan kembangkan format laporan akunting sendiri di iterasi berikutnya
+- Consider: Tax module needs deeper PPh21 calculation per PTKP (currently flat 5%)

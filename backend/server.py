@@ -1555,9 +1555,16 @@ async def balance_sheet(as_of: Optional[str] = None, user: dict = Depends(get_cu
     totals = {"asset": 0.0, "liability": 0.0, "equity": 0.0, "revenue": 0.0, "cogs": 0.0, "expense": 0.0}
     for a in accounts:
         s = sums.get(a["code"], {"debit": 0, "credit": 0})
-        bal = s["debit"] - s["credit"]
-        if a["normal"] == "credit":
-            bal = -bal
+        # For asset accounts: bal = debit - credit (raw). Contra-asset (e.g. Akum Penyusutan, normal=credit)
+        # naturally shows as a negative number under assets and correctly reduces total.
+        # For liability/equity/revenue: bal = credit - debit (positive normal).
+        # For cogs/expense: bal = debit - credit (positive normal).
+        if a["type"] == "asset":
+            bal = s["debit"] - s["credit"]
+        elif a["normal"] == "credit":
+            bal = s["credit"] - s["debit"]
+        else:
+            bal = s["debit"] - s["credit"]
         totals[a["type"]] = totals.get(a["type"], 0) + bal
         if a["type"] in ("asset", "liability", "equity"):
             sections[a["type"]].append({"code": a["code"], "name": a["name"], "subtype": a.get("subtype"), "balance": round(bal, 2)})
@@ -2088,7 +2095,17 @@ async def list_payroll(period: Optional[str] = None, user: dict = Depends(requir
     if period:
         q["period_month"] = period
     docs = await db.payroll.find(q).sort("created_at", -1).to_list(2000)
-    return [serialize(d) for d in docs]
+    out = []
+    for d in docs:
+        s = serialize(d)
+        # Convert nested ObjectIds in slips (legacy data may have raw ObjectId)
+        if isinstance(s.get("slips"), list):
+            s["slips"] = [
+                {k: (str(v) if isinstance(v, ObjectId) else v) for k, v in slip.items()}
+                for slip in s["slips"]
+            ]
+        out.append(s)
+    return out
 
 @app.post("/api/hr/payroll/run")
 async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("hr"))):
