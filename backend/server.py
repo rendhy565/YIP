@@ -1981,3 +1981,475 @@ async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_r
             except HTTPException:
                 pass  # skip if period locked
     return {"copied": len(new_docs), "target_month": data.target_month, "overwrite": data.overwrite}
+
+# ===========================================================================
+# FEATURE FLAGS (Module On/Off) — Administrator-only toggle
+# ===========================================================================
+FEATURE_MODULES = [
+    {"key": "accounting",  "label": "Akunting (PSAK)",        "default": True,  "description": "Chart of Accounts, Jurnal, Buku Besar, Laporan Keuangan"},
+    {"key": "hr",          "label": "HR & Payroll",            "default": False, "description": "Karyawan, gaji, slip gaji, auto-jurnal beban gaji"},
+    {"key": "tax",         "label": "Perpajakan (PPN/PPh)",    "default": False, "description": "Ringkasan PPN Masukan/Keluaran, PPh ringkas"},
+    {"key": "asset",       "label": "Aset Tetap & Depresiasi", "default": False, "description": "Aset, penyusutan otomatis bulanan (PSAK 16)"},
+    {"key": "bank_recon",  "label": "Rekonsiliasi Bank",       "default": False, "description": "Impor mutasi bank & matching ke jurnal"},
+]
+FEATURE_KEYS = [m["key"] for m in FEATURE_MODULES]
+
+async def ensure_feature_flags():
+    for m in FEATURE_MODULES:
+        existing = await db.feature_flags.find_one({"key": m["key"]})
+        if not existing:
+            await db.feature_flags.insert_one({
+                "key": m["key"], "label": m["label"], "enabled": m["default"],
+                "description": m["description"],
+                "updated_at": datetime.now(timezone.utc),
+            })
+
+async def is_feature_enabled(key: str) -> bool:
+    f = await db.feature_flags.find_one({"key": key})
+    if not f:
+        # not seeded yet, fall back to default
+        for m in FEATURE_MODULES:
+            if m["key"] == key:
+                return m["default"]
+        return False
+    return bool(f.get("enabled", False))
+
+def require_feature(key: str):
+    async def dep(user: dict = Depends(get_current_user)) -> dict:
+        if not await is_feature_enabled(key):
+            raise HTTPException(status_code=503, detail=f"Modul '{key}' sedang dinonaktifkan oleh administrator")
+        return user
+    return dep
+
+@app.get("/api/feature-flags")
+async def list_feature_flags(user: dict = Depends(get_current_user)):
+    await ensure_feature_flags()
+    docs = await db.feature_flags.find().to_list(50)
+    return [serialize(d) for d in docs]
+
+class FeatureFlagUpdate(BaseModel):
+    enabled: bool
+
+@app.put("/api/feature-flags/{key}")
+async def update_feature_flag(key: str, data: FeatureFlagUpdate, user: dict = Depends(require_role("administrator"))):
+    if key not in FEATURE_KEYS:
+        raise HTTPException(400, "Module key tidak valid")
+    await db.feature_flags.update_one(
+        {"key": key},
+        {"$set": {"enabled": data.enabled, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return {"ok": True, "key": key, "enabled": data.enabled}
+
+# ===========================================================================
+# HR & PAYROLL MODULE  (toggle: hr)
+# ===========================================================================
+class EmployeeIn(BaseModel):
+    full_name: str
+    position: Optional[str] = None
+    nik: Optional[str] = None  # KTP
+    npwp: Optional[str] = None
+    bpjs_no: Optional[str] = None
+    bank_account: Optional[str] = None
+    base_salary: float = 0
+    allowance: float = 0
+    join_date: Optional[str] = None  # YYYY-MM-DD
+    active: bool = True
+
+@app.get("/api/hr/employees")
+async def list_employees(user: dict = Depends(require_feature("hr"))):
+    docs = await db.employees.find().sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/hr/employees")
+async def create_employee(data: EmployeeIn, user: dict = Depends(require_feature("hr"))):
+    doc = data.model_dump()
+    doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.employees.insert_one(doc)
+    return serialize(await db.employees.find_one({"_id": r.inserted_id}))
+
+@app.put("/api/hr/employees/{eid}")
+async def update_employee(eid: str, data: EmployeeIn, user: dict = Depends(require_feature("hr"))):
+    await db.employees.update_one({"_id": _oid(eid)}, {"$set": data.model_dump()})
+    return serialize(await db.employees.find_one({"_id": _oid(eid)}))
+
+@app.delete("/api/hr/employees/{eid}")
+async def delete_employee(eid: str, user: dict = Depends(require_feature("hr"))):
+    await db.employees.delete_one({"_id": _oid(eid)})
+    return {"ok": True}
+
+class PayrollRunIn(BaseModel):
+    period_month: str  # YYYY-MM
+    cash_account_code: Optional[str] = "1101"
+
+@app.get("/api/hr/payroll")
+async def list_payroll(period: Optional[str] = None, user: dict = Depends(require_feature("hr"))):
+    q = {}
+    if period:
+        q["period_month"] = period
+    docs = await db.payroll.find(q).sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/hr/payroll/run")
+async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("hr"))):
+    if user.get("role") not in ("administrator", "finance"):
+        raise HTTPException(403, "Hanya finance/admin yang dapat menjalankan payroll")
+    if await db.payroll.find_one({"period_month": data.period_month}):
+        raise HTTPException(400, f"Payroll periode {data.period_month} sudah dijalankan")
+    employees = await db.employees.find({"active": True}).to_list(1000)
+    if not employees:
+        raise HTTPException(400, "Tidak ada karyawan aktif")
+    slips = []
+    total = 0.0
+    for e in employees:
+        base = float(e.get("base_salary", 0))
+        allowance = float(e.get("allowance", 0))
+        gross = base + allowance
+        # Sederhana: PPh21 final 5% jika gross >= 5jt
+        pph21 = round(gross * 0.05, 2) if gross >= 5000000 else 0.0
+        net = gross - pph21
+        slips.append({
+            "employee_id": str(e["_id"]), "employee_name": e["full_name"],
+            "position": e.get("position"), "base_salary": base, "allowance": allowance,
+            "gross": gross, "pph21": pph21, "net": net,
+        })
+        total += gross
+    cash_acc = data.cash_account_code or "1101"
+    payroll_doc = {
+        "period_month": data.period_month,
+        "slips": slips,
+        "total_gross": round(total, 2),
+        "cash_account_code": cash_acc,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.payroll.insert_one(payroll_doc)
+    # Post journal: Dr 6101 Beban Gaji / Cr Kas / Cr 2220 Hutang PPh
+    total_pph = sum(s["pph21"] for s in slips)
+    total_net = sum(s["net"] for s in slips)
+    lines = [
+        {"account_code": "6101", "debit": total, "credit": 0, "memo": f"Payroll {data.period_month}"},
+    ]
+    if total_pph > 0:
+        lines.append({"account_code": "2220", "debit": 0, "credit": total_pph, "memo": "PPh21 dipotong"})
+    lines.append({"account_code": cash_acc, "debit": 0, "credit": total_net, "memo": "Bayar gaji"})
+    try:
+        await post_journal(
+            date=datetime.now(timezone.utc),
+            description=f"Payroll {data.period_month}",
+            lines=lines,
+            reference_type="payroll", reference_id=str(r.inserted_id),
+            posted_by=user["id"], auto=True,
+        )
+    except HTTPException:
+        pass
+    return serialize(await db.payroll.find_one({"_id": r.inserted_id}))
+
+@app.delete("/api/hr/payroll/{pid}")
+async def delete_payroll(pid: str, user: dict = Depends(require_feature("hr"))):
+    if user.get("role") != "administrator":
+        raise HTTPException(403, "Hanya administrator")
+    pdoc = await db.payroll.find_one({"_id": _oid(pid)})
+    if not pdoc:
+        raise HTTPException(404, "Payroll tidak ditemukan")
+    await db.journal_entries.delete_many({"reference_type": "payroll", "reference_id": pid})
+    await db.payroll.delete_one({"_id": _oid(pid)})
+    return {"ok": True}
+
+# ===========================================================================
+# TAX MODULE  (toggle: tax)
+# ===========================================================================
+@app.get("/api/tax/ppn-summary")
+async def ppn_summary(period: Optional[str] = None, user: dict = Depends(require_feature("tax"))):
+    """Sum PPN Keluaran (2210) and PPN Masukan (1401 if exists, else 0) for period."""
+    if period:
+        start, end = _period_bounds(period)
+        date_q = {"$gte": start, "$lte": end}
+    else:
+        date_q = None
+    match = {"lines.account_code": {"$in": ["2210", "1401"]}}
+    if date_q:
+        match["date"] = date_q
+    entries = await db.journal_entries.find(match).to_list(10000)
+    keluaran = 0.0
+    masukan = 0.0
+    detail_kel = []
+    detail_mas = []
+    for je in entries:
+        for ln in je["lines"]:
+            if ln["account_code"] == "2210":
+                amt = ln["credit"] - ln["debit"]
+                keluaran += amt
+                if amt > 0:
+                    detail_kel.append({
+                        "entry_no": je["entry_no"],
+                        "date": je["date"].isoformat() if hasattr(je["date"], "isoformat") else je["date"],
+                        "description": je["description"],
+                        "amount": round(amt, 2),
+                    })
+            elif ln["account_code"] == "1401":
+                amt = ln["debit"] - ln["credit"]
+                masukan += amt
+                if amt > 0:
+                    detail_mas.append({
+                        "entry_no": je["entry_no"],
+                        "date": je["date"].isoformat() if hasattr(je["date"], "isoformat") else je["date"],
+                        "description": je["description"],
+                        "amount": round(amt, 2),
+                    })
+    return {
+        "period": period or "all",
+        "ppn_keluaran": round(keluaran, 2),
+        "ppn_masukan": round(masukan, 2),
+        "ppn_kurang_bayar": round(keluaran - masukan, 2),
+        "detail_keluaran": detail_kel,
+        "detail_masukan": detail_mas,
+    }
+
+class PphRecordIn(BaseModel):
+    period_month: str
+    pph_type: str  # PPh21, PPh23, PPh25
+    description: Optional[str] = None
+    amount: float
+
+@app.get("/api/tax/pph")
+async def list_pph(period: Optional[str] = None, user: dict = Depends(require_feature("tax"))):
+    q = {}
+    if period:
+        q["period_month"] = period
+    docs = await db.pph_records.find(q).sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/tax/pph")
+async def create_pph(data: PphRecordIn, user: dict = Depends(require_feature("tax"))):
+    doc = data.model_dump()
+    doc["created_by"] = user["id"]
+    doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.pph_records.insert_one(doc)
+    return serialize(await db.pph_records.find_one({"_id": r.inserted_id}))
+
+@app.delete("/api/tax/pph/{pid}")
+async def delete_pph(pid: str, user: dict = Depends(require_feature("tax"))):
+    await db.pph_records.delete_one({"_id": _oid(pid)})
+    return {"ok": True}
+
+# ===========================================================================
+# ASSET MODULE  (toggle: asset)
+# ===========================================================================
+class AssetIn(BaseModel):
+    name: str
+    category: Optional[str] = None
+    acquisition_date: str  # YYYY-MM-DD
+    cost: float
+    salvage_value: float = 0
+    useful_life_months: int = 60
+    notes: Optional[str] = None
+
+@app.get("/api/assets")
+async def list_assets(user: dict = Depends(require_feature("asset"))):
+    docs = await db.assets.find().sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/assets")
+async def create_asset(data: AssetIn, user: dict = Depends(require_feature("asset"))):
+    doc = data.model_dump()
+    doc["accumulated_depreciation"] = 0.0
+    doc["depreciated_months"] = 0
+    doc["status"] = "active"
+    doc["created_by"] = user["id"]
+    doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.assets.insert_one(doc)
+    return serialize(await db.assets.find_one({"_id": r.inserted_id}))
+
+@app.delete("/api/assets/{aid}")
+async def delete_asset(aid: str, user: dict = Depends(require_feature("asset"))):
+    if user.get("role") != "administrator":
+        raise HTTPException(403, "Hanya administrator")
+    await db.assets.delete_one({"_id": _oid(aid)})
+    return {"ok": True}
+
+class DepreciateRunIn(BaseModel):
+    period_month: str  # YYYY-MM — run depreciation for this month
+
+@app.post("/api/assets/depreciate")
+async def run_depreciation(data: DepreciateRunIn, user: dict = Depends(require_feature("asset"))):
+    if user.get("role") not in ("administrator", "finance"):
+        raise HTTPException(403, "Hanya finance/admin")
+    # idempotent per period
+    if await db.depreciation_runs.find_one({"period_month": data.period_month}):
+        raise HTTPException(400, f"Depresiasi {data.period_month} sudah dijalankan")
+    assets = await db.assets.find({"status": "active"}).to_list(1000)
+    if not assets:
+        raise HTTPException(400, "Tidak ada aset aktif")
+    total = 0.0
+    details = []
+    for a in assets:
+        life = int(a.get("useful_life_months", 60))
+        if life <= 0:
+            continue
+        depreciated = int(a.get("depreciated_months", 0))
+        if depreciated >= life:
+            continue
+        depreciable = float(a.get("cost", 0)) - float(a.get("salvage_value", 0))
+        monthly = round(depreciable / life, 2)
+        if monthly <= 0:
+            continue
+        await db.assets.update_one(
+            {"_id": a["_id"]},
+            {"$inc": {"accumulated_depreciation": monthly, "depreciated_months": 1}},
+        )
+        details.append({"asset_id": str(a["_id"]), "name": a["name"], "amount": monthly})
+        total += monthly
+    run_doc = {
+        "period_month": data.period_month,
+        "total_amount": round(total, 2),
+        "details": details,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.depreciation_runs.insert_one(run_doc)
+    # Post journal: Dr 6105 (or 6106) Beban Penyusutan / Cr 1502 Akumulasi Penyusutan
+    if total > 0:
+        # Ensure 6105 exists; create if missing
+        if not await db.chart_of_accounts.find_one({"code": "6105"}):
+            await db.chart_of_accounts.insert_one({
+                "code": "6105", "name": "Beban Penyusutan", "type": "expense",
+                "subtype": "operating_expense", "normal": "debit",
+                "is_system": True, "active": True,
+                "created_at": datetime.now(timezone.utc),
+            })
+        try:
+            await post_journal(
+                date=datetime.now(timezone.utc),
+                description=f"Depresiasi periode {data.period_month}",
+                lines=[
+                    {"account_code": "6105", "debit": total, "credit": 0, "memo": "Penyusutan bulanan"},
+                    {"account_code": "1502", "debit": 0, "credit": total, "memo": "Akumulasi penyusutan"},
+                ],
+                reference_type="depreciation", reference_id=str(r.inserted_id),
+                posted_by=user["id"], auto=True,
+            )
+        except HTTPException:
+            pass
+    return serialize(await db.depreciation_runs.find_one({"_id": r.inserted_id}))
+
+@app.get("/api/assets/depreciation-runs")
+async def list_depreciation_runs(user: dict = Depends(require_feature("asset"))):
+    docs = await db.depreciation_runs.find().sort("period_month", -1).to_list(200)
+    return [serialize(d) for d in docs]
+
+# ===========================================================================
+# BANK RECONCILIATION MODULE  (toggle: bank_recon)
+# ===========================================================================
+class BankStatementLineIn(BaseModel):
+    bank_account_code: str  # 1102 / 1103
+    date: str  # YYYY-MM-DD
+    description: str
+    amount: float  # positive = inflow, negative = outflow
+
+@app.get("/api/bank-recon")
+async def list_bank_lines(
+    bank_account_code: Optional[str] = None,
+    period: Optional[str] = None,
+    matched: Optional[bool] = None,
+    user: dict = Depends(require_feature("bank_recon")),
+):
+    q = {}
+    if bank_account_code:
+        q["bank_account_code"] = bank_account_code
+    if period:
+        q["period_month"] = period
+    if matched is not None:
+        q["matched"] = matched
+    docs = await db.bank_statements.find(q).sort("date", -1).to_list(5000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/bank-recon")
+async def create_bank_line(data: BankStatementLineIn, user: dict = Depends(require_feature("bank_recon"))):
+    period = data.date[:7]  # YYYY-MM
+    doc = {
+        "bank_account_code": data.bank_account_code,
+        "date": data.date,
+        "description": data.description,
+        "amount": data.amount,
+        "matched": False,
+        "matched_journal_id": None,
+        "period_month": period,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.bank_statements.insert_one(doc)
+    return serialize(await db.bank_statements.find_one({"_id": r.inserted_id}))
+
+class BankMatchIn(BaseModel):
+    journal_id: str
+
+@app.post("/api/bank-recon/{bid}/match")
+async def match_bank_line(bid: str, data: BankMatchIn, user: dict = Depends(require_feature("bank_recon"))):
+    line = await db.bank_statements.find_one({"_id": _oid(bid)})
+    if not line:
+        raise HTTPException(404, "Line bank tidak ditemukan")
+    j = await db.journal_entries.find_one({"_id": _oid(data.journal_id)})
+    if not j:
+        raise HTTPException(404, "Jurnal tidak ditemukan")
+    await db.bank_statements.update_one(
+        {"_id": _oid(bid)},
+        {"$set": {"matched": True, "matched_journal_id": data.journal_id, "matched_at": datetime.now(timezone.utc)}},
+    )
+    return {"ok": True}
+
+@app.post("/api/bank-recon/{bid}/unmatch")
+async def unmatch_bank_line(bid: str, user: dict = Depends(require_feature("bank_recon"))):
+    await db.bank_statements.update_one(
+        {"_id": _oid(bid)},
+        {"$set": {"matched": False, "matched_journal_id": None}},
+    )
+    return {"ok": True}
+
+@app.delete("/api/bank-recon/{bid}")
+async def delete_bank_line(bid: str, user: dict = Depends(require_feature("bank_recon"))):
+    await db.bank_statements.delete_one({"_id": _oid(bid)})
+    return {"ok": True}
+
+@app.get("/api/bank-recon/candidates/{bid}")
+async def match_candidates(bid: str, user: dict = Depends(require_feature("bank_recon"))):
+    """Find candidate journal entries that touch the bank account with matching amount ±tolerance."""
+    line = await db.bank_statements.find_one({"_id": _oid(bid)})
+    if not line:
+        raise HTTPException(404, "Line bank tidak ditemukan")
+    target = abs(line["amount"])
+    inflow = line["amount"] > 0
+    bank_code = line["bank_account_code"]
+    # Find journal entries with bank line of matching amount within 7 days
+    try:
+        line_date = datetime.fromisoformat(line["date"])
+    except Exception:
+        line_date = datetime.now(timezone.utc)
+    start = line_date - timedelta(days=7)
+    end = line_date + timedelta(days=7)
+    entries = await db.journal_entries.find({
+        "date": {"$gte": start, "$lte": end},
+        "lines.account_code": bank_code,
+    }).to_list(500)
+    candidates = []
+    for je in entries:
+        for ln in je["lines"]:
+            if ln["account_code"] != bank_code:
+                continue
+            amt = ln["debit"] if inflow else ln["credit"]
+            if amt > 0 and abs(amt - target) < 1.0:
+                candidates.append({
+                    "id": str(je["_id"]),
+                    "entry_no": je["entry_no"],
+                    "date": je["date"].isoformat() if hasattr(je["date"], "isoformat") else je["date"],
+                    "description": je["description"],
+                    "amount": amt,
+                })
+                break
+    return {"line": serialize(line), "candidates": candidates}
+
+# Ensure feature flags seeded on startup
+@app.on_event("startup")
+async def _startup_feature_flags():
+    await ensure_feature_flags()
+
