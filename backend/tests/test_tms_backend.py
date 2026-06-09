@@ -3,7 +3,7 @@ import os
 import requests
 import pytest
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://08d49ddb-8aab-40b1-ac37-f821a0ba7c7c.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://git-pull-test.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
 
