@@ -6,7 +6,7 @@ import re
 import jwt
 import bcrypt
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Literal, Annotated
+from typing import Optional, List, Literal
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Request, status
@@ -180,6 +180,10 @@ class CostIn(BaseModel):
     amount: float
     description: Optional[str] = None
     vendor_name: Optional[str] = None
+    cash_account_code: Optional[str] = None  # for Cash payments (Operational/Lintas) — defaults to 1101
+
+class SettleIn(BaseModel):
+    cash_account_code: Optional[str] = None  # which cash account paid the vendor; default 1101
 
 class SettingIn(BaseModel):
     key_name: str
@@ -193,6 +197,10 @@ class FixedCostIn(BaseModel):
     description: Optional[str] = None
     amount: float
     period_month: str  # format YYYY-MM
+    cash_account_code: Optional[str] = None  # default 1101
+
+class MarkPaidIn(BaseModel):
+    cash_account_code: Optional[str] = None  # which cash account received payment; default 1101
 
 # ---------------------------------------------------------------------------
 # AWB number generator
@@ -225,6 +233,132 @@ async def next_invoice_number() -> str:
             seq = int(m.group(1)) + 1
     return f"{prefix}{seq:04d}"
 
+async def next_journal_number() -> str:
+    yyyymm = datetime.now(timezone.utc).strftime("%Y%m")
+    prefix = f"JE-{yyyymm}-"
+    last = await db.journal_entries.find_one(
+        {"entry_no": {"$regex": f"^{prefix}"}},
+        sort=[("entry_no", -1)],
+    )
+    seq = 1
+    if last:
+        m = re.search(r"-(\d+)$", last["entry_no"])
+        if m:
+            seq = int(m.group(1)) + 1
+    return f"{prefix}{seq:04d}"
+
+# ---------------------------------------------------------------------------
+# ACCOUNTING (PSAK) — Chart of Accounts, Journal Engine, Reports
+# ---------------------------------------------------------------------------
+# Chart of Accounts (Bagan Akun Standar)
+DEFAULT_COA = [
+    # 1xxx - ASET
+    {"code": "1101", "name": "Kas", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
+    {"code": "1102", "name": "Bank BCA", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
+    {"code": "1103", "name": "Bank Mandiri", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
+    {"code": "1201", "name": "Piutang Usaha", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
+    {"code": "1301", "name": "Persediaan", "type": "asset", "subtype": "current_asset", "normal": "debit"},
+    {"code": "1501", "name": "Peralatan & Kendaraan", "type": "asset", "subtype": "fixed_asset", "normal": "debit"},
+    {"code": "1502", "name": "Akumulasi Penyusutan", "type": "asset", "subtype": "fixed_asset", "normal": "credit"},
+    # 2xxx - LIABILITAS
+    {"code": "2101", "name": "Hutang Usaha", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
+    {"code": "2210", "name": "PPN Keluaran", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
+    {"code": "2220", "name": "Hutang PPh", "type": "liability", "subtype": "current_liability", "normal": "credit"},
+    # 3xxx - EKUITAS
+    {"code": "3101", "name": "Modal Disetor", "type": "equity", "subtype": "equity", "normal": "credit", "is_system": True},
+    {"code": "3201", "name": "Laba Ditahan", "type": "equity", "subtype": "equity", "normal": "credit", "is_system": True},
+    # 4xxx - PENDAPATAN
+    {"code": "4101", "name": "Pendapatan Jasa Pengangkutan", "type": "revenue", "subtype": "revenue", "normal": "credit", "is_system": True},
+    # 5xxx - HPP (COGS)
+    {"code": "5101", "name": "Beban Vendor Logistik", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
+    {"code": "5102", "name": "Beban Operasional Pengiriman", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
+    {"code": "5103", "name": "Beban Lintas", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
+    # 6xxx - BEBAN OPERASIONAL / FIXED COST
+    {"code": "6101", "name": "Beban Gaji", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
+    {"code": "6102", "name": "Beban Sewa", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
+    {"code": "6103", "name": "Beban Utilities", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
+    {"code": "6104", "name": "Beban Marketing", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
+    {"code": "6105", "name": "Beban Administrasi", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
+    {"code": "6199", "name": "Beban Lainnya", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
+]
+FIXED_COST_TO_COA = {
+    "Gaji": "6101", "Sewa": "6102", "Utilities": "6103",
+    "Marketing": "6104", "Administrasi": "6105", "Lainnya": "6199",
+}
+COST_CATEGORY_TO_COA = {"Vendor": "5101", "Operational": "5102", "Lintas": "5103"}
+
+async def get_account(code: str) -> Optional[dict]:
+    return await db.chart_of_accounts.find_one({"code": code})
+
+async def is_period_locked(period_month: str) -> bool:
+    return bool(await db.period_closings.find_one({"period": period_month}))
+
+async def post_journal(
+    *,
+    date: datetime,
+    description: str,
+    lines: List[dict],
+    reference_type: str,
+    reference_id: Optional[str] = None,
+    posted_by: Optional[str] = None,
+    auto: bool = True,
+) -> dict:
+    """Post a balanced journal entry. lines = [{account_code, debit, credit, memo?}, ...]"""
+    period = date.strftime("%Y-%m")
+    if await is_period_locked(period):
+        raise HTTPException(400, f"Periode {period} sudah ditutup, jurnal tidak dapat diposting")
+    # Validate accounts + enrich with name
+    enriched = []
+    total_dr = 0.0
+    total_cr = 0.0
+    for ln in lines:
+        acc = await get_account(ln["account_code"])
+        if not acc:
+            raise HTTPException(400, f"Akun {ln['account_code']} tidak ditemukan di CoA")
+        dr = float(ln.get("debit") or 0)
+        cr = float(ln.get("credit") or 0)
+        if dr < 0 or cr < 0:
+            raise HTTPException(400, "Nilai debit/kredit tidak boleh negatif")
+        if dr > 0 and cr > 0:
+            raise HTTPException(400, f"Baris {acc['code']} tidak boleh mengisi debit & kredit sekaligus")
+        if dr == 0 and cr == 0:
+            continue
+        enriched.append({
+            "account_code": acc["code"],
+            "account_name": acc["name"],
+            "account_type": acc["type"],
+            "debit": round(dr, 2),
+            "credit": round(cr, 2),
+            "memo": ln.get("memo", ""),
+        })
+        total_dr += dr
+        total_cr += cr
+    if not enriched:
+        raise HTTPException(400, "Jurnal harus memiliki minimal 1 baris berisi nilai")
+    if round(total_dr, 2) != round(total_cr, 2):
+        raise HTTPException(400, f"Jurnal tidak balance: DR {total_dr:.2f} != CR {total_cr:.2f}")
+    doc = {
+        "entry_no": await next_journal_number(),
+        "date": date,
+        "period_month": period,
+        "description": description,
+        "reference_type": reference_type,
+        "reference_id": reference_id,
+        "lines": enriched,
+        "total_debit": round(total_dr, 2),
+        "total_credit": round(total_cr, 2),
+        "posted_by": posted_by,
+        "auto": auto,
+        "is_locked": False,
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.journal_entries.insert_one(doc)
+    new = await db.journal_entries.find_one({"_id": r.inserted_id})
+    return serialize(new)
+
+async def journal_exists_for(reference_type: str, reference_id: str) -> bool:
+    return bool(await db.journal_entries.find_one({"reference_type": reference_type, "reference_id": reference_id}))
+
 # ---------------------------------------------------------------------------
 # Lifespan / Seeding
 # ---------------------------------------------------------------------------
@@ -235,6 +369,19 @@ async def seed_data():
     await db.invoices.create_index("invoice_number", unique=True)
     await db.settings.create_index("key_name", unique=True)
     await db.fixed_costs.create_index("period_month")
+    await db.chart_of_accounts.create_index("code", unique=True)
+    await db.journal_entries.create_index("entry_no", unique=True)
+    await db.journal_entries.create_index("period_month")
+    await db.journal_entries.create_index("date")
+    await db.period_closings.create_index("period", unique=True)
+
+    # Seed Chart of Accounts
+    for a in DEFAULT_COA:
+        await db.chart_of_accounts.update_one(
+            {"code": a["code"]},
+            {"$setOnInsert": {**a, "active": True, "created_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
 
     # Users
     seeds = [
@@ -387,8 +534,118 @@ async def seed_data():
             {"category": "Marketing", "description": "Iklan & promosi B2B", "amount": 2500000},
         ]:
             f["period_month"] = cur_month
+            f["cash_account_code"] = "1101"
             f["created_at"] = datetime.now(timezone.utc)
             await db.fixed_costs.insert_one(f)
+
+    # Sample opening balance journal (idempotent: only if no journal entries exist at all)
+    if await db.journal_entries.count_documents({}) == 0:
+        first_admin = await db.users.find_one({"role": "administrator"})
+        admin_id = str(first_admin["_id"]) if first_admin else None
+        opening_date = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        try:
+            await post_journal(
+                date=opening_date,
+                description="Saldo Awal — modal disetor (seed)",
+                lines=[
+                    {"account_code": "1101", "debit": 50000000, "credit": 0, "memo": "Saldo awal Kas"},
+                    {"account_code": "1102", "debit": 100000000, "credit": 0, "memo": "Saldo awal Bank BCA"},
+                    {"account_code": "1103", "debit": 50000000, "credit": 0, "memo": "Saldo awal Bank Mandiri"},
+                    {"account_code": "3101", "debit": 0, "credit": 200000000, "memo": "Modal disetor"},
+                ],
+                reference_type="opening_balance",
+                reference_id=None,
+                posted_by=admin_id,
+            )
+        except HTTPException:
+            pass
+
+    # Retroactive journal backfill for existing transactions
+    await backfill_journals()
+
+async def backfill_journals():
+    """Generate journal entries for existing AWB orders, costs, and fixed costs that
+    do not yet have one. Idempotent — safe to run on every startup."""
+    # AWB orders → DR Piutang / CR Pendapatan + PPN
+    awbs = await db.awb_orders.find().to_list(5000)
+    for o in awbs:
+        if await journal_exists_for("awb_order", str(o["_id"])):
+            continue
+        try:
+            lines = [
+                {"account_code": "1201", "debit": o.get("grand_total", 0), "credit": 0, "memo": o["awb_number"]},
+                {"account_code": "4101", "debit": 0, "credit": o.get("total_tariff", 0), "memo": o["awb_number"]},
+            ]
+            if o.get("tax_amount", 0) > 0:
+                lines.append({"account_code": "2210", "debit": 0, "credit": o["tax_amount"], "memo": "PPN"})
+            await post_journal(
+                date=o.get("created_at", datetime.now(timezone.utc)),
+                description=f"[Backfill] Penjualan {o['awb_number']}",
+                lines=lines, reference_type="awb_order", reference_id=str(o["_id"]), auto=True,
+            )
+        except HTTPException:
+            continue
+        # If status==Paid, also post the payment journal
+        if o.get("status") == "Paid" and not await journal_exists_for("payment", str(o["_id"])):
+            try:
+                await post_journal(
+                    date=o.get("paid_at") or o.get("created_at"),
+                    description=f"[Backfill] Pelunasan {o['awb_number']}",
+                    lines=[
+                        {"account_code": o.get("cash_account_code", "1101"), "debit": o["grand_total"], "credit": 0},
+                        {"account_code": "1201", "debit": 0, "credit": o["grand_total"]},
+                    ],
+                    reference_type="payment", reference_id=str(o["_id"]), auto=True,
+                )
+            except HTTPException:
+                pass
+
+    # AWB Costs → DR Beban / CR Hutang or Kas
+    costs = await db.awb_costs.find().to_list(5000)
+    for c in costs:
+        if await journal_exists_for("cost", str(c["_id"])):
+            continue
+        try:
+            awb = await db.awb_orders.find_one({"_id": c["awb_id"]})
+            awb_no = awb["awb_number"] if awb else ""
+            expense_code = COST_CATEGORY_TO_COA.get(c["cost_category"], "5102")
+            if c.get("payment_type") == "Accrue":
+                lines = [
+                    {"account_code": expense_code, "debit": c["amount"], "credit": 0, "memo": awb_no},
+                    {"account_code": "2101", "debit": 0, "credit": c["amount"], "memo": c.get("vendor_name") or ""},
+                ]
+            else:
+                cash_acc = c.get("cash_account_code") or "1101"
+                lines = [
+                    {"account_code": expense_code, "debit": c["amount"], "credit": 0, "memo": awb_no},
+                    {"account_code": cash_acc, "debit": 0, "credit": c["amount"]},
+                ]
+            await post_journal(
+                date=c.get("created_at"), description=f"[Backfill] Biaya {c['cost_category']} {awb_no}",
+                lines=lines, reference_type="cost", reference_id=str(c["_id"]), auto=True,
+            )
+        except HTTPException:
+            continue
+
+    # Fixed costs
+    fixed = await db.fixed_costs.find().to_list(5000)
+    for f in fixed:
+        if await journal_exists_for("fixed_cost", str(f["_id"])):
+            continue
+        try:
+            expense_code = FIXED_COST_TO_COA.get(f["category"], "6199")
+            cash_acc = f.get("cash_account_code") or "1101"
+            await post_journal(
+                date=f.get("created_at"),
+                description=f"[Backfill] Beban Tetap {f['category']} {f['period_month']}",
+                lines=[
+                    {"account_code": expense_code, "debit": f["amount"], "credit": 0},
+                    {"account_code": cash_acc, "debit": 0, "credit": f["amount"]},
+                ],
+                reference_type="fixed_cost", reference_id=str(f["_id"]), auto=True,
+            )
+        except HTTPException:
+            continue
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -602,6 +859,25 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
     }
     r = await db.awb_orders.insert_one(doc)
     new = await db.awb_orders.find_one({"_id": r.inserted_id})
+    # Auto-post journal: DR Piutang / CR Pendapatan + PPN Keluaran
+    try:
+        lines = [
+            {"account_code": "1201", "debit": doc["grand_total"], "credit": 0, "memo": doc["awb_number"]},
+            {"account_code": "4101", "debit": 0, "credit": doc["total_tariff"], "memo": doc["awb_number"]},
+        ]
+        if doc["tax_amount"] > 0:
+            lines.append({"account_code": "2210", "debit": 0, "credit": doc["tax_amount"], "memo": f"PPN {doc['tax_percentage']}%"})
+        await post_journal(
+            date=doc["created_at"],
+            description=f"Penjualan jasa pengangkutan {doc['awb_number']}",
+            lines=lines,
+            reference_type="awb_order",
+            reference_id=str(r.inserted_id),
+            posted_by=user["id"],
+        )
+    except HTTPException as e:
+        # Don't block AWB creation if period is locked; log only
+        new["journal_warning"] = e.detail
     return serialize(new)
 
 # ---------------------------------------------------------------------------
@@ -651,6 +927,7 @@ async def create_cost(data: CostIn, user: dict = Depends(get_current_user)):
     else:
         raise HTTPException(400, "Kategori biaya tidak valid")
 
+    cash_acc = data.cash_account_code or "1101"
     doc = {
         "awb_id": _oid(data.awb_id),
         "cost_category": data.cost_category,
@@ -661,23 +938,78 @@ async def create_cost(data: CostIn, user: dict = Depends(get_current_user)):
         "is_settled": is_settled,
         "created_by_role": role,
         "created_by": user["id"],
+        "cash_account_code": cash_acc if payment_type == "Cash" else None,
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.awb_costs.insert_one(doc)
     new = await db.awb_costs.find_one({"_id": r.inserted_id})
+    # Auto-post journal
+    try:
+        awb = await db.awb_orders.find_one({"_id": doc["awb_id"]})
+        awb_no = awb["awb_number"] if awb else ""
+        expense_code = COST_CATEGORY_TO_COA[data.cost_category]
+        if payment_type == "Accrue":
+            # DR Beban Vendor / CR Hutang Usaha
+            lines = [
+                {"account_code": expense_code, "debit": data.amount, "credit": 0, "memo": f"{awb_no} - {data.vendor_name or ''}"},
+                {"account_code": "2101", "debit": 0, "credit": data.amount, "memo": data.vendor_name or "Hutang vendor"},
+            ]
+            desc = f"Akrual biaya vendor {awb_no}"
+        else:
+            # Cash: DR Beban / CR Kas/Bank
+            acc = await get_account(cash_acc)
+            if not acc or not acc.get("is_cash"):
+                raise HTTPException(400, "Akun kas/bank tidak valid")
+            lines = [
+                {"account_code": expense_code, "debit": data.amount, "credit": 0, "memo": awb_no},
+                {"account_code": cash_acc, "debit": 0, "credit": data.amount, "memo": data.description or ""},
+            ]
+            desc = f"Pembayaran biaya {data.cost_category} {awb_no}"
+        await post_journal(
+            date=doc["created_at"], description=desc, lines=lines,
+            reference_type="cost", reference_id=str(r.inserted_id), posted_by=user["id"],
+        )
+    except HTTPException as e:
+        new["journal_warning"] = e.detail
     return serialize(new)
 
 @app.post("/api/costs/{cid}/settle")
-async def settle_cost(cid: str, user: dict = Depends(require_role("finance"))):
+async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depends(require_role("finance"))):
     cost = await db.awb_costs.find_one({"_id": _oid(cid)})
     if not cost:
         raise HTTPException(404, "Biaya tidak ditemukan")
     if cost["payment_type"] != "Accrue":
         raise HTTPException(400, "Hanya biaya Accrue yang dapat di-settle ke Cash")
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    now = datetime.now(timezone.utc)
     await db.awb_costs.update_one(
         {"_id": _oid(cid)},
-        {"$set": {"payment_type": "Cash", "is_settled": True, "settled_at": datetime.now(timezone.utc), "settled_by": user["id"]}},
+        {"$set": {
+            "payment_type": "Cash",
+            "is_settled": True,
+            "settled_at": now,
+            "settled_by": user["id"],
+            "cash_account_code": cash_acc,
+        }},
     )
+    # Auto-post journal: DR Hutang Usaha / CR Cash
+    try:
+        awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
+        awb_no = awb["awb_number"] if awb else ""
+        await post_journal(
+            date=now,
+            description=f"Pelunasan hutang vendor {cost.get('vendor_name') or ''} ({awb_no})",
+            lines=[
+                {"account_code": "2101", "debit": cost["amount"], "credit": 0, "memo": cost.get("vendor_name") or ""},
+                {"account_code": cash_acc, "debit": 0, "credit": cost["amount"], "memo": f"Settle {awb_no}"},
+            ],
+            reference_type="settlement", reference_id=cid, posted_by=user["id"],
+        )
+    except HTTPException as e:
+        return {"ok": True, "journal_warning": e.detail}
     return {"ok": True}
 
 @app.delete("/api/costs/{cid}")
@@ -797,16 +1129,34 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
 # Payments (Module 6)
 # ---------------------------------------------------------------------------
 @app.post("/api/orders/{oid}/mark-paid")
-async def mark_paid(oid: str, user: dict = Depends(require_role("finance"))):
+async def mark_paid(oid: str, data: MarkPaidIn = MarkPaidIn(), user: dict = Depends(require_role("finance"))):
     o = await db.awb_orders.find_one({"_id": _oid(oid)})
     if not o:
         raise HTTPException(404, "Order tidak ditemukan")
     if o["status"] != "Invoiced":
         raise HTTPException(400, "Hanya order Invoiced yang dapat ditandai Paid")
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    now = datetime.now(timezone.utc)
     await db.awb_orders.update_one(
         {"_id": _oid(oid)},
-        {"$set": {"status": "Paid", "paid_at": datetime.now(timezone.utc), "paid_by": user["id"]}},
+        {"$set": {"status": "Paid", "paid_at": now, "paid_by": user["id"], "cash_account_code": cash_acc}},
     )
+    # Auto-post journal: DR Cash / CR Piutang Usaha
+    try:
+        await post_journal(
+            date=now,
+            description=f"Penerimaan pelunasan invoice {o['awb_number']}",
+            lines=[
+                {"account_code": cash_acc, "debit": o["grand_total"], "credit": 0, "memo": o["awb_number"]},
+                {"account_code": "1201", "debit": 0, "credit": o["grand_total"], "memo": o["awb_number"]},
+            ],
+            reference_type="payment", reference_id=oid, posted_by=user["id"],
+        )
+    except HTTPException as e:
+        return {"ok": True, "journal_warning": e.detail}
     return {"ok": True}
 
 # ---------------------------------------------------------------------------
@@ -837,16 +1187,36 @@ async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role
         int(m)
     except Exception:
         raise HTTPException(400, "Format periode harus YYYY-MM")
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    now = datetime.now(timezone.utc)
     doc = {
         "category": data.category,
         "description": data.description,
         "amount": data.amount,
         "period_month": data.period_month,
+        "cash_account_code": cash_acc,
         "created_by": user["id"],
-        "created_at": datetime.now(timezone.utc),
+        "created_at": now,
     }
     r = await db.fixed_costs.insert_one(doc)
     new = await db.fixed_costs.find_one({"_id": r.inserted_id})
+    # Auto-post journal
+    try:
+        expense_code = FIXED_COST_TO_COA.get(data.category, "6199")
+        await post_journal(
+            date=now,
+            description=f"Beban Tetap {data.category} - {data.period_month}",
+            lines=[
+                {"account_code": expense_code, "debit": data.amount, "credit": 0, "memo": data.description or data.category},
+                {"account_code": cash_acc, "debit": 0, "credit": data.amount, "memo": data.category},
+            ],
+            reference_type="fixed_cost", reference_id=str(r.inserted_id), posted_by=user["id"],
+        )
+    except HTTPException as e:
+        new["journal_warning"] = e.detail
     return serialize(new)
 
 @app.delete("/api/fixed-costs/{fid}")
@@ -983,6 +1353,457 @@ async def kpis(user: dict = Depends(get_current_user)):
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+# ===========================================================================
+# ACCOUNTING ENDPOINTS
+# ===========================================================================
+
+class AccountIn(BaseModel):
+    code: str
+    name: str
+    type: Literal["asset", "liability", "equity", "revenue", "cogs", "expense"]
+    subtype: Optional[str] = None
+    normal: Literal["debit", "credit"]
+    is_cash: bool = False
+
+class JournalLineIn(BaseModel):
+    account_code: str
+    debit: float = 0
+    credit: float = 0
+    memo: Optional[str] = None
+
+class JournalEntryIn(BaseModel):
+    date: Optional[datetime] = None
+    description: str
+    lines: List[JournalLineIn]
+
+class OpeningBalanceIn(BaseModel):
+    date: datetime
+    lines: List[JournalLineIn]
+
+class PeriodClosingIn(BaseModel):
+    period: str  # YYYY-MM
+
+# ---- Chart of Accounts ----
+@app.get("/api/accounts")
+async def list_accounts(
+    is_cash: Optional[bool] = None,
+    type_: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    q = {"active": {"$ne": False}}
+    if is_cash is not None:
+        q["is_cash"] = is_cash
+    if type_:
+        q["type"] = type_
+    docs = await db.chart_of_accounts.find(q).sort("code", 1).to_list(500)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/accounts")
+async def create_account(data: AccountIn, user: dict = Depends(require_role("administrator"))):
+    if await db.chart_of_accounts.find_one({"code": data.code}):
+        raise HTTPException(400, "Kode akun sudah ada")
+    doc = data.model_dump()
+    doc["is_system"] = False
+    doc["active"] = True
+    doc["created_at"] = datetime.now(timezone.utc)
+    await db.chart_of_accounts.insert_one(doc)
+    new = await db.chart_of_accounts.find_one({"code": data.code})
+    return serialize(new)
+
+@app.put("/api/accounts/{code}")
+async def update_account(code: str, data: AccountIn, user: dict = Depends(require_role("administrator"))):
+    target = await db.chart_of_accounts.find_one({"code": code})
+    if not target:
+        raise HTTPException(404, "Akun tidak ditemukan")
+    if target.get("is_system") and data.code != code:
+        raise HTTPException(400, "Tidak dapat mengubah kode akun sistem")
+    await db.chart_of_accounts.update_one({"code": code}, {"$set": data.model_dump()})
+    new = await db.chart_of_accounts.find_one({"code": data.code})
+    return serialize(new)
+
+@app.delete("/api/accounts/{code}")
+async def delete_account(code: str, user: dict = Depends(require_role("administrator"))):
+    target = await db.chart_of_accounts.find_one({"code": code})
+    if not target:
+        raise HTTPException(404, "Akun tidak ditemukan")
+    if target.get("is_system"):
+        raise HTTPException(400, "Akun sistem tidak dapat dihapus")
+    if await db.journal_entries.find_one({"lines.account_code": code}):
+        raise HTTPException(400, "Akun memiliki jurnal, hanya bisa dinonaktifkan")
+    await db.chart_of_accounts.delete_one({"code": code})
+    return {"ok": True}
+
+# ---- Journal Entries ----
+@app.get("/api/journal")
+async def list_journal(
+    period: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    reference_type: Optional[str] = None,
+    account_code: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    q = {}
+    if period:
+        q["period_month"] = period
+    if reference_type:
+        q["reference_type"] = reference_type
+    if account_code:
+        q["lines.account_code"] = account_code
+    date_q = {}
+    try:
+        if start_date:
+            date_q["$gte"] = datetime.fromisoformat(start_date)
+        if end_date:
+            date_q["$lte"] = datetime.fromisoformat(end_date)
+    except Exception:
+        pass
+    if date_q:
+        q["date"] = date_q
+    docs = await db.journal_entries.find(q).sort("date", -1).to_list(5000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/journal")
+async def post_manual_journal(data: JournalEntryIn, user: dict = Depends(require_role("finance", "administrator"))):
+    d = data.date or datetime.now(timezone.utc)
+    return await post_journal(
+        date=d, description=data.description,
+        lines=[ln.model_dump() for ln in data.lines],
+        reference_type="manual", reference_id=None, posted_by=user["id"], auto=False,
+    )
+
+@app.delete("/api/journal/{jid}")
+async def delete_journal(jid: str, user: dict = Depends(require_role("administrator"))):
+    j = await db.journal_entries.find_one({"_id": _oid(jid)})
+    if not j:
+        raise HTTPException(404, "Jurnal tidak ditemukan")
+    if j.get("reference_type") != "manual":
+        raise HTTPException(400, "Hanya jurnal manual yang dapat dihapus")
+    if await is_period_locked(j["period_month"]):
+        raise HTTPException(400, "Periode sudah ditutup")
+    await db.journal_entries.delete_one({"_id": _oid(jid)})
+    return {"ok": True}
+
+# ---- Reports ----
+async def _balance_until(end_date: datetime) -> dict:
+    """Return per-account totals (debit - credit) up to end_date inclusive."""
+    pipeline = [
+        {"$match": {"date": {"$lte": end_date}}},
+        {"$unwind": "$lines"},
+        {"$group": {
+            "_id": "$lines.account_code",
+            "debit": {"$sum": "$lines.debit"},
+            "credit": {"$sum": "$lines.credit"},
+        }},
+    ]
+    out = {}
+    async for row in db.journal_entries.aggregate(pipeline):
+        out[row["_id"]] = {"debit": row["debit"], "credit": row["credit"]}
+    return out
+
+def _period_bounds(period: str) -> (datetime, datetime):
+    y, m = period.split("-")
+    y, m = int(y), int(m)
+    start = datetime(y, m, 1, tzinfo=timezone.utc)
+    end = datetime(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1, tzinfo=timezone.utc) - timedelta(microseconds=1)
+    return start, end
+
+@app.get("/api/reports/trial-balance")
+async def trial_balance(period: Optional[str] = None, user: dict = Depends(get_current_user)):
+    if period:
+        _, end = _period_bounds(period)
+    else:
+        end = datetime.now(timezone.utc)
+    sums = await _balance_until(end)
+    accounts = await db.chart_of_accounts.find({"active": {"$ne": False}}).sort("code", 1).to_list(500)
+    rows = []
+    total_dr = 0.0
+    total_cr = 0.0
+    for a in accounts:
+        s = sums.get(a["code"], {"debit": 0, "credit": 0})
+        bal = s["debit"] - s["credit"]
+        if a["normal"] == "credit":
+            bal = -bal
+        if abs(bal) < 0.001 and s["debit"] == 0 and s["credit"] == 0:
+            continue
+        debit_col = bal if (a["normal"] == "debit" and bal > 0) else 0
+        credit_col = bal if (a["normal"] == "credit" and bal > 0) else (-bal if (a["normal"] == "debit" and bal < 0) else 0)
+        # simpler: show balance under its natural column
+        if a["normal"] == "debit":
+            debit_col = max(bal, 0)
+            credit_col = max(-bal, 0)
+        else:
+            credit_col = max(bal, 0)
+            debit_col = max(-bal, 0)
+        rows.append({
+            "code": a["code"], "name": a["name"], "type": a["type"],
+            "debit": round(debit_col, 2), "credit": round(credit_col, 2),
+            "balance": round(bal, 2),
+        })
+        total_dr += debit_col
+        total_cr += credit_col
+    return {"rows": rows, "total_debit": round(total_dr, 2), "total_credit": round(total_cr, 2),
+            "balanced": round(total_dr, 2) == round(total_cr, 2)}
+
+@app.get("/api/reports/balance-sheet")
+async def balance_sheet(as_of: Optional[str] = None, user: dict = Depends(get_current_user)):
+    end = datetime.fromisoformat(as_of) if as_of else datetime.now(timezone.utc)
+    sums = await _balance_until(end)
+    accounts = await db.chart_of_accounts.find({"active": {"$ne": False}}).sort("code", 1).to_list(500)
+    sections = {"asset": [], "liability": [], "equity": []}
+    totals = {"asset": 0.0, "liability": 0.0, "equity": 0.0, "revenue": 0.0, "cogs": 0.0, "expense": 0.0}
+    for a in accounts:
+        s = sums.get(a["code"], {"debit": 0, "credit": 0})
+        bal = s["debit"] - s["credit"]
+        if a["normal"] == "credit":
+            bal = -bal
+        totals[a["type"]] = totals.get(a["type"], 0) + bal
+        if a["type"] in ("asset", "liability", "equity"):
+            sections[a["type"]].append({"code": a["code"], "name": a["name"], "subtype": a.get("subtype"), "balance": round(bal, 2)})
+    # Compute current-period earnings → goes to equity as Laba Tahun Berjalan
+    current_earnings = totals["revenue"] - totals["cogs"] - totals["expense"]
+    sections["equity"].append({"code": "3301", "name": "Laba Tahun Berjalan", "subtype": "equity", "balance": round(current_earnings, 2)})
+    totals["equity"] += current_earnings
+    return {
+        "as_of": end.isoformat(),
+        "assets": sections["asset"],
+        "liabilities": sections["liability"],
+        "equity": sections["equity"],
+        "total_assets": round(totals["asset"], 2),
+        "total_liabilities": round(totals["liability"], 2),
+        "total_equity": round(totals["equity"], 2),
+        "balanced": round(totals["asset"], 2) == round(totals["liability"] + totals["equity"], 2),
+    }
+
+@app.get("/api/reports/income-statement")
+async def income_statement(period: Optional[str] = None, user: dict = Depends(get_current_user)):
+    if period:
+        start, end = _period_bounds(period)
+        date_q = {"$gte": start, "$lte": end}
+    else:
+        date_q = None
+    pipeline = []
+    if date_q:
+        pipeline.append({"$match": {"date": date_q}})
+    pipeline += [
+        {"$unwind": "$lines"},
+        {"$group": {
+            "_id": "$lines.account_code",
+            "debit": {"$sum": "$lines.debit"},
+            "credit": {"$sum": "$lines.credit"},
+        }},
+    ]
+    sums = {}
+    async for row in db.journal_entries.aggregate(pipeline):
+        sums[row["_id"]] = {"debit": row["debit"], "credit": row["credit"]}
+    accounts = await db.chart_of_accounts.find({"type": {"$in": ["revenue", "cogs", "expense"]}}).sort("code", 1).to_list(200)
+    revenue_lines, cogs_lines, expense_lines = [], [], []
+    total_rev = total_cogs = total_exp = 0.0
+    for a in accounts:
+        s = sums.get(a["code"], {"debit": 0, "credit": 0})
+        bal = s["credit"] - s["debit"] if a["normal"] == "credit" else s["debit"] - s["credit"]
+        if abs(bal) < 0.001:
+            continue
+        entry = {"code": a["code"], "name": a["name"], "balance": round(bal, 2)}
+        if a["type"] == "revenue":
+            revenue_lines.append(entry); total_rev += bal
+        elif a["type"] == "cogs":
+            cogs_lines.append(entry); total_cogs += bal
+        else:
+            expense_lines.append(entry); total_exp += bal
+    gross = total_rev - total_cogs
+    net = gross - total_exp
+    return {
+        "period": period or "all",
+        "revenue": revenue_lines, "total_revenue": round(total_rev, 2),
+        "cogs": cogs_lines, "total_cogs": round(total_cogs, 2),
+        "gross_profit": round(gross, 2),
+        "expenses": expense_lines, "total_expenses": round(total_exp, 2),
+        "net_income": round(net, 2),
+        "gross_margin_pct": (gross / total_rev * 100) if total_rev else 0,
+        "net_margin_pct": (net / total_rev * 100) if total_rev else 0,
+    }
+
+@app.get("/api/reports/cash-flow")
+async def cash_flow(period: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Direct cash flow: sum of cash account movements grouped by counter-account type."""
+    cash_accounts = await db.chart_of_accounts.find({"is_cash": True}).to_list(50)
+    cash_codes = [a["code"] for a in cash_accounts]
+    if period:
+        start, end = _period_bounds(period)
+        date_q = {"$gte": start, "$lte": end}
+    else:
+        date_q = None
+
+    # Beginning balance of all cash accounts before the period
+    if period:
+        before_end = start - timedelta(microseconds=1)
+        before_sums = await _balance_until(before_end)
+    else:
+        before_sums = {}
+    beginning_cash = 0.0
+    for c in cash_codes:
+        s = before_sums.get(c, {"debit": 0, "credit": 0})
+        beginning_cash += s["debit"] - s["credit"]
+
+    # Iterate through journal entries that have at least 1 cash line in period
+    match = {"lines.account_code": {"$in": cash_codes}}
+    if date_q:
+        match["date"] = date_q
+    entries = await db.journal_entries.find(match).to_list(10000)
+
+    operating_in = 0.0
+    operating_out = 0.0
+    financing_in = 0.0
+    financing_out = 0.0
+    investing_in = 0.0
+    investing_out = 0.0
+    detail = {"operating_in": [], "operating_out": [], "financing": [], "investing": []}
+
+    for je in entries:
+        # Net cash effect for this entry
+        cash_dr = sum(ln["debit"] for ln in je["lines"] if ln["account_code"] in cash_codes)
+        cash_cr = sum(ln["credit"] for ln in je["lines"] if ln["account_code"] in cash_codes)
+        net = cash_dr - cash_cr  # positive = inflow
+        if abs(net) < 0.001:
+            continue
+        # Classify by non-cash counter accounts
+        non_cash_types = set()
+        for ln in je["lines"]:
+            if ln["account_code"] not in cash_codes and (ln["debit"] > 0 or ln["credit"] > 0):
+                non_cash_types.add(ln.get("account_type", ""))
+        # Heuristic: equity → financing, fixed_asset (1501/1502) → investing, else operating
+        is_financing = "equity" in non_cash_types or je.get("reference_type") == "opening_balance"
+        is_investing = False
+        for ln in je["lines"]:
+            if ln["account_code"].startswith("15") and ln["account_code"] not in cash_codes:
+                is_investing = True
+        bucket = "financing" if is_financing else ("investing" if is_investing else "operating")
+        item = {
+            "entry_no": je["entry_no"], "date": je["date"].isoformat() if hasattr(je["date"], 'isoformat') else je["date"],
+            "description": je["description"], "amount": round(net, 2),
+        }
+        if bucket == "operating":
+            if net > 0:
+                operating_in += net; detail["operating_in"].append(item)
+            else:
+                operating_out += -net; detail["operating_out"].append(item)
+        elif bucket == "financing":
+            if net > 0: financing_in += net
+            else: financing_out += -net
+            detail["financing"].append(item)
+        else:
+            if net > 0: investing_in += net
+            else: investing_out += -net
+            detail["investing"].append(item)
+
+    net_operating = operating_in - operating_out
+    net_financing = financing_in - financing_out
+    net_investing = investing_in - investing_out
+    ending_cash = beginning_cash + net_operating + net_financing + net_investing
+
+    return {
+        "period": period or "all",
+        "beginning_cash": round(beginning_cash, 2),
+        "operating": {"inflow": round(operating_in, 2), "outflow": round(operating_out, 2), "net": round(net_operating, 2)},
+        "investing": {"inflow": round(investing_in, 2), "outflow": round(investing_out, 2), "net": round(net_investing, 2)},
+        "financing": {"inflow": round(financing_in, 2), "outflow": round(financing_out, 2), "net": round(net_financing, 2)},
+        "net_change": round(net_operating + net_financing + net_investing, 2),
+        "ending_cash": round(ending_cash, 2),
+        "detail": detail,
+    }
+
+@app.get("/api/ledger")
+async def general_ledger(account_code: str, period: Optional[str] = None, user: dict = Depends(get_current_user)):
+    acc = await get_account(account_code)
+    if not acc:
+        raise HTTPException(404, "Akun tidak ditemukan")
+    q = {"lines.account_code": account_code}
+    if period:
+        q["period_month"] = period
+        start, _ = _period_bounds(period)
+        before_sums = await _balance_until(start - timedelta(microseconds=1))
+        s = before_sums.get(account_code, {"debit": 0, "credit": 0})
+        beginning = s["debit"] - s["credit"]
+        if acc["normal"] == "credit":
+            beginning = -beginning
+    else:
+        beginning = 0.0
+    entries = await db.journal_entries.find(q).sort("date", 1).to_list(10000)
+    rows = []
+    running = beginning
+    for je in entries:
+        for ln in je["lines"]:
+            if ln["account_code"] != account_code:
+                continue
+            delta = (ln["debit"] - ln["credit"]) if acc["normal"] == "debit" else (ln["credit"] - ln["debit"])
+            running += delta
+            rows.append({
+                "entry_no": je["entry_no"],
+                "date": je["date"].isoformat() if hasattr(je["date"], "isoformat") else je["date"],
+                "description": je["description"],
+                "debit": ln["debit"], "credit": ln["credit"],
+                "memo": ln.get("memo", ""),
+                "balance": round(running, 2),
+                "reference_type": je.get("reference_type"),
+            })
+    return {
+        "account": serialize(acc),
+        "beginning_balance": round(beginning, 2),
+        "rows": rows,
+        "ending_balance": round(running, 2),
+    }
+
+# ---- Opening Balance ----
+@app.post("/api/opening-balance")
+async def post_opening_balance(data: OpeningBalanceIn, user: dict = Depends(require_role("administrator"))):
+    return await post_journal(
+        date=data.date,
+        description="Saldo Awal (Opening Balance)",
+        lines=[ln.model_dump() for ln in data.lines],
+        reference_type="opening_balance", reference_id=None, posted_by=user["id"], auto=False,
+    )
+
+# ---- Period Closing ----
+@app.get("/api/period-closing")
+async def list_closings(user: dict = Depends(get_current_user)):
+    docs = await db.period_closings.find().sort("period", -1).to_list(200)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/period-closing")
+async def close_period(data: PeriodClosingIn, user: dict = Depends(require_role("administrator"))):
+    try:
+        y, m = data.period.split("-")
+        int(y); int(m)
+    except Exception:
+        raise HTTPException(400, "Format periode harus YYYY-MM")
+    if await db.period_closings.find_one({"period": data.period}):
+        raise HTTPException(400, "Periode sudah ditutup")
+    # snapshot summary
+    inc = await income_statement(period=data.period, user=user)
+    bs = await balance_sheet(as_of=_period_bounds(data.period)[1].isoformat(), user=user)
+    doc = {
+        "period": data.period,
+        "closed_at": datetime.now(timezone.utc),
+        "closed_by": user["id"],
+        "summary": {"income_statement": inc, "balance_sheet_totals": {
+            "assets": bs["total_assets"], "liabilities": bs["total_liabilities"], "equity": bs["total_equity"],
+        }},
+    }
+    await db.period_closings.insert_one(doc)
+    # also mark all entries in this period as is_locked=True
+    await db.journal_entries.update_many({"period_month": data.period}, {"$set": {"is_locked": True}})
+    new = await db.period_closings.find_one({"period": data.period})
+    return serialize(new)
+
+@app.delete("/api/period-closing/{period}")
+async def reopen_period(period: str, user: dict = Depends(require_role("administrator"))):
+    if not await db.period_closings.find_one({"period": period}):
+        raise HTTPException(404, "Periode tidak ditemukan")
+    await db.period_closings.delete_one({"period": period})
+    await db.journal_entries.update_many({"period_month": period}, {"$set": {"is_locked": False}})
+    return {"ok": True}
 
 # ---------------------------------------------------------------------------
 # User Management (Administrator only)
@@ -1125,6 +1946,10 @@ async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_r
     if not src:
         raise HTTPException(400, f"Tidak ada biaya tetap di periode {data.source_month}")
     if data.overwrite:
+        # Also delete journal entries for those costs (best-effort)
+        old = await db.fixed_costs.find({"period_month": data.target_month}).to_list(2000)
+        for f in old:
+            await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": str(f["_id"])})
         await db.fixed_costs.delete_many({"period_month": data.target_month})
     new_docs = []
     for f in src:
@@ -1133,10 +1958,26 @@ async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_r
             "description": f.get("description"),
             "amount": f.get("amount", 0),
             "period_month": data.target_month,
+            "cash_account_code": f.get("cash_account_code", "1101"),
             "created_by": user["id"],
             "copied_from_month": data.source_month,
             "created_at": datetime.now(timezone.utc),
         })
     if new_docs:
-        await db.fixed_costs.insert_many(new_docs)
+        result = await db.fixed_costs.insert_many(new_docs)
+        # Post journal for each
+        for inserted_id, doc in zip(result.inserted_ids, new_docs):
+            try:
+                expense_code = FIXED_COST_TO_COA.get(doc["category"], "6199")
+                await post_journal(
+                    date=doc["created_at"],
+                    description=f"Beban Tetap {doc['category']} - {doc['period_month']} (copy)",
+                    lines=[
+                        {"account_code": expense_code, "debit": doc["amount"], "credit": 0},
+                        {"account_code": doc["cash_account_code"], "debit": 0, "credit": doc["amount"]},
+                    ],
+                    reference_type="fixed_cost", reference_id=str(inserted_id), posted_by=user["id"],
+                )
+            except HTTPException:
+                pass  # skip if period locked
     return {"copied": len(new_docs), "target_month": data.target_month, "overwrite": data.overwrite}
