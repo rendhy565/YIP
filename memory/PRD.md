@@ -137,6 +137,30 @@ User connected GitHub repo `rendhy565/ARC` (TMS — Trucking Management System f
 - Disable auto-dummy-seed setelah wipe (via `settings.skip_dummy_seed` flag) — backend restart tidak akan re-seed dummy
 - Sidebar menu items also respect `adminOnly` flag (sebelumnya cuma section-level)
 
+### Iteration 6 (2026-02-10) — Saved Views (Personal + Shared) ✅
+
+#### A. Backend (`saved_views` collection)
+- `GET /api/analytics/saved-views` — list own + shared views (returns `is_mine`, `owner_username` per row)
+- `POST /api/analytics/saved-views` — create view {name, filters, is_shared}, validates name (1-80 chars)
+- `GET /api/analytics/saved-views/{vid}` — fetch single view (403 jika private dan bukan owner)
+- `PATCH /api/analytics/saved-views/{vid}` — rename / toggle share / update filters (owner only)
+- `DELETE /api/analytics/saved-views/{vid}` — owner atau admin
+
+#### B. Frontend (`/analytics`)
+- Saved Views bar di atas filter card dengan chip per view (`[data-testid="saved-view-{id}"]`)
+- Chip menampilkan: icon globe/lock (shared/private), nama view, owner username jika bukan milik sendiri
+- Tombol per chip: Share link (copy URL), Toggle share (owner only), Delete (owner only)
+- Modal "Simpan View Baru" dengan input nama + preview filter aktif + checkbox share
+- Deep-link via URL `?view={id}` — auto-apply filter saat page load
+- Active view badge "Aktif: {name}"
+
+#### C. Verification (2026-02-10)
+- ✅ List awal kosong → POST create private (admin) → POST create shared (admin) → Operation hanya lihat 1 shared view (is_mine=false)
+- ✅ Operation DELETE/GET private = 403; GET shared = 200; admin PATCH rename+unshare = 200
+- ✅ Validation empty name = 400
+- ✅ UI: modal render, view chip muncul, toast confirm, "Aktif" badge, deep-link `?view={id}` apply filter "JKT"
+- ✅ Operation hanya lihat tombol share-link (tidak ada delete/toggle untuk view milik admin)
+
 ### Iteration 5 (2026-02-10) — Excel Export + Row Actions + No Auto-Seed (VERIFIED)
 
 #### A. Backend

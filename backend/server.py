@@ -3561,3 +3561,107 @@ async def export_awbs_excel(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
+
+# ===========================================================================
+# Saved Views — kombinasi filter favorit untuk Dashboard Analitik
+# ===========================================================================
+class SavedViewIn(BaseModel):
+    name: str
+    filters: dict
+    is_shared: bool = False
+
+class SavedViewPatch(BaseModel):
+    name: Optional[str] = None
+    filters: Optional[dict] = None
+    is_shared: Optional[bool] = None
+
+
+def _serialize_view(v: dict, current_user_id: str) -> dict:
+    return {
+        "id": str(v["_id"]),
+        "name": v.get("name", ""),
+        "filters": v.get("filters", {}),
+        "is_shared": bool(v.get("is_shared", False)),
+        "owner_id": v.get("owner_id"),
+        "owner_username": v.get("owner_username", ""),
+        "is_mine": v.get("owner_id") == current_user_id,
+        "created_at": v.get("created_at").isoformat() if v.get("created_at") else None,
+    }
+
+
+@app.get("/api/analytics/saved-views")
+async def list_saved_views(user: dict = Depends(get_current_user)):
+    """List user's own views + all shared views."""
+    cursor = db.saved_views.find({
+        "$or": [{"owner_id": user["id"]}, {"is_shared": True}]
+    }).sort("created_at", -1)
+    out = []
+    async for v in cursor:
+        out.append(_serialize_view(v, user["id"]))
+    return out
+
+
+@app.post("/api/analytics/saved-views")
+async def create_saved_view(data: SavedViewIn, user: dict = Depends(get_current_user)):
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Nama view wajib diisi")
+    if len(name) > 80:
+        raise HTTPException(400, "Nama view max 80 karakter")
+    doc = {
+        "name": name,
+        "filters": data.filters or {},
+        "is_shared": bool(data.is_shared),
+        "owner_id": user["id"],
+        "owner_username": user.get("username", ""),
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.saved_views.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return _serialize_view(doc, user["id"])
+
+
+@app.get("/api/analytics/saved-views/{vid}")
+async def get_saved_view(vid: str, user: dict = Depends(get_current_user)):
+    v = await db.saved_views.find_one({"_id": _oid(vid)})
+    if not v:
+        raise HTTPException(404, "View tidak ditemukan")
+    if v.get("owner_id") != user["id"] and not v.get("is_shared"):
+        raise HTTPException(403, "Anda tidak punya akses view ini")
+    return _serialize_view(v, user["id"])
+
+
+@app.patch("/api/analytics/saved-views/{vid}")
+async def update_saved_view(vid: str, data: SavedViewPatch, user: dict = Depends(get_current_user)):
+    v = await db.saved_views.find_one({"_id": _oid(vid)})
+    if not v:
+        raise HTTPException(404, "View tidak ditemukan")
+    if v.get("owner_id") != user["id"]:
+        raise HTTPException(403, "Hanya pemilik yang bisa edit view ini")
+    update = {}
+    if data.name is not None:
+        n = data.name.strip()
+        if not n:
+            raise HTTPException(400, "Nama tidak boleh kosong")
+        update["name"] = n[:80]
+    if data.filters is not None:
+        update["filters"] = data.filters
+    if data.is_shared is not None:
+        update["is_shared"] = bool(data.is_shared)
+    if update:
+        await db.saved_views.update_one({"_id": v["_id"]}, {"$set": update})
+    v2 = await db.saved_views.find_one({"_id": v["_id"]})
+    return _serialize_view(v2, user["id"])
+
+
+@app.delete("/api/analytics/saved-views/{vid}")
+async def delete_saved_view(vid: str, user: dict = Depends(get_current_user)):
+    v = await db.saved_views.find_one({"_id": _oid(vid)})
+    if not v:
+        raise HTTPException(404, "View tidak ditemukan")
+    is_admin = user.get("role") == "administrator"
+    if v.get("owner_id") != user["id"] and not is_admin:
+        raise HTTPException(403, "Hanya pemilik atau admin yang bisa hapus view ini")
+    await db.saved_views.delete_one({"_id": v["_id"]})
+    return {"ok": True, "deleted": vid}
+

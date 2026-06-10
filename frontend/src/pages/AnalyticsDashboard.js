@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label } from "../components/ui";
 import { fmtIDR } from "../lib/utils";
-import { TrendingUp, DollarSign, Package, AlertCircle, Filter, RotateCcw, ChevronLeft, ChevronRight, Download, Trash2, MinusCircle } from "lucide-react";
+import { TrendingUp, DollarSign, Package, AlertCircle, Filter, RotateCcw, ChevronLeft, ChevronRight, Download, Trash2, MinusCircle, Bookmark, Share2, Plus, Globe, Lock, X } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid,
@@ -88,6 +88,94 @@ export default function AnalyticsDashboard() {
   const reset = () => {
     const blank = { period_from: "", period_to: "", customer_id: "", region: "", status: "", fleet_type: "", armada_type: "" };
     setFilters(blank); setSearch(""); setAppliedFilters(blank); setAppliedSearch(""); setPage(1);
+    setActiveViewId(null);
+  };
+
+  // ============ SAVED VIEWS ============
+  const [savedViews, setSavedViews] = useState([]);
+  const [activeViewId, setActiveViewId] = useState(null);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [newViewName, setNewViewName] = useState("");
+  const [newViewShared, setNewViewShared] = useState(false);
+
+  const loadSavedViews = () => {
+    api.get("/analytics/saved-views").then((r) => setSavedViews(r.data || [])).catch(() => {});
+  };
+
+  useEffect(() => { loadSavedViews(); }, []);
+
+  // Apply view: copy its filters + search into local state and trigger fetch
+  const applyView = (view) => {
+    const f = view.filters || {};
+    const next = {
+      period_from: f.period_from || "",
+      period_to: f.period_to || "",
+      customer_id: f.customer_id || "",
+      region: f.region || "",
+      status: f.status || "",
+      fleet_type: f.fleet_type || "",
+      armada_type: f.armada_type || "",
+    };
+    const s = f.search || "";
+    setFilters(next); setSearch(s);
+    setAppliedFilters(next); setAppliedSearch(s);
+    setPage(1); setActiveViewId(view.id);
+    toast.success(`View "${view.name}" diterapkan`);
+  };
+
+  // On mount: deep-link via ?view={id}
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const vid = params.get("view");
+    if (vid) {
+      api.get(`/analytics/saved-views/${vid}`).then((r) => applyView(r.data)).catch(() => {
+        toast.error("View tidak ditemukan atau Anda tidak punya akses");
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveCurrentView = async () => {
+    const name = newViewName.trim();
+    if (!name) { toast.error("Nama view wajib diisi"); return; }
+    try {
+      const payload = {
+        name,
+        filters: { ...filters, search },
+        is_shared: newViewShared,
+      };
+      const r = await api.post("/analytics/saved-views", payload);
+      toast.success(`View "${r.data.name}" disimpan`);
+      setShowSaveModal(false); setNewViewName(""); setNewViewShared(false);
+      setActiveViewId(r.data.id);
+      loadSavedViews();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const toggleShareView = async (view) => {
+    try {
+      const r = await api.patch(`/analytics/saved-views/${view.id}`, { is_shared: !view.is_shared });
+      toast.success(r.data.is_shared ? `View "${r.data.name}" sekarang shared` : `View "${r.data.name}" sekarang private`);
+      loadSavedViews();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const deleteView = async (view) => {
+    if (!window.confirm(`Hapus saved view "${view.name}"?`)) return;
+    try {
+      await api.delete(`/analytics/saved-views/${view.id}`);
+      toast.success(`View "${view.name}" dihapus`);
+      if (activeViewId === view.id) setActiveViewId(null);
+      loadSavedViews();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const copyShareLink = (view) => {
+    const url = `${window.location.origin}/analytics?view=${view.id}`;
+    navigator.clipboard.writeText(url).then(
+      () => toast.success("Link disalin ke clipboard"),
+      () => toast.error("Gagal copy link")
+    );
   };
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -146,6 +234,135 @@ export default function AnalyticsDashboard() {
   return (
     <div data-testid="analytics-page">
       <PageHeader title="Dashboard Analitik" subtitle="KPI · Tren bulanan · Breakdown wilayah/customer/armada · Tabel detail per AWB. Multi-filter di semua dimensi." />
+
+      {/* SAVED VIEWS BAR */}
+      <Card className="mb-3">
+        <div className="px-4 py-3 flex items-center gap-2 flex-wrap">
+          <Bookmark size={16} className="text-amber-600"/>
+          <h3 className="font-bold text-sm">Saved Views</h3>
+          <div className="text-xs text-slate-500">{savedViews.length} tersimpan</div>
+          <Button
+            data-testid="save-view-btn"
+            variant="secondary"
+            onClick={() => { setNewViewName(""); setNewViewShared(false); setShowSaveModal(true); }}
+            className="ml-2"
+          >
+            <Plus size={13}/> Simpan View Sekarang
+          </Button>
+          {activeViewId && (
+            <span className="text-xs px-2 py-1 bg-blue-50 text-blue-700 rounded font-medium">
+              Aktif: {savedViews.find((v) => v.id === activeViewId)?.name || "?"}
+            </span>
+          )}
+        </div>
+        {savedViews.length > 0 && (
+          <div className="px-4 pb-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+            {savedViews.map((v) => (
+              <div
+                key={v.id}
+                data-testid={`saved-view-${v.id}`}
+                className={`group inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs transition-colors ${
+                  activeViewId === v.id
+                    ? "bg-blue-50 border-blue-300 text-blue-800"
+                    : "bg-white border-slate-200 hover:border-blue-300 hover:bg-blue-50/30"
+                }`}
+              >
+                <button
+                  data-testid={`apply-view-${v.id}`}
+                  onClick={() => applyView(v)}
+                  className="font-semibold inline-flex items-center gap-1"
+                  title={v.is_mine ? "View kamu" : `Shared oleh @${v.owner_username}`}
+                >
+                  {v.is_shared ? <Globe size={11} className="text-emerald-600"/> : <Lock size={11} className="text-slate-400"/>}
+                  {v.name}
+                  {!v.is_mine && <span className="text-[9px] text-slate-400 font-normal">@{v.owner_username}</span>}
+                </button>
+                <button
+                  data-testid={`copy-link-${v.id}`}
+                  onClick={() => copyShareLink(v)}
+                  className="p-0.5 hover:text-blue-700"
+                  title="Copy share link"
+                ><Share2 size={11}/></button>
+                {v.is_mine && (
+                  <>
+                    <button
+                      data-testid={`toggle-share-${v.id}`}
+                      onClick={() => toggleShareView(v)}
+                      className="p-0.5 hover:text-emerald-700"
+                      title={v.is_shared ? "Jadikan private" : "Share ke semua user"}
+                    >{v.is_shared ? <Lock size={11}/> : <Globe size={11}/>}</button>
+                    <button
+                      data-testid={`delete-view-${v.id}`}
+                      onClick={() => deleteView(v)}
+                      className="p-0.5 hover:text-rose-700"
+                      title="Hapus view"
+                    ><X size={11}/></button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* SAVE VIEW MODAL */}
+      {showSaveModal && (
+        <div
+          data-testid="save-view-modal"
+          className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowSaveModal(false); }}
+        >
+          <Card className="max-w-md w-full">
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
+              <Bookmark size={16} className="text-amber-600"/>
+              <h3 className="font-bold">Simpan View Baru</h3>
+            </div>
+            <div className="p-4 space-y-3">
+              <div>
+                <Label>Nama View</Label>
+                <Input
+                  data-testid="view-name-input"
+                  autoFocus
+                  value={newViewName}
+                  onChange={(e) => setNewViewName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && saveCurrentView()}
+                  placeholder="cth: AWB Jakarta Bulan Ini Belum Bayar"
+                  maxLength={80}
+                />
+              </div>
+              <div>
+                <Label>Filter yang akan disimpan:</Label>
+                <div className="text-xs bg-slate-50 rounded p-2 font-mono text-slate-700 max-h-32 overflow-y-auto">
+                  {Object.entries({ ...filters, search }).filter(([_, v]) => v).map(([k, v]) => (
+                    <div key={k}><span className="text-slate-500">{k}:</span> {v}</div>
+                  ))}
+                  {Object.values({ ...filters, search }).every((v) => !v) && (
+                    <div className="text-slate-400 italic">(tidak ada filter — akan simpan view "Semua Data")</div>
+                  )}
+                </div>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  data-testid="view-shared-checkbox"
+                  type="checkbox"
+                  checked={newViewShared}
+                  onChange={(e) => setNewViewShared(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                <span className="text-sm">
+                  <Globe size={12} className="inline text-emerald-600"/> Share ke semua user
+                </span>
+              </label>
+            </div>
+            <div className="px-4 py-3 border-t border-slate-200 flex gap-2 justify-end">
+              <Button variant="ghost" onClick={() => setShowSaveModal(false)}>Batal</Button>
+              <Button data-testid="confirm-save-view-btn" onClick={saveCurrentView}>
+                <Bookmark size={13}/> Simpan
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* FILTER BAR */}
       <Card className="mb-5">
