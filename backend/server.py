@@ -2742,6 +2742,8 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
         "invoices_created": 0,
         "journals_posted": 0,
         "skipped_rows": 0,
+        "auto_corrected": [],  # list of {sheet, row, awb, field, original, corrected, diff}
+        "skipped_details": [],  # list of {sheet, row, awb, reason}
         "errors": [],
     }
 
@@ -2850,7 +2852,37 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                 qty_kg = _to_float(col("qty_kg"))
                 selling = _to_float(col("selling"))
                 ppn = _to_float(col("ppn"))
-                inv_ppn = _to_float(col("inv_ppn")) or (selling + ppn)
+                excel_inv_ppn = _to_float(col("inv_ppn"))
+
+                # ── DATA QUALITY GUARDS ────────────────────────────────────
+                # Skip rows that can't be salvaged
+                if selling <= 0:
+                    summary["skipped_rows"] += 1
+                    summary["skipped_details"].append({
+                        "sheet": sheet_name, "row": row_idx, "awb": awb_no,
+                        "reason": f"SELLING tidak valid (Rp {selling:,.0f}) — baris dilewati",
+                    })
+                    continue
+                # Skip malformed AWB number (comma or multiple numbers joined)
+                if "," in awb_no or (";" in awb_no) or len(awb_no) > 25:
+                    summary["skipped_rows"] += 1
+                    summary["skipped_details"].append({
+                        "sheet": sheet_name, "row": row_idx, "awb": awb_no,
+                        "reason": "Nomor AWB tidak valid (mengandung koma / titik koma / terlalu panjang — kemungkinan gabungan beberapa AWB)",
+                    })
+                    continue
+
+                # ── AUTO-FIX INV+PPN ──────────────────────────────────────
+                # Always recompute from selling + ppn (single source of truth)
+                inv_ppn = round(selling + ppn, 2)
+                if excel_inv_ppn > 0 and abs(excel_inv_ppn - inv_ppn) > 0.5:
+                    summary["auto_corrected"].append({
+                        "sheet": sheet_name, "row": row_idx, "awb": awb_no,
+                        "field": "INV+PPN",
+                        "original": round(excel_inv_ppn, 2),
+                        "corrected": inv_ppn,
+                        "diff": round(excel_inv_ppn - inv_ppn, 2),
+                    })
 
                 # Find existing AWB or create new
                 existing_awb = await db.awb_orders.find_one({"awb_number": awb_no})
@@ -2999,8 +3031,8 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                             posted_by=posted_by, auto=True,
                         )
                         summary["journals_posted"] += 1
-                    except HTTPException:
-                        pass
+                    except HTTPException as he:
+                        summary["errors"].append(f"Sheet '{sheet_name}' row {row_idx} AWB {awb_no}: jurnal sales gagal — {he.detail[:100]}")
 
                 # Invoice record (only once per AWB)
                 if ext_inv and existing_awb is None and not dry_run and awb_id is not None:

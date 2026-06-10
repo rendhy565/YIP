@@ -226,6 +226,7 @@ export default function ImportExcel() {
                 </ul>
               </Card>
             )}
+            <DataQualityPanels data={preview}/>
             <div className="text-right">
               <Button data-testid="import-execute-btn" variant="success" onClick={runImport} disabled={busy}>
                 <PlayCircle size={14}/> Eksekusi Import
@@ -248,6 +249,7 @@ export default function ImportExcel() {
               <Stat label="Jurnal posted" value={result.journals_posted} good/>
               <Stat label="Skipped" value={result.skipped_rows} warn={result.skipped_rows > 0}/>
             </div>
+            <DataQualityPanels data={result}/>
             <p className="text-xs text-slate-600 mt-3">Data sudah masuk. Cek <a className="text-blue-700 underline" href="/orders">Daftar AWB</a>, <a className="text-blue-700 underline" href="/accounting/journal">Jurnal Umum</a>, atau <a className="text-blue-700 underline" href="/accounting/balance-sheet">Neraca</a>.</p>
           </div>
         )}
@@ -261,6 +263,83 @@ function Stat({ label, value, good, warn }) {
     <div className={`rounded border p-3 ${good ? "bg-emerald-50 border-emerald-200" : warn ? "bg-amber-50 border-amber-300" : "bg-white border-slate-200"}`}>
       <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500">{label}</div>
       <div className={`text-xl font-mono font-black ${good ? "text-emerald-800" : warn ? "text-amber-800" : "text-slate-800"}`}>{value ?? 0}</div>
+    </div>
+  );
+}
+
+function DataQualityPanels({ data }) {
+  const corrected = data.auto_corrected || [];
+  const skipped = data.skipped_details || [];
+  if (corrected.length === 0 && skipped.length === 0) return null;
+  return (
+    <div className="mt-4 space-y-3">
+      {corrected.length > 0 && (
+        <details className="rounded border border-blue-300 bg-blue-50/60" open>
+          <summary className="px-3 py-2 cursor-pointer text-sm font-bold text-blue-900 flex items-center gap-2">
+            <FileWarning size={14}/> {corrected.length} baris di-auto-correct (INV+PPN tidak match SELLING+PPN di Excel)
+          </summary>
+          <div className="px-3 pb-3 overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead className="text-slate-600">
+                <tr className="text-left border-b border-blue-200">
+                  <th className="py-1.5 pr-3">Sheet</th>
+                  <th className="pr-3">Row</th>
+                  <th className="pr-3">AWB</th>
+                  <th className="pr-3">Field</th>
+                  <th className="pr-3 text-right">Asli (Excel)</th>
+                  <th className="pr-3 text-right">Diperbaiki</th>
+                  <th className="pr-3 text-right">Selisih</th>
+                </tr>
+              </thead>
+              <tbody>
+                {corrected.slice(0, 50).map((c, i) => (
+                  <tr key={i} className="border-b border-blue-100 last:border-0">
+                    <td className="py-1 pr-3 text-slate-500">{c.sheet}</td>
+                    <td className="pr-3 text-slate-500">{c.row}</td>
+                    <td className="pr-3 font-mono font-bold">{c.awb}</td>
+                    <td className="pr-3">{c.field}</td>
+                    <td className="pr-3 text-right font-mono text-rose-700">{Number(c.original).toLocaleString("id-ID")}</td>
+                    <td className="pr-3 text-right font-mono text-emerald-800 font-bold">{Number(c.corrected).toLocaleString("id-ID")}</td>
+                    <td className="pr-3 text-right font-mono">{c.diff > 0 ? "+" : ""}{Number(c.diff).toLocaleString("id-ID")}</td>
+                  </tr>
+                ))}
+                {corrected.length > 50 && (
+                  <tr><td colSpan={7} className="text-slate-500 py-1 italic">... dan {corrected.length - 50} baris lainnya</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+      {skipped.length > 0 && (
+        <details className="rounded border border-amber-300 bg-amber-50/60" open>
+          <summary className="px-3 py-2 cursor-pointer text-sm font-bold text-amber-900 flex items-center gap-2">
+            <AlertCircle size={14}/> {skipped.length} baris di-skip (data rusak / tidak bisa diperbaiki otomatis)
+          </summary>
+          <div className="px-3 pb-3 overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead className="text-slate-600">
+                <tr className="text-left border-b border-amber-200">
+                  <th className="py-1.5 pr-3">Sheet</th>
+                  <th className="pr-3">Row</th>
+                  <th className="pr-3">AWB</th>
+                  <th className="pr-3">Alasan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skipped.map((s, i) => (
+                  <tr key={i} className="border-b border-amber-100 last:border-0">
+                    <td className="py-1 pr-3 text-slate-500">{s.sheet}</td>
+                    <td className="pr-3 text-slate-500">{s.row}</td>
+                    <td className="pr-3 font-mono font-bold">{s.awb || "(kosong)"}</td>
+                    <td className="pr-3">{s.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
     </div>
   );
 }
