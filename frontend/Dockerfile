@@ -13,8 +13,14 @@ ARG REACT_APP_BACKEND_URL
 ENV REACT_APP_BACKEND_URL=${REACT_APP_BACKEND_URL}
 
 # Install deps (cache layer)
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile --network-timeout 600000
+# Copy package.json wajib; yarn.lock optional (kalau ada → reproducible install)
+COPY package.json ./
+COPY yarn.lock* ./
+RUN if [ -f yarn.lock ]; then \
+      yarn install --frozen-lockfile --network-timeout 600000; \
+    else \
+      yarn install --network-timeout 600000; \
+    fi
 
 # Build
 COPY . .
