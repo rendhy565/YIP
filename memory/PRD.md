@@ -137,6 +137,27 @@ User connected GitHub repo `rendhy565/ARC` (TMS — Trucking Management System f
 - Disable auto-dummy-seed setelah wipe (via `settings.skip_dummy_seed` flag) — backend restart tidak akan re-seed dummy
 - Sidebar menu items also respect `adminOnly` flag (sebelumnya cuma section-level)
 
+### Iteration 5 (2026-02-10) — Excel Export + Row Actions + No Auto-Seed (VERIFIED)
+
+#### A. Backend
+- `GET /api/analytics/awbs-detail/export` — Streams XLSX file dengan semua filter sama seperti detail table (23 kolom × N rows). Verified: 78KB, 585 rows, valid openpyxl format
+- `DELETE /api/orders/{oid}` — Admin only (403 untuk non-admin). Cascade delete: awb_costs, invoices, journal_entries (3 reference types)
+- `PATCH /api/orders/{oid}/status` — Drop allowed untuk semua user. Status lain (Open/Reconciled/Invoiced/Paid) hanya admin (403 untuk operation)
+- `seed_data()` di startup gated by `SEED_DEMO_DATA` env (default false). DB sekarang persistent across restart
+
+#### B. Frontend (`/analytics`)
+- `[data-testid="export-excel-btn"]` di header table — download XLSX via Blob API
+- Per-row action column "Aksi" dengan:
+  - `[data-testid="drop-btn-{awb_number}"]` — semua user, kecuali AWB yang sudah status Drop
+  - `[data-testid="delete-btn-{awb_number}"]` — admin only (conditional render via `isAdmin`)
+- Confirmation modal sebelum drop/delete
+
+#### C. Verification (2026-02-10)
+- ✅ Admin login → 50 delete + 50 drop buttons rendered, export button works
+- ✅ Operation login → 0 delete + 50 drop buttons (role-gating works)
+- ✅ Backend: admin DELETE 200, operation DELETE 403, operation PATCH Drop 200, operation PATCH Paid 403
+- ✅ Excel export: 200, 78KB, valid xlsx, 23 cols
+
 ### Iteration 4 (2026-06-09) — Dashboard Analitik dengan Multi-Filter
 
 #### A. Backend Analytics

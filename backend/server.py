@@ -454,10 +454,16 @@ async def seed_data():
         upsert=True,
     )
 
-    # Sample customers + contracts (skip if user has disabled dummy seeding)
+    # Sample/Demo data — STRICTLY opt-in.
+    # Demo data is ONLY seeded when env var SEED_DEMO_DATA=true (default: false).
+    # This prevents data overwrite on backend restart after feature updates.
+    if os.environ.get("SEED_DEMO_DATA", "false").lower() not in ("true", "1", "yes"):
+        return
+
+    # Also respect the legacy skip_dummy_seed flag (set after wipe)
     skip_dummy = await db.settings.find_one({"key_name": "skip_dummy_seed"})
     if skip_dummy:
-        return  # do not seed any sample/dummy data
+        return
 
     if await db.customers.count_documents({}) == 0:
         cust_ids = []
@@ -3353,4 +3359,205 @@ async def analytics_awbs_detail(
             "paid_at": a.get("paid_at"),
         })
     return {"page": page, "page_size": page_size, "total": total, "rows": rows}
+
+
+# ===========================================================================
+# AWB Delete & Status Update (Drop)  + Excel Export Analytics
+# ===========================================================================
+from fastapi.responses import StreamingResponse
+
+# ── DELETE AWB (Admin only) — cascade delete costs, invoices, journals ────
+@app.delete("/api/orders/{oid}")
+async def delete_awb(oid: str, user: dict = Depends(require_role("administrator"))):
+    awb = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not awb:
+        raise HTTPException(404, "AWB tidak ditemukan")
+    # Cascade: hapus costs, invoices, journal entries terkait
+    cost_count = (await db.awb_costs.delete_many({"awb_id": awb["_id"]})).deleted_count
+    inv_count = (await db.invoices.delete_many({"awb_id": awb["_id"]})).deleted_count
+    journal_count = (await db.journal_entries.delete_many({
+        "$or": [
+            {"reference_type": "awb_order", "reference_id": str(awb["_id"])},
+            {"reference_type": "payment", "reference_id": str(awb["_id"])},
+            {"reference_type": "cost", "reference_id": {"$in": [str(awb["_id"])]}},
+        ]
+    })).deleted_count
+    # Also delete journals where reference is a cost belonging to this AWB
+    cost_ids = []
+    async for c in db.awb_costs.find({"awb_id": awb["_id"]}, {"_id": 1}):
+        cost_ids.append(str(c["_id"]))
+    if cost_ids:
+        journal_count += (await db.journal_entries.delete_many({
+            "reference_type": "cost", "reference_id": {"$in": cost_ids}
+        })).deleted_count
+    await db.awb_orders.delete_one({"_id": awb["_id"]})
+    return {
+        "ok": True,
+        "deleted": {"awb": awb["awb_number"], "costs": cost_count, "invoices": inv_count, "journals": journal_count},
+    }
+
+# ── PATCH status to "Drop" — any user can drop, admin can also reopen ────
+class StatusUpdateIn(BaseModel):
+    status: str  # only "Drop" or "Open" allowed via this endpoint
+
+@app.patch("/api/orders/{oid}/status")
+async def update_awb_status(oid: str, data: StatusUpdateIn, user: dict = Depends(get_current_user)):
+    awb = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not awb:
+        raise HTTPException(404, "AWB tidak ditemukan")
+    new_status = data.status.strip()
+    allowed_for_user = {"Drop"}
+    allowed_for_admin = {"Drop", "Open", "Reconciled", "Invoiced", "Paid"}
+    is_admin = user.get("role") == "administrator"
+    allowed = allowed_for_admin if is_admin else allowed_for_user
+    if new_status not in allowed:
+        raise HTTPException(403, f"Anda tidak punya akses set status ke '{new_status}'. Hanya bisa: {', '.join(sorted(allowed))}")
+    # Optional: reverse journals if dropping?
+    # For now: just update status flag. Admins should manually reverse jurnal jika perlu.
+    await db.awb_orders.update_one(
+        {"_id": awb["_id"]},
+        {"$set": {"status": new_status, "status_updated_at": datetime.now(timezone.utc), "status_updated_by": user["id"]}},
+    )
+    return {"ok": True, "awb_number": awb["awb_number"], "new_status": new_status}
+
+# ── Excel Export — Dashboard Analytic detail table ──────────────────────────
+@app.get("/api/analytics/awbs-detail/export")
+async def export_awbs_excel(
+    period_from: Optional[str] = None,
+    period_to: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    region: Optional[str] = None,
+    status: Optional[str] = None,
+    fleet_type: Optional[str] = None,
+    armada_type: Optional[str] = None,
+    search: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    q = await _build_awb_filter(period_from, period_to, customer_id, region, status, fleet_type, armada_type, search)
+    awbs = await db.awb_orders.find(q).sort("created_at", -1).to_list(50000)
+    awb_ids = [a["_id"] for a in awbs]
+    # Costs aggregate + primary vendor
+    cost_agg, primary_vendor = {}, {}
+    if awb_ids:
+        async for c in db.awb_costs.find({"awb_id": {"$in": awb_ids}}):
+            cost_agg[c["awb_id"]] = cost_agg.get(c["awb_id"], 0) + float(c.get("amount", 0))
+            if c["awb_id"] not in primary_vendor and c.get("vendor_name"):
+                primary_vendor[c["awb_id"]] = c["vendor_name"]
+    cust_map = {}
+    cust_ids = list({a.get("customer_id") for a in awbs if a.get("customer_id")})
+    if cust_ids:
+        async for c in db.customers.find({"_id": {"$in": cust_ids}}):
+            cust_map[c["_id"]] = c.get("name", "?")
+
+    # Build Excel
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "AWBs"
+    headers = [
+        "AWB", "WO Number", "Pickup Date", "Customer", "Region", "Destination", "Destination City",
+        "Tipe Armada", "Jenis Armada", "Vendor Utama", "Item Lines", "Qty (Kg)",
+        "Selling", "PPN", "Inv+PPN", "Cashback", "PPh 2%", "Total Biaya",
+        "Margin (Rp)", "Margin (%)", "Status", "No Invoice Eksternal", "Tgl Bayar",
+    ]
+    # Header style
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    thin = Side(border_style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border
+    ws.row_dimensions[1].height = 28
+
+    # Body
+    for i, a in enumerate(awbs, 2):
+        costs = cost_agg.get(a["_id"], 0)
+        selling = float(a.get("total_tariff", 0))
+        margin = selling - costs
+        margin_pct = (margin / selling * 100) if selling > 0 else 0
+        row = [
+            a.get("awb_number"),
+            a.get("wo_number"),
+            a.get("created_at").strftime("%Y-%m-%d") if a.get("created_at") else "",
+            cust_map.get(a.get("customer_id"), "-"),
+            a.get("region"),
+            a.get("destination"),
+            a.get("destination_city"),
+            a.get("armada_type"),
+            a.get("fleet_type"),
+            primary_vendor.get(a["_id"]),
+            len(a.get("items", [])),
+            float(a.get("qty_kg") or 0),
+            selling,
+            float(a.get("tax_amount", 0)),
+            float(a.get("grand_total", 0)),
+            float(a.get("cashback_amount") or 0),
+            float(a.get("pph_final") or 0),
+            round(costs, 2),
+            round(margin, 2),
+            round(margin_pct, 2),
+            a.get("status"),
+            a.get("external_invoice_number"),
+            a.get("paid_at").strftime("%Y-%m-%d") if a.get("paid_at") else "",
+        ]
+        for col_idx, val in enumerate(row, 1):
+            cell = ws.cell(row=i, column=col_idx, value=val)
+            cell.border = border
+            if col_idx in (12, 13, 14, 15, 16, 17, 18, 19):  # numeric columns
+                cell.number_format = '#,##0'
+                cell.alignment = Alignment(horizontal="right")
+            elif col_idx == 20:  # margin %
+                cell.number_format = '0.00"%"'
+                cell.alignment = Alignment(horizontal="right")
+
+    # Auto-width columns
+    widths = [14, 12, 12, 30, 16, 18, 18, 12, 12, 22, 6, 8, 14, 12, 14, 12, 12, 14, 14, 10, 12, 24, 12]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+    # Summary sheet
+    ws2 = wb.create_sheet("Summary")
+    total_selling = sum(float(a.get("total_tariff", 0)) for a in awbs)
+    total_costs = sum(cost_agg.get(a["_id"], 0) for a in awbs)
+    total_margin = total_selling - total_costs
+    margin_pct = (total_margin / total_selling * 100) if total_selling > 0 else 0
+    summary_rows = [
+        ("Total AWB", len(awbs)),
+        ("Total Selling", total_selling),
+        ("Total Inv + PPN", sum(float(a.get("grand_total", 0)) for a in awbs)),
+        ("Total Biaya", total_costs),
+        ("Gross Margin (Rp)", total_margin),
+        ("Gross Margin (%)", round(margin_pct, 2)),
+        ("Filter — Period", f"{period_from or '-'} → {period_to or '-'}"),
+        ("Filter — Customer ID", customer_id or "(all)"),
+        ("Filter — Region", region or "(all)"),
+        ("Filter — Status", status or "(all)"),
+        ("Filter — Search", search or "-"),
+        ("Generated at", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")),
+    ]
+    for i, (k, v) in enumerate(summary_rows, 1):
+        ws2.cell(row=i, column=1, value=k).font = Font(bold=True)
+        c = ws2.cell(row=i, column=2, value=v)
+        if isinstance(v, (int, float)) and i in (2, 3, 4, 5):
+            c.number_format = '#,##0'
+        elif i == 6:
+            c.number_format = '0.00"%"'
+    ws2.column_dimensions["A"].width = 28
+    ws2.column_dimensions["B"].width = 28
+
+    # Stream response
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    filename = f"ARC_AWB_Export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
