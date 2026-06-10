@@ -22,11 +22,11 @@ services:
     networks:
       - arc-net
     healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 30s
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
       timeout: 10s
-      retries: 5
-      start_period: 30s
+      retries: 15
+      start_period: 60s
     # Do NOT expose to host in production — only via internal network.
     # For DB admin access, use `docker exec -it arc-mongo mongosh`
     # ports:
