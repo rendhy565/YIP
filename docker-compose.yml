@@ -1,0 +1,97 @@
+# ============================================================================
+# ARC Business Suite — Production Docker Compose
+# Usage:
+#   1. cp .env.example .env  &&  edit .env (set passwords, domain, JWT secret)
+#   2. docker compose up -d
+#   3. open http://your-server-ip   (or https://your-domain if behind a proxy)
+# ============================================================================
+
+services:
+  # ── MongoDB ──────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: arc-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_DATABASE: ${DB_NAME}
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+    networks:
+      - arc-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    # Do NOT expose to host in production — only via internal network.
+    # For DB admin access, use `docker exec -it arc-mongo mongosh`
+    # ports:
+    #   - "127.0.0.1:27017:27017"
+
+  # ── Backend (FastAPI) ────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: arc-backend
+    restart: unless-stopped
+    environment:
+      MONGO_URL: "mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongo:27017/${DB_NAME}?authSource=admin"
+      DB_NAME: ${DB_NAME}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRE_HOURS: ${JWT_EXPIRE_HOURS:-12}
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SEED_ADMIN_USERNAME: ${SEED_ADMIN_USERNAME:-admin}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      SEED_OPERATION_USERNAME: ${SEED_OPERATION_USERNAME:-operation}
+      SEED_OPERATION_PASSWORD: ${SEED_OPERATION_PASSWORD}
+      SEED_FINANCE_USERNAME: ${SEED_FINANCE_USERNAME:-finance}
+      SEED_FINANCE_PASSWORD: ${SEED_FINANCE_PASSWORD}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - arc-net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Frontend (React + Nginx + reverse-proxy /api → backend) ──────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # IMPORTANT: must be empty string when behind reverse proxy on same domain,
+        # so frontend calls /api/... directly (nginx handles routing).
+        # If you serve frontend & backend on DIFFERENT domains, set to backend URL.
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-}
+    container_name: arc-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    networks:
+      - arc-net
+
+# ── Volumes (data persistence) ───────────────────────────────────────────────
+volumes:
+  mongo_data:
+    driver: local
+  mongo_config:
+    driver: local
+
+# ── Network (isolated bridge) ────────────────────────────────────────────────
+networks:
+  arc-net:
+    driver: bridge
