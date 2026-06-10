@@ -1,6 +1,8 @@
 import axios from "axios";
 
-const BASE = process.env.REACT_APP_BACKEND_URL;
+// Empty / undefined → pakai relative URL (frontend & backend di domain sama via nginx proxy)
+const RAW = process.env.REACT_APP_BACKEND_URL;
+const BASE = RAW && RAW !== "undefined" ? RAW : "";
 
 const api = axios.create({
   baseURL: `${BASE}/api`,
