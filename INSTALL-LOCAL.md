@@ -57,8 +57,9 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Buat file `backend\.env`:
+Buat file `backend\.env` (salin dari template lalu edit):
 ```cmd
+copy .env.example .env
 notepad .env
 ```
 
@@ -67,15 +68,15 @@ Isi:
 MONGO_URL=mongodb://localhost:27017
 DB_NAME=arc_db
 JWT_SECRET=ganti_random_minimal_32_karakter_xyz123abc456def789ghi
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_HOURS=12
-CORS_ORIGINS=http://localhost:3000
+JWT_ALG=HS256
+JWT_EXP_MIN=720
 SEED_ADMIN_USERNAME=admin
 SEED_ADMIN_PASSWORD=AdminLokal123
 SEED_OPERATION_USERNAME=operation
 SEED_OPERATION_PASSWORD=OpsLokal123
 SEED_FINANCE_USERNAME=finance
 SEED_FINANCE_PASSWORD=FinLokal123
+SEED_DEMO_DATA=false
 ```
 
 Save & close.
@@ -89,8 +90,7 @@ yarn install
 
 Buat file `frontend\.env`:
 ```cmd
-echo REACT_APP_BACKEND_URL=http://localhost:8001 > .env
-echo WDS_SOCKET_PORT=0 >> .env
+copy .env.example .env
 ```
 
 ### 5. Jalankan (tiap hari pakai)
@@ -163,24 +163,20 @@ cat > .env << EOF
 MONGO_URL=mongodb://localhost:27017
 DB_NAME=arc_db
 JWT_SECRET=$(openssl rand -hex 32)
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_HOURS=12
-CORS_ORIGINS=http://localhost:3000
+JWT_ALG=HS256
+JWT_EXP_MIN=720
 SEED_ADMIN_USERNAME=admin
 SEED_ADMIN_PASSWORD=AdminLokal123
 SEED_OPERATION_USERNAME=operation
 SEED_OPERATION_PASSWORD=OpsLokal123
 SEED_FINANCE_USERNAME=finance
 SEED_FINANCE_PASSWORD=FinLokal123
+SEED_DEMO_DATA=false
 EOF
 
 cd ../frontend
 yarn install
-
-cat > .env << EOF
-REACT_APP_BACKEND_URL=http://localhost:8001
-WDS_SOCKET_PORT=0
-EOF
+cp .env.example .env
 cd ..
 ```
 
@@ -371,15 +367,6 @@ mongosh --eval "use arc_db; db.dropDatabase()"
 # Restart backend → auto re-seed dengan password baru di .env
 ```
 
-### ❌ CORS error di browser
-
-Pastikan `backend/.env` punya:
-```
-CORS_ORIGINS=http://localhost:3000
-```
-
-Lalu restart backend.
-
 ### ❌ "Cannot read property of undefined" / page blank
 
 Cek **Console di browser** (F12 → Console tab). Biasanya:
@@ -395,11 +382,13 @@ arc/
 ├── backend/
 │   ├── server.py              ← Main API server
 │   ├── requirements.txt
+│   ├── .env.example           ← Template — salin jadi .env
 │   ├── .env                   ← Edit ini
 │   └── venv/                  ← Auto-created
 ├── frontend/
 │   ├── src/
 │   ├── package.json
+│   ├── .env.example           ← Template — salin jadi .env
 │   ├── .env                   ← Edit ini
 │   └── node_modules/          ← Auto-created
 ├── start-local.sh             ← Mac/Linux: jalankan ini
@@ -407,21 +396,6 @@ arc/
 ├── stop-local.sh
 └── INSTALL-LOCAL.md           ← Anda di sini
 ```
-
----
-
-# 🆚 Localhost vs VPS Docker — Beda Apa?
-
-| Aspek | Localhost (Native) | VPS Docker |
-|---|---|---|
-| Untuk siapa | Developer / 1 user / demo | Production / banyak user |
-| Software install | Python, Node, MongoDB, Yarn | Cuma Docker |
-| Port frontend | 3000 (dev mode, hot reload) | 80 (production build) |
-| Performance | Lebih cepat (no container overhead) | Cocok untuk concurrent users |
-| Akses dari luar | Hanya laptop sendiri | Bisa dari internet |
-| Update | Manual git pull + restart | git pull + docker compose up -d |
-
-**Rekomendasi:** Pakai Localhost untuk **development / try out / personal use**. Pakai VPS Docker untuk **production**.
 
 ---
 

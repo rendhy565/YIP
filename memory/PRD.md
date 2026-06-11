@@ -137,6 +137,16 @@ User connected GitHub repo `rendhy565/ARC` (TMS — Trucking Management System f
 - Disable auto-dummy-seed setelah wipe (via `settings.skip_dummy_seed` flag) — backend restart tidak akan re-seed dummy
 - Sidebar menu items also respect `adminOnly` flag (sebelumnya cuma section-level)
 
+### Iteration 7 (2026-06-11) — Repo Cleanup: Fokus Localhost (Hapus VPS/Docker) ✅
+User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua file VPS/Docker:
+- DELETED: `docker-compose.yml`, `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`, `.dockerignore`, `install.sh`, `INSTALL.md`, root `.env.example`
+- NEW: `backend/.env.example` + `frontend/.env.example` (template localhost, env var names sesuai server.py: `JWT_ALG`, `JWT_EXP_MIN`)
+- `INSTALL-LOCAL.md` dirapikan: env var names dibetulkan (sebelumnya salah `JWT_ALGORITHM`/`JWT_EXPIRE_HOURS`/`CORS_ORIGINS` yang tidak dipakai backend), section perbandingan VPS dihapus, instruksi pakai `cp .env.example .env`
+- `README.md` ditulis ulang: deskripsi app + quick start localhost
+- `.gitignore` dilengkapi: `node_modules/`, `__pycache__/`, `venv/`, `logs/`, `*.pid`, `frontend/build/`
+- Catatan: CORS backend hardcoded `allow_origins=["*"]` di server.py — env CORS_ORIGINS tidak pernah dipakai
+- Verified: backend health OK + login admin OK setelah cleanup
+
 ### Iteration 6 (2026-02-10) — Saved Views (Personal + Shared) ✅
 
 #### A. Backend (`saved_views` collection)
