@@ -210,3 +210,32 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 
 #### C. Dependencies added
 - `recharts` (frontend)
+
+
+## Session 2026-06-12 — UI fixes & VPS sub-path routing
+
+### Requests by user
+1. Pindahkan tombol "Delete line" (Hapus AWB) ke Daftar AWB
+2. Tambahkan tombol "Customer Baru" di form Input Order
+3. Fix bug: refresh di VPS balik ke landing Nginx
+
+### Changes
+- **`OrdersList.js`**: Added "Aksi" column with Drop (any user) + Hapus (admin only) buttons. Reuses `/api/orders/{id}/status` (PATCH) and `/api/orders/{id}` (DELETE) endpoints. Status filter now includes "Drop".
+- **`OrderInput.js`**: Added "+ Customer Baru" link beside Customer label → opens quick-add modal (Nama, Detail Perusahaan, NPWP, Alamat) → POST `/api/customers` → reloads dropdown → auto-selects newly created customer.
+- **`AnalyticsDashboard.js`**: Removed Drop/Hapus buttons + Aksi column (moved to OrdersList). Cleaned up unused imports (`Trash2`, `MinusCircle`, `useAuth`, `isAdmin`) and dead handler functions (`dropAwb`, `deleteAwb`).
+- **`App.js`**: `<BrowserRouter basename={process.env.PUBLIC_URL || "/"}>` — enables app to live at sub-path `/arc/` on VPS while remaining at root in dev preview.
+- **`package.json`**: Added `build:arc` script (`PUBLIC_URL=/arc craco build`) for VPS production build.
+- **`DEPLOY-VPS-ARC.md`** (new): Complete VPS deployment & Nginx config snippet (with `try_files $uri $uri/ /arc/index.html;`) to fix refresh-to-Nginx bug.
+
+### Files touched
+- `/app/frontend/src/pages/OrdersList.js`
+- `/app/frontend/src/pages/OrderInput.js`
+- `/app/frontend/src/pages/AnalyticsDashboard.js`
+- `/app/frontend/src/App.js`
+- `/app/frontend/package.json`
+- `/app/DEPLOY-VPS-ARC.md` (new)
+
+### Verified
+- E2E playwright: login → /orders/new → new-customer-btn → modal open → save → toast "Customer dibuat" → dropdown auto-selected ✓
+- /orders page renders new "Aksi" column header ✓
+- Frontend bundle still served at root in Emergent preview (PUBLIC_URL empty) ✓

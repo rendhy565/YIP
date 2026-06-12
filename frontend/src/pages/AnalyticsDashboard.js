@@ -2,12 +2,11 @@ import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label } from "../components/ui";
 import { fmtIDR } from "../lib/utils";
-import { TrendingUp, DollarSign, Package, AlertCircle, Filter, RotateCcw, ChevronLeft, ChevronRight, Download, Trash2, MinusCircle, Bookmark, Share2, Plus, Globe, Lock, X } from "lucide-react";
+import { TrendingUp, DollarSign, Package, AlertCircle, Filter, RotateCcw, ChevronLeft, ChevronRight, Download, Bookmark, Share2, Plus, Globe, Lock, X } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { useAuth } from "../lib/auth";
 import { toast } from "sonner";
 import { errMsg } from "../lib/utils";
 
@@ -25,8 +24,6 @@ const STATUS_COLORS = {
 };
 
 export default function AnalyticsDashboard() {
-  const { user } = useAuth();
-  const isAdmin = user?.role === "administrator";
   // Filters
   const [filters, setFilters] = useState({
     period_from: "",
@@ -200,32 +197,6 @@ export default function AnalyticsDashboard() {
       document.body.appendChild(a); a.click(); a.remove();
       window.URL.revokeObjectURL(url);
       toast.success(`Export ${total} baris berhasil`);
-    } catch (e) { toast.error(errMsg(e)); }
-  };
-
-  const dropAwb = async (awb) => {
-    if (!window.confirm(`Tandai AWB ${awb.awb_number} sebagai DROP? AWB akan tetap tercatat tapi tidak ditagih.`)) return;
-    try {
-      await api.patch(`/orders/${awb.id}/status`, { status: "Drop" });
-      toast.success(`AWB ${awb.awb_number} di-drop`);
-      // Reload list
-      const params = { page, page_size: pageSize, sort_by: sortBy, sort_dir: sortDir };
-      Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params[k] = v; });
-      if (appliedSearch) params.search = appliedSearch;
-      api.get("/analytics/awbs-detail", { params }).then((r) => { setRows(r.data.rows || []); setTotal(r.data.total || 0); });
-    } catch (e) { toast.error(errMsg(e)); }
-  };
-
-  const deleteAwb = async (awb) => {
-    if (!window.confirm(`HAPUS PERMANEN AWB ${awb.awb_number}? Semua biaya, invoice, dan jurnal terkait akan ikut terhapus. Tindakan ini TIDAK BISA di-undo.`)) return;
-    try {
-      const r = await api.delete(`/orders/${awb.id}`);
-      const d = r.data.deleted;
-      toast.success(`AWB ${d.awb} dihapus (${d.costs} biaya, ${d.invoices} invoice, ${d.journals} jurnal terhapus)`);
-      const params = { page, page_size: pageSize, sort_by: sortBy, sort_dir: sortDir };
-      Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params[k] = v; });
-      if (appliedSearch) params.search = appliedSearch;
-      api.get("/analytics/awbs-detail", { params }).then((r) => { setRows(r.data.rows || []); setTotal(r.data.total || 0); });
     } catch (e) { toast.error(errMsg(e)); }
   };
 
@@ -557,12 +528,11 @@ export default function AnalyticsDashboard() {
                 <ColHead>Status</ColHead>
                 <ColHead>No Inv Eksternal</ColHead>
                 <ColHead>Tgl Bayar</ColHead>
-                <ColHead align="right">Aksi</ColHead>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={23} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
+                <tr><td colSpan={22} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
               )}
               {rows.map((r, i) => (
                 <tr key={r.id} className="hover:bg-blue-50/40 border-b border-slate-100">
@@ -588,26 +558,6 @@ export default function AnalyticsDashboard() {
                   <td className="px-3 py-2"><span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold ${STATUS_COLORS[r.status] || "bg-slate-100"}`}>{r.status}</span></td>
                   <td className="px-3 py-2 text-xs font-mono">{r.external_invoice || "-"}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(r.paid_at)}</td>
-                  <td className="px-3 py-2 text-right">
-                    <div className="flex gap-1 justify-end whitespace-nowrap">
-                      {r.status !== "Drop" && (
-                        <button
-                          data-testid={`drop-btn-${r.awb_number}`}
-                          onClick={() => dropAwb(r)}
-                          title="Drop AWB"
-                          className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-amber-100 text-amber-800 hover:bg-amber-200 inline-flex items-center gap-1"
-                        ><MinusCircle size={11}/> Drop</button>
-                      )}
-                      {isAdmin && (
-                        <button
-                          data-testid={`delete-btn-${r.awb_number}`}
-                          onClick={() => deleteAwb(r)}
-                          title="Hapus permanen (admin only)"
-                          className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-rose-100 text-rose-800 hover:bg-rose-200 inline-flex items-center gap-1"
-                        ><Trash2 size={11}/> Hapus</button>
-                      )}
-                    </div>
-                  </td>
                 </tr>
               ))}
             </tbody>

@@ -33,6 +33,7 @@
   "scripts": {
     "start": "craco start",
     "build": "craco build",
+    "build:arc": "PUBLIC_URL=/arc craco build",
     "test": "craco test"
   },
   "eslintConfig": {

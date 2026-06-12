@@ -4,13 +4,20 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label } from "../components/ui";
 import { errMsg, fmtIDR } from "../lib/utils";
 import { toast } from "sonner";
-import { Calculator, Save, FileLock2 } from "lucide-react";
+import { Calculator, Save, FileLock2, UserPlus, X } from "lucide-react";
+
+const emptyCust = { name: "", company_details: "", address: "", npwp: "" };
 
 export default function OrderInput() {
   const nav = useNavigate();
   const [customers, setCustomers] = useState([]);
   const [contracts, setContracts] = useState([]);
   const [taxOpts, setTaxOpts] = useState([]);
+
+  // New-customer quick-add modal
+  const [showCust, setShowCust] = useState(false);
+  const [newCust, setNewCust] = useState(emptyCust);
+  const [savingCust, setSavingCust] = useState(false);
 
   const [form, setForm] = useState({
     customer_id: "",
@@ -87,6 +94,23 @@ export default function OrderInput() {
     } catch (e2) { toast.error(errMsg(e2)); }
   };
 
+  const saveNewCustomer = async (e) => {
+    e.preventDefault();
+    if (savingCust) return;
+    setSavingCust(true);
+    try {
+      const r = await api.post("/customers", newCust);
+      toast.success(`Customer "${r.data.name}" dibuat`);
+      // Refresh dropdown & auto-select the new one
+      const list = await api.get("/customers");
+      setCustomers(list.data);
+      setForm((f) => ({ ...f, customer_id: r.data.id }));
+      setShowCust(false);
+      setNewCust(emptyCust);
+    } catch (e2) { toast.error(errMsg(e2)); }
+    finally { setSavingCust(false); }
+  };
+
   return (
     <div data-testid="order-input-page">
       <PageHeader title="Input Order AWB" subtitle="Modul 1 — Buat order baru. Tarif terkunci jika kontrak dipilih." />
@@ -95,7 +119,17 @@ export default function OrderInput() {
         <Card className="lg:col-span-2 p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <Label>Customer *</Label>
+              <div className="flex items-center justify-between mb-1.5">
+                <Label className="m-0">Customer *</Label>
+                <button
+                  type="button"
+                  data-testid="new-customer-btn"
+                  onClick={() => { setNewCust(emptyCust); setShowCust(true); }}
+                  className="text-[11px] uppercase tracking-wider font-bold text-blue-700 hover:text-blue-900 inline-flex items-center gap-1"
+                >
+                  <UserPlus size={12}/> Customer Baru
+                </button>
+              </div>
               <Select data-testid="order-customer-select" value={form.customer_id} onChange={(e) => setForm({ ...form, customer_id: e.target.value })} required>
                 <option value="">— Pilih Customer —</option>
                 {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -178,6 +212,45 @@ export default function OrderInput() {
           <p className="text-[11px] text-slate-500 mt-3">Nomor AWB akan otomatis ter-generate dengan format <span className="kbd">AWB-YYYYMM-XXXX</span>.</p>
         </Card>
       </form>
+
+      {/* === Quick Add Customer Modal === */}
+      {showCust && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="new-customer-modal">
+          <Card className="w-full max-w-lg p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="font-heading font-bold text-xl text-slate-900">Tambah Customer Baru</h3>
+                <p className="text-xs text-slate-500 mt-1">Customer akan langsung dipilih untuk order ini.</p>
+              </div>
+              <button type="button" onClick={() => setShowCust(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <form onSubmit={saveNewCustomer} className="space-y-3">
+              <div>
+                <Label>Nama *</Label>
+                <Input data-testid="new-customer-name-input" value={newCust.name} onChange={(e) => setNewCust({ ...newCust, name: e.target.value })} required autoFocus />
+              </div>
+              <div>
+                <Label>Detail Perusahaan</Label>
+                <Input value={newCust.company_details} onChange={(e) => setNewCust({ ...newCust, company_details: e.target.value })} />
+              </div>
+              <div>
+                <Label>NPWP</Label>
+                <Input value={newCust.npwp} onChange={(e) => setNewCust({ ...newCust, npwp: e.target.value })} />
+              </div>
+              <div>
+                <Label>Alamat</Label>
+                <Input value={newCust.address} onChange={(e) => setNewCust({ ...newCust, address: e.target.value })} />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="secondary" type="button" onClick={() => setShowCust(false)}>Batal</Button>
+                <Button data-testid="save-new-customer-btn" type="submit" disabled={savingCust}>
+                  {savingCust ? "Menyimpan..." : "Simpan & Pilih"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

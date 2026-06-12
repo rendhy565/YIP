@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import api from "../lib/api";
-import { Card, PageHeader, Button, Select, Table, Th, Td, StatusBadge, Input, Label } from "../components/ui";
-import { fmtIDR, fmtDate } from "../lib/utils";
-import { Eye, Filter } from "lucide-react";
+import { Card, PageHeader, Select, Table, Th, Td, StatusBadge, Label } from "../components/ui";
+import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
+import { Trash2, MinusCircle } from "lucide-react";
+import { useAuth } from "../lib/auth";
+import { toast } from "sonner";
 
 export default function OrdersList() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "administrator";
+
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState("");
   const [customers, setCustomers] = useState([]);
@@ -21,6 +25,25 @@ export default function OrdersList() {
   useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); }, []);
   useEffect(() => { load(); }, [status, customerId]);
 
+  const dropOrder = async (r) => {
+    if (!window.confirm(`Tandai AWB ${r.awb_number} sebagai DROP? AWB akan tetap tercatat tapi tidak ditagih.`)) return;
+    try {
+      await api.patch(`/orders/${r.id}/status`, { status: "Drop" });
+      toast.success(`AWB ${r.awb_number} di-drop`);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const deleteOrder = async (r) => {
+    if (!window.confirm(`HAPUS PERMANEN AWB ${r.awb_number}? Semua biaya, invoice, dan jurnal terkait akan ikut terhapus. Tindakan ini TIDAK BISA di-undo.`)) return;
+    try {
+      const res = await api.delete(`/orders/${r.id}`);
+      const d = res.data.deleted;
+      toast.success(`AWB ${d.awb} dihapus (${d.costs} biaya, ${d.invoices} invoice, ${d.journals} jurnal terhapus)`);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   return (
     <div data-testid="orders-list-page">
       <PageHeader title="Daftar AWB" subtitle="Semua order dengan filter status & customer." />
@@ -35,6 +58,7 @@ export default function OrdersList() {
               <option value="Reconciled">Rekonsiliasi</option>
               <option value="Invoiced">Invoiced</option>
               <option value="Paid">Lunas</option>
+              <option value="Drop">Drop</option>
             </Select>
           </div>
           <div className="min-w-[220px]">
@@ -54,6 +78,7 @@ export default function OrdersList() {
             <Th>AWB</Th><Th>Tanggal</Th><Th>Customer</Th><Th>Rute</Th>
             <Th className="text-right">Qty (Kg)</Th><Th className="text-right">Total Tarif</Th>
             <Th className="text-right">Grand Total</Th><Th>Status</Th>
+            <Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
             {rows.map((r) => (
@@ -66,9 +91,29 @@ export default function OrdersList() {
                 <Td className="text-right">{fmtIDR(r.total_tariff)}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
                 <Td><StatusBadge status={r.status} /></Td>
+                <Td className="text-right">
+                  <div className="flex gap-1 justify-end whitespace-nowrap">
+                    {r.status !== "Drop" && (
+                      <button
+                        data-testid={`drop-order-btn-${r.awb_number}`}
+                        onClick={() => dropOrder(r)}
+                        title="Drop AWB"
+                        className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-amber-100 text-amber-800 hover:bg-amber-200 inline-flex items-center gap-1"
+                      ><MinusCircle size={11}/> Drop</button>
+                    )}
+                    {isAdmin && (
+                      <button
+                        data-testid={`delete-order-btn-${r.awb_number}`}
+                        onClick={() => deleteOrder(r)}
+                        title="Hapus permanen (admin only)"
+                        className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-rose-100 text-rose-800 hover:bg-rose-200 inline-flex items-center gap-1"
+                      ><Trash2 size={11}/> Hapus</button>
+                    )}
+                  </div>
+                </Td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10">Tidak ada order untuk filter ini.</Td></tr>}
+            {rows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">Tidak ada order untuk filter ini.</Td></tr>}
           </tbody>
         </Table>
       </Card>
