@@ -13,7 +13,7 @@ const DEFAULT_CITIES = [
   "JKT", "SBY", "SMG", "BDG", "MDN", "DPS", "MKS", "BPN", "PLM", "PKB",
   "PNK", "BKS", "TGR", "BGR", "SOC", "JOG", "MLG", "PWK", "TKG", "JBI",
   "PDG", "PKU", "BPP", "BTH", "MTR", "KDI", "AMQ", "BIK", "MNG", "TIM",
-  "DJB", "PNK", "BDJ", "PGK", "TJQ",
+  "DJB", "BDJ", "PGK", "TJQ",
 ];
 
 const COMPANY_OPTIONS = [

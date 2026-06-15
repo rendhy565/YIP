@@ -167,10 +167,10 @@ export default function PanjarKerja() {
               <button onClick={() => setSettleFor(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
             <div className="space-y-3">
-              <div><Label>Realisasi Pengeluaran *</Label><Input type="number" step="0.01" value={settleForm.actual_amount} onChange={(e) => setSettleForm({ ...settleForm, actual_amount: e.target.value })} required/></div>
-              <div><Label>Refund (Sisa Dikembalikan)</Label><Input type="number" step="0.01" value={settleForm.refund_amount} onChange={(e) => setSettleForm({ ...settleForm, refund_amount: e.target.value })}/></div>
-              <div><Label>Tanggal Settle</Label><Input type="date" value={settleForm.settle_date} onChange={(e) => setSettleForm({ ...settleForm, settle_date: e.target.value })}/></div>
-              <div><Label>Catatan</Label><Input value={settleForm.notes} onChange={(e) => setSettleForm({ ...settleForm, notes: e.target.value })}/></div>
+              <div><Label>Realisasi Pengeluaran *</Label><Input data-testid="panjar-actual-amount" type="number" step="0.01" value={settleForm.actual_amount} onChange={(e) => setSettleForm({ ...settleForm, actual_amount: e.target.value })} required/></div>
+              <div><Label>Refund (Sisa Dikembalikan)</Label><Input data-testid="panjar-refund-amount" type="number" step="0.01" value={settleForm.refund_amount} onChange={(e) => setSettleForm({ ...settleForm, refund_amount: e.target.value })}/></div>
+              <div><Label>Tanggal Settle</Label><Input data-testid="panjar-settle-date" type="date" value={settleForm.settle_date} onChange={(e) => setSettleForm({ ...settleForm, settle_date: e.target.value })}/></div>
+              <div><Label>Catatan</Label><Input data-testid="panjar-settle-notes" value={settleForm.notes} onChange={(e) => setSettleForm({ ...settleForm, notes: e.target.value })}/></div>
             </div>
             <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
               <Button variant="secondary" type="button" onClick={() => setSettleFor(null)}>Batal</Button>

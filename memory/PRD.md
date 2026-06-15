@@ -239,3 +239,80 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 - E2E playwright: login → /orders/new → new-customer-btn → modal open → save → toast "Customer dibuat" → dropdown auto-selected ✓
 - /orders page renders new "Aksi" column header ✓
 - Frontend bundle still served at root in Emergent preview (PUBLIC_URL empty) ✓
+
+
+---
+
+## Iteration 8 — Major Input/Recap/Invoice/Payment/Panjar overhaul (2026-06-15)
+
+### Input Order (Order Input) — expanded
+- **Manual AWB number** input (with uniqueness check); falls back to auto-gen if blank.
+- **Reff No** (opsional), **Tanggal Pickup** manual, **Company issuer** dropdown (PT. Abirama Mitra Pradana / Pratama).
+- **Customer + Consignee** side-by-side (2-col grid).
+- **Perjanjian Rate** label (renamed from Kontrak); contract dropdown auto-fills Origin/Destination/Tariff/Via and locks them.
+- **Origin / Destination** with datalist of default Indonesian cities (free input + suggestions).
+- **Service** dropdown: LCL / FCL / LTL / FTL / AIR.
+- **Via** dropdown: D — Darat / L — Laut / U — Udara (mirror on Contracts form).
+- **Status Pengiriman**: Reguler / Project / blank (blank → not shown on invoice).
+- **Koli (jumlah) + Qty isi per Koli** manual.
+- **Armada / Driver / Nopol** section.
+- **Asuransi** radio (Ya/Tidak) + No. Polis + Nilai Asuransi (conditional).
+- **PPN** options now include 0 / 1 / 11 / 12 %.
+
+### Contracts → "Perjanjian Rate"
+- New **Via** column + dropdown D/L/U in add modal. Sidebar label renamed.
+
+### Rekap & Rekonsiliasi
+- **3 tabel terpisah**:
+  1. *Open — Belum Ada Cost (Perlu Plotting Biaya)* — AWB tanpa cost, tidak bisa direkonsiliasi.
+  2. *Ready to Reconcile — Sudah Ada Cost* — checkbox select-all/per-row, tombol Reconcile aktif, kolom Cost/Margin.
+  3. *Sudah Reconciled — Tangani Reject* — tombol revert ke Open.
+- **Plot Biaya modal** langsung di list (kategori Vendor / Operational / Lintas / Marketing).
+- **Edit AWB modal** untuk row Open: ubah seluruh field (recalculate totals otomatis bila tarif/qty/PPN berubah).
+- Backend `POST /api/orders/reconcile` sekarang menolak AWB tanpa cost (`skipped_no_cost` counter, HTTP 400 kalau none qualify).
+
+### Invoice
+- **Bulk Create Invoice** dari Reconciled (checkbox + tombol `POST /api/invoices/bulk`).
+- **Bulk Print to PDF** (membuka print pages di tab baru → Ctrl+P → Save as PDF).
+- **InvoicePrint** menampilkan Reff No, Consignee, Service/Via, Koli, Asuransi; **Status Pengiriman disembunyikan jika blank**.
+
+### Payments
+- **Bulk Mark Paid** + single Mark Paid keduanya buka modal seragam.
+- Field **No. Invoice yang Dibayar** (`payment_invoice_number`) dan **Tanggal Bayar** (`paid_date`) ⇒ tersimpan di `awb_orders` dan jurnal.
+- Endpoint `POST /api/payments/bulk-mark-paid`.
+
+### Panjar Kerja (modul baru)
+- Sidebar entry baru "Panjar Kerja". CRUD ala vendor master tapi berisi cash advance.
+- Penomoran `PNJ-YYYYMM-XXXX`. Status Open → Settled.
+- Jurnal otomatis: terbit → Dr 1108 Panjar Kerja / Cr Kas. Settle → Dr 5105 Beban Panjar Kerja (+ Dr Cash refund) / Cr 1108.
+
+### Marketing as separate COGS
+- Akun baru **5104 Beban Marketing (COGS)**; kategori `Marketing` di Plotting Biaya & modal Plot Biaya.
+
+### COA additions
+- **1108 Panjar Kerja** (asset, current_asset)
+- **5104 Beban Marketing (COGS)** (cogs)
+- **5105 Beban Panjar Kerja** (cogs)
+- **Tax setting** tambah `tax_ppn_1` (PPN 1%).
+
+### Backend endpoints touched
+- `POST /api/orders` — many new optional fields, manual AWB uniqueness.
+- `PATCH /api/orders/{oid}/extended` — extended dengan field baru + recalc totals + status guard (hanya Open untuk non-admin).
+- `POST /api/orders/reconcile` — guard "must have cost".
+- `POST /api/invoices/bulk` — bulk create.
+- `POST /api/orders/{oid}/mark-paid` — `payment_invoice_number` + `paid_date`.
+- `POST /api/payments/bulk-mark-paid` — bulk closing.
+- `GET / POST /api/cash-advances`, `POST /api/cash-advances/{cid}/settle`, `DELETE` (admin only).
+
+### Testing
+- **Backend**: `iteration_3.json` — 19/19 PASS (100%).
+- **Frontend**: `iteration_4.json` — 8/9 PASS, fixed sole HIGH bug (Card prop-spread).
+
+### Files touched
+- Backend: `/app/backend/server.py`
+- Frontend pages: `OrderInput.js`, `Contracts.js`, `Recap.js`, `Invoices.js`, `Payments.js`, `InvoicePrint.js`, `Costs.js`, `PanjarKerja.js` (new)
+- Frontend infra: `App.js` (route /panjar), `components/Layout.js` (sidebar), `components/ui.js` (Card prop-spread fix).
+
+### Deferred (per user)
+- "Tanggal Terima" module (checklist disamakan Excel Report AR — menunggu detail kolom checklist dari user).
+- Modul "Dismantle" terpisah (menunggu konfirmasi user).

@@ -13,8 +13,8 @@ export function StatusBadge({ status }) {
   );
 }
 
-export function Card({ children, className = "" }) {
-  return <div className={`rounded-md border border-slate-200 bg-white shadow-sm ${className}`}>{children}</div>;
+export function Card({ children, className = "", ...rest }) {
+  return <div className={`rounded-md border border-slate-200 bg-white shadow-sm ${className}`} {...rest}>{children}</div>;
 }
 
 export function PageHeader({ title, subtitle, action }) {
