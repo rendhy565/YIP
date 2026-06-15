@@ -40,7 +40,7 @@ export function AuthProvider({ children }) {
     localStorage.removeItem("tms_token");
     localStorage.removeItem("tms_user");
     setUser(null);
-    window.location.href = "/login";
+    window.location.href = (process.env.PUBLIC_URL || "") + "/login";
   };
 
   return (

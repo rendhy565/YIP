@@ -60,7 +60,7 @@ export default function App() {
   return (
     <AuthProvider>
       <FeatureFlagsProvider>
-        <BrowserRouter basename={process.env.PUBLIC_URL || "/"}>
+        <BrowserRouter basename="/arc">
           <Toaster position="top-right" richColors />
           <Routes>
             <Route path="/login" element={<Login />} />

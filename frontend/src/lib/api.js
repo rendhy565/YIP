@@ -6,7 +6,7 @@ const BASE = RAW && RAW !== "undefined" ? RAW : "";
 
 const api = axios.create({
   baseURL: `${BASE}/api`,
-  timeout: 20000,
+  timeout: 120000,
 });
 
 api.interceptors.request.use((cfg) => {
@@ -22,7 +22,7 @@ api.interceptors.response.use(
       localStorage.removeItem("tms_token");
       localStorage.removeItem("tms_user");
       if (window.location.pathname !== "/login") {
-        window.location.href = "/login";
+        window.location.href = (process.env.PUBLIC_URL || "") + "/login";
       }
     }
     return Promise.reject(err);
