@@ -316,3 +316,66 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 ### Deferred (per user)
 - "Tanggal Terima" module (checklist disamakan Excel Report AR — menunggu detail kolom checklist dari user).
 - Modul "Dismantle" terpisah (menunggu konfirmasi user).
+
+---
+
+## Iteration 9 — Tanggal Terima popup + Excel REPORT AR + Excel Invoice (Master INV) (2026-06-15)
+
+### Tanggal Terima (Barang Diterima) — popup baru di Daftar AWB
+- Tombol **Terima** muncul di setiap AWB Open yang belum `received_at`.
+- Popup modal mengisi:
+  1. **Tanggal Terima** (default today)
+  2. **Nama Penerima** (default dari `consignee` order)
+  3. **Polis** (default dari `insurance_policy` order)
+  4. **Nilai Asuransi** (default dari `insurance_amount` order)
+  5. **SPSI** checkbox + input nilai (muncul saat di-check)
+  6. **Sewa Forklift** checkbox + input nilai (muncul saat di-check)
+  7. **Jenis Pekerjaan** dropdown: Kirim Barang / Dismantle Barang / Relokasi Barang
+  8. **Moda** dropdown: Air / Trucking / Konsul
+  9. Display read-only: Nilai AWB (Grand Total) → preview kolom tujuan di Report AR
+- Setelah submit, AWB tersimpan `received_at`, `received_by_name`, `received_polis`, `received_asuransi_amount`, `spsi_amount`, `sewa_forklift_amount`, `work_type`, `mode`.
+- Endpoint baru: `POST /api/orders/{oid}/receive`.
+
+### Excel Export — REPORT AR (sesuai template user)
+- `GET /api/exports/report-ar?month=YYYY-MM&customer_id=...&status_v=...`
+- Sheet **REPORT AR** dengan **2-row header**: 
+  - Main cols (1-17): Bulan, Tgl Pick Up, Tanggal Terima, Status Pengiriman, AWB, Vendor Name, Transport, From, Destination, No Mobil, Penerima, Qty, Koli, KG, Min Kg, Final KG, Harga /KG
+  - 3 grup ber-warna: **Kirim Barang (hijau, R-Z)**, **Dismantle Barang (oranye, AA-AI)**, **Relokasi Barang (biru, AJ-AR)** — masing-masing 9 sub-kolom.
+  - Trailing cols 45-50: Amount (Exc VAT), Keterangan, Harga, List Muatan, Asuransi, No Invoice.
+- Setiap AWB → nilai-nilai (Polis, Insurance, SPSI, Sewa Forklift) ditaruh di grup sesuai `work_type`; Grand Total masuk ke sub-kolom sesuai `mode` (Air/Trucking/Konsul).
+- Tombol **Export Report AR** di halaman /recap.
+
+### Excel Export — Invoice (sesuai template Master INV)
+- `GET /api/exports/invoice/{invoice_id}` (single) & `POST /api/exports/invoices/bulk` (multi-sheet).
+- Layout mengikuti template: Title INVOICE, blok issuer (company_name + alamat + NPWP), Invoice No / Date / Due Date, **Attn dari Consignee**, alamat customer, line items (biaya pengiriman + Asuransi + Polis + SPSI/Forklift bila ada), summary block (Jumlah / PPN / Sub Total / Asuransi / Polis / SPSI / Sewa Forklift / TOTAL), terbilang Bahasa Indonesia, blok tanda tangan dengan **signer per company** dari settings.
+- Tombol bulk **Export Excel** di halaman /invoices (1 select → single file, 2+ → multi-sheet workbook).
+
+### Settings — Per Issuer
+- Setting baru per perusahaan issuer (Pradana / Pratama):
+  - `signer_PT. Abirama Mitra Pradana` / `signer_PT. Abirama Mitra Pratama`
+  - `address_PT. Abirama Mitra Pradana` / `address_PT. Abirama Mitra Pratama`
+  - `npwp_PT. Abirama Mitra Pradana` / `npwp_PT. Abirama Mitra Pratama`
+- UI: section "Per Issuer — Signer / Alamat / NPWP" di /settings.
+- Invoice Excel otomatis pakai signer & alamat yang sesuai dengan `awb.company_name`.
+
+### Helper baru
+- `_terbilang_id(n)` — number-to-Indonesian-words untuk invoice (Satu, Sebelas, Sepuluh, Seratus, Seribu, Sejuta, …).
+
+### Backend files modified
+- `/app/backend/server.py`:
+  - `ReceiveAwbIn` model + `POST /api/orders/{oid}/receive`.
+  - Seed 6 per-issuer settings.
+  - Imports: `StreamingResponse`, `io`, `openpyxl`, styles.
+  - Endpoints: `/api/exports/report-ar`, `/api/exports/invoice/{id}`, `/api/exports/invoices/bulk`.
+  - `_build_invoice_sheet`, `_fetch_invoice_bundle`, `_terbilang_id`, `_ar_group_start`, `_ar_subcol_offset`.
+
+### Frontend files modified
+- `/app/frontend/src/pages/OrdersList.js` — Terima button + Receive modal (semua field + 2 dropdown + preview).
+- `/app/frontend/src/pages/Recap.js` — `export-report-ar-btn`.
+- `/app/frontend/src/pages/Invoices.js` — bulk-export-btn pakai backend Excel format.
+- `/app/frontend/src/pages/Settings.js` — section Per Issuer.
+
+### Testing
+- **Backend iter-5**: 34/34 PASS (15 baru + 19 regresi).
+- **Frontend iter-6**: 5/5 acceptance criteria PASS (modal flow, REPORT AR download, single/bulk invoice download, settings persistence).
+
