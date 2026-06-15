@@ -379,3 +379,60 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 - **Backend iter-5**: 34/34 PASS (15 baru + 19 regresi).
 - **Frontend iter-6**: 5/5 acceptance criteria PASS (modal flow, REPORT AR download, single/bulk invoice download, settings persistence).
 
+
+---
+
+## Iteration 10 — Numeric Polis, Auto-Cost SPSI/Forklift, Bulk Reject, Invoice Excel Template, Logo & Bank Settings, Panjar Breakdown (2026-06-15)
+
+### Input Order
+- Via dropdown: label langsung "Darat / Laut / Udara" (tanpa prefix D-/L-/U-).
+- PPN 12% dihilangkan (auto delete dari DB at startup, seed only 0/1/11).
+- Polis bukan teks — sekarang **Nilai Polis (IDR)** numeric. Bersama Nilai Asuransi, keduanya jadi **penambah Grand Total** invoice.
+
+### Penerimaan (Receive)
+- **SPSI** & **Sewa Forklift** sekarang otomatis tersimpan sebagai **awb_costs (cost_category=Operational, source=receive)** pada AWB tersebut.
+- Idempotent: re-receive akan replace cost lama (delete+insert).
+- Di invoice, dirinci sebagai line item terpisah (SPSI / Sewa Forklift).
+
+### Recap
+- Tabel "Sudah Reconciled" sekarang punya checkbox + **Bulk Reject → Open** (multi-select).
+- Endpoint: `POST /api/orders/bulk-revert-to-open`.
+
+### Invoice
+- Halaman dipisah:
+  - `/invoices` — **Pembuatan Invoice** (dari AWB Reconciled).
+  - `/invoices/created` — **Invoice Tercetak** dengan **filter search (no invoice/AWB) + filter customer**, tombol Print to PDF, **Export Invoice Excel**, dan **Export REPORT AR (filtered)** yang meneruskan data reconcile.
+- Template Excel **disesuaikan dengan screenshot AR Cargo**:
+  - Logo di kiri atas (dari setting `invoice_logo_b64`).
+  - Grey banner "INVOICE" putih bold di tengah (fill 7F7F7F, font color FFFFFF).
+  - Issuer block (B7-B9) + Meta block (P7-W9: Invoice No / Date / Due Date).
+  - Attn dari Consignee.
+  - Table header dark band (fill 595959, font color FFFFFF): No | DESCRIPTION | AMOUNT.
+  - Line items: Biaya Pengiriman (dengan sub-rows Tanggal/Origin/Tujuan) + Asuransi + Polis + SPSI + Sewa Forklift (conditional).
+  - Summary right: Jumlah / >> PPN N% / Sub Total / >> Asuransi / >> Polis / >> Adm / >> Materai / TOTAL (bold + light grey fill).
+  - Terbilang Bahasa Indonesia di bawah.
+  - **BANK ADDRESS box** di kiri bawah: bank_name (default Mandiri) dark band + A/N + A/C dari setting per issuer.
+  - Signature block kanan bawah dengan "Jakarta, {date_id}" dan signer name per issuer.
+  - **Ref. PO No. dihilangkan** (akan diprint terpisah per request).
+  - **Faktur Pajak dihilangkan** (diprint dari CORETAX).
+  - Format tanggal Indonesia (Mei 2026 dst).
+- Lampiran invoice tetap (tab terpisah saat bulk).
+
+### Settings
+- **Logo Invoice** upload (PNG/JPG/WebP, max 2MB) via `POST /api/settings/invoice-logo`, disimpan base64 di `invoice_logo_b64`.
+- **Per Issuer (Pradana / Pratama)** sekarang termasuk Bank: `bank_name_*`, `bank_holder_*`, `bank_account_*`.
+- `SettingIn.key_name` jadi optional (PUT pakai path param saja).
+
+### Panjar Kerja
+- Modul settle sekarang menerima **`awb_breakdown: [{awb_id, amount, description}]`** list AWB + nominal.
+- Validasi `sum(breakdown) + refund_amount == panjar amount` (banner balanced/unbalanced di UI).
+- Setelah settle: otomatis **create awb_costs (Operational, source=cash_advance_settle)** untuk setiap AWB di breakdown — nilainya jadi penambah cost AWB ybs.
+
+### Testing
+- Backend **iter-7: 17/17 PASS** (new test file `test_iteration10_features.py`).
+- Frontend **iter-8: 9/9 PASS** (full E2E: order creation 221.000, bulk revert, invoices split, receive modal, panjar breakdown, settings logo + bank, sidebar update).
+- Old regression files `test_iteration3_features.py` & `test_iteration4_receive_exports.py` **dihapus** (kontrak berubah).
+
+### Files touched
+- Backend: `/app/backend/server.py` (banyak — model OrderIn/ReceiveAwbIn/CashAdvanceSettleIn, seed bank settings, tax_ppn_12 cleanup, bulk-revert, invoice excel rewrite, logo upload, cash advance breakdown side-effects).
+- Frontend: `OrderInput.js`, `Contracts.js`, `Recap.js`, `Invoices.js` (slimmed), `InvoicesCreated.js` (new), `OrdersList.js`, `PanjarKerja.js`, `Settings.js`, `App.js`, `Layout.js`.
