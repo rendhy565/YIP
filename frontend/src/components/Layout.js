@@ -23,12 +23,13 @@ const NAV = [
   { type: "section", label: "Biaya" },
   { to: "/costs", label: "Plotting Biaya", icon: Coins, perm: "costs" },
   { to: "/accrue", label: "Settle Hutang Vendor", icon: Wallet, perm: "accrue" },
+  { to: "/panjar", label: "Panjar Kerja", icon: Wallet, perm: "*" },
   { to: "/fixed-costs", label: "Biaya Tetap (Overhead)", icon: Banknote, perm: "fixed_costs" },
 
   { type: "section", label: "Master & Laporan" },
   { to: "/analytics", label: "Dashboard Analitik", icon: BarChart3, perm: "*" },
   { to: "/customers", label: "Customer", icon: Users, perm: "customers" },
-  { to: "/contracts", label: "Kontrak", icon: ClipboardCheck, perm: "contracts" },
+  { to: "/contracts", label: "Perjanjian Rate", icon: ClipboardCheck, perm: "contracts" },
   { to: "/pnl", label: "Laba Rugi (Order)", icon: TrendingUp, perm: "pnl" },
 
   { type: "section", label: "Akunting (PSAK)", feature: "accounting" },

@@ -72,7 +72,8 @@ export default function Costs() {
                 <Td>
                   <span className={`inline-flex items-center gap-1 text-xs font-bold uppercase ${
                     c.cost_category === "Vendor" ? "text-orange-700" :
-                    c.cost_category === "Operational" ? "text-teal-700" : "text-indigo-700"
+                    c.cost_category === "Operational" ? "text-teal-700" :
+                    c.cost_category === "Marketing" ? "text-pink-700" : "text-indigo-700"
                   }`}>
                     {c.cost_category === "Vendor" ? <Wallet size={12}/> : <Coins size={12}/>}
                     {c.cost_category}
@@ -128,6 +129,7 @@ export default function Costs() {
                       <option value="Vendor">Vendor (Accrue / Hutang)</option>
                       <option value="Operational">Operational (Cash)</option>
                       <option value="Lintas">Lintas (Cash)</option>
+                      <option value="Marketing">Marketing (COGS terpisah)</option>
                     </>
                   ) : isOp ? (
                     <option value="Vendor">Vendor (Accrue / Hutang)</option>
@@ -135,6 +137,7 @@ export default function Costs() {
                     <>
                       <option value="Operational">Operational (Cash)</option>
                       <option value="Lintas">Lintas (Cash)</option>
+                      <option value="Marketing">Marketing (COGS terpisah)</option>
                     </>
                   )}
                 </Select>

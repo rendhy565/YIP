@@ -47,7 +47,7 @@ export default function InvoicePrint() {
         <div className="grid grid-cols-2 gap-6 mb-5">
           <div>
             <div className="text-xs uppercase tracking-wider font-bold text-slate-500 mb-1">Dari</div>
-            <div className="font-bold">{company.name}</div>
+            <div className="font-bold">{awb.company_name || company.name}</div>
             <div className="text-sm text-slate-600">{company.address}</div>
             <div className="text-sm text-slate-600 font-mono">NPWP: {company.npwp}</div>
           </div>
@@ -56,13 +56,21 @@ export default function InvoicePrint() {
             <div className="font-bold">{customer?.name}</div>
             <div className="text-sm text-slate-600">{customer?.address || "-"}</div>
             <div className="text-sm text-slate-600 font-mono">NPWP: {customer?.npwp || "-"}</div>
+            {awb.consignee && <div className="text-sm text-slate-700 mt-1"><span className="font-semibold">Consignee:</span> {awb.consignee}</div>}
           </div>
         </div>
         <Row label="No. Invoice" value={<span className="font-mono font-bold">{invoice.invoice_number}</span>} />
         <Row label="Tanggal" value={fmtDate(invoice.created_at)} />
         <Row label="No. AWB" value={<span className="font-mono">{awb.awb_number}</span>} />
+        {awb.reff_no && <Row label="Reff No" value={<span className="font-mono">{awb.reff_no}</span>} />}
         <Row label="Rute" value={`${awb.origin} → ${awb.destination}`} />
+        {(awb.service || awb.via) && <Row label="Service / Via" value={[awb.service, awb.via].filter(Boolean).join(" / ")} />}
+        {awb.status_pengiriman && <Row label="Status Pengiriman" value={awb.status_pengiriman} />}
         <Row label="Deskripsi" value={awb.item_description} />
+        {(awb.koli_count || awb.koli_qty_per) && <Row label="Koli" value={`${awb.koli_count || "-"} koli · isi ${awb.koli_qty_per || "-"}`} />}
+        {awb.insurance_enabled && (
+          <Row label="Asuransi" value={`Polis: ${awb.insurance_policy || "-"} · Nilai: ${fmtIDR(awb.insurance_amount || 0)}`} />
+        )}
 
         <table className="w-full mt-5 text-sm">
           <thead><tr className="bg-slate-100 text-xs uppercase">

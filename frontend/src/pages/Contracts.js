@@ -5,7 +5,9 @@ import { errMsg, fmtIDR } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X } from "lucide-react";
 
-const empty = { customer_id: "", origin: "", destination: "", price_per_kg: 0 };
+const empty = { customer_id: "", origin: "", destination: "", price_per_kg: 0, via: "" };
+
+const VIA_LABEL = { D: "Darat", L: "Laut", U: "Udara" };
 
 export default function Contracts() {
   const [rows, setRows] = useState([]);
@@ -24,28 +26,33 @@ export default function Contracts() {
   const submit = async (e) => {
     e.preventDefault();
     try {
-      await api.post("/contracts", { ...form, price_per_kg: parseFloat(form.price_per_kg) });
-      toast.success("Kontrak dibuat");
+      await api.post("/contracts", {
+        ...form,
+        price_per_kg: parseFloat(form.price_per_kg),
+        via: form.via || null,
+      });
+      toast.success("Perjanjian Rate dibuat");
       setOpen(false); setForm(empty); load();
     } catch (e2) { toast.error(errMsg(e2)); }
   };
 
   const del = async (id) => {
-    if (!window.confirm("Hapus kontrak?")) return;
+    if (!window.confirm("Hapus perjanjian rate?")) return;
     await api.delete(`/contracts/${id}`); load();
   };
 
   return (
     <div data-testid="contracts-page">
       <PageHeader
-        title="Master Kontrak"
-        subtitle="Daftar tarif customer per rute (origin–destination)."
-        action={<Button data-testid="add-contract-btn" onClick={() => setOpen(true)}><Plus size={16}/> Tambah Kontrak</Button>}
+        title="Perjanjian Rate"
+        subtitle="Daftar tarif customer per rute (origin–destination) & moda (Darat/Laut/Udara)."
+        action={<Button data-testid="add-contract-btn" onClick={() => setOpen(true)}><Plus size={16}/> Tambah Perjanjian</Button>}
       />
       <Card>
         <Table>
           <thead><tr>
-            <Th>Customer</Th><Th>Origin</Th><Th>Destination</Th><Th className="text-right">Tarif / Kg</Th><Th></Th>
+            <Th>Customer</Th><Th>Origin</Th><Th>Destination</Th><Th>Via</Th>
+            <Th className="text-right">Tarif / Kg</Th><Th></Th>
           </tr></thead>
           <tbody>
             {rows.map((r) => (
@@ -53,11 +60,18 @@ export default function Contracts() {
                 <Td><span className="font-semibold">{cName(r.customer_id)}</span></Td>
                 <Td className="font-mono">{r.origin}</Td>
                 <Td className="font-mono">{r.destination}</Td>
+                <Td>
+                  {r.via ? (
+                    <span className="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase">
+                      {r.via} — {VIA_LABEL[r.via] || ""}
+                    </span>
+                  ) : <span className="text-slate-400 text-xs">—</span>}
+                </Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.price_per_kg)}</Td>
                 <Td className="text-right"><button onClick={() => del(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button></Td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-8">Belum ada kontrak.</Td></tr>}
+            {rows.length === 0 && <tr><Td colSpan={6} className="text-center text-slate-500 py-8">Belum ada perjanjian rate.</Td></tr>}
           </tbody>
         </Table>
       </Card>
@@ -66,7 +80,7 @@ export default function Contracts() {
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
           <Card className="w-full max-w-lg p-6">
             <div className="flex items-start justify-between mb-4">
-              <h3 className="font-heading font-bold text-xl">Tambah Kontrak</h3>
+              <h3 className="font-heading font-bold text-xl">Tambah Perjanjian Rate</h3>
               <button onClick={() => setOpen(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
             <form onSubmit={submit} className="space-y-3">
@@ -79,17 +93,28 @@ export default function Contracts() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Origin *</label>
-                  <Input value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value.toUpperCase() })} required placeholder="CGK" /></div>
+                  <Input data-testid="contract-origin-input" value={form.origin} onChange={(e) => setForm({ ...form, origin: e.target.value.toUpperCase() })} required placeholder="CGK" /></div>
                 <div><label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Destination *</label>
-                  <Input value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value.toUpperCase() })} required placeholder="DPS" /></div>
+                  <Input data-testid="contract-destination-input" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value.toUpperCase() })} required placeholder="DPS" /></div>
               </div>
-              <div>
-                <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Harga per Kg (IDR) *</label>
-                <Input type="number" step="0.01" value={form.price_per_kg} onChange={(e) => setForm({ ...form, price_per_kg: e.target.value })} required />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Via</label>
+                  <Select data-testid="contract-via-select" value={form.via} onChange={(e) => setForm({ ...form, via: e.target.value })}>
+                    <option value="">— Pilih —</option>
+                    <option value="D">D — Darat</option>
+                    <option value="L">L — Laut</option>
+                    <option value="U">U — Udara</option>
+                  </Select>
+                </div>
+                <div>
+                  <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Harga per Kg (IDR) *</label>
+                  <Input data-testid="contract-price-input" type="number" step="0.01" value={form.price_per_kg} onChange={(e) => setForm({ ...form, price_per_kg: e.target.value })} required />
+                </div>
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="secondary" type="button" onClick={() => setOpen(false)}>Batal</Button>
-                <Button type="submit">Simpan</Button>
+                <Button data-testid="save-contract-btn" type="submit">Simpan</Button>
               </div>
             </form>
           </Card>

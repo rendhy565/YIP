@@ -162,6 +162,7 @@ class ContractIn(BaseModel):
     origin: str
     destination: str
     price_per_kg: float
+    via: Optional[Literal["D", "L", "U"]] = None  # Darat / Laut / Udara
 
 class OrderIn(BaseModel):
     customer_id: str
@@ -173,14 +174,31 @@ class OrderIn(BaseModel):
     tariff_per_kg: float
     qty_kg: float
     tax_percentage: float
+    # --- New fields (manual input) ---
+    awb_number: Optional[str] = None         # if not given, auto-generate
+    reff_no: Optional[str] = None
+    company_name: Optional[str] = None       # PT. Abirama Mitra Pradana / Pratama
+    pickup_date: Optional[str] = None        # YYYY-MM-DD; if not given, today
+    consignee: Optional[str] = None
+    service: Optional[Literal["LCL", "FCL", "LTL", "FTL", "AIR"]] = None
+    via: Optional[Literal["D", "L", "U"]] = None
+    status_pengiriman: Optional[Literal["Reguler", "Project", ""]] = None
+    koli_count: Optional[int] = None
+    koli_qty_per: Optional[str] = None
+    armada: Optional[str] = None
+    driver_name: Optional[str] = None
+    nopol: Optional[str] = None
+    insurance_enabled: Optional[bool] = False
+    insurance_policy: Optional[str] = None
+    insurance_amount: Optional[float] = None
 
 class CostIn(BaseModel):
     awb_id: str
-    cost_category: Literal["Operational", "Lintas", "Vendor"]
+    cost_category: Literal["Operational", "Lintas", "Vendor", "Marketing"]
     amount: float
     description: Optional[str] = None
     vendor_name: Optional[str] = None
-    cash_account_code: Optional[str] = None  # for Cash payments (Operational/Lintas) — defaults to 1101
+    cash_account_code: Optional[str] = None  # for Cash payments (Operational/Lintas/Marketing) — defaults to 1101
 
 class SettleIn(BaseModel):
     cash_account_code: Optional[str] = None  # which cash account paid the vendor; default 1101
@@ -201,6 +219,8 @@ class FixedCostIn(BaseModel):
 
 class MarkPaidIn(BaseModel):
     cash_account_code: Optional[str] = None  # which cash account received payment; default 1101
+    payment_invoice_number: Optional[str] = None  # nomor invoice yang dibayar (eksternal)
+    paid_date: Optional[str] = None  # YYYY-MM-DD; if not given, today
 
 # ---------------------------------------------------------------------------
 # AWB number generator
@@ -273,6 +293,9 @@ DEFAULT_COA = [
     {"code": "5101", "name": "Beban Vendor Logistik", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
     {"code": "5102", "name": "Beban Operasional Pengiriman", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
     {"code": "5103", "name": "Beban Lintas", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
+    {"code": "5104", "name": "Beban Marketing (COGS)", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
+    {"code": "5105", "name": "Beban Panjar Kerja", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
+    {"code": "1108", "name": "Panjar Kerja", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     # 6xxx - BEBAN OPERASIONAL / FIXED COST
     {"code": "6101", "name": "Beban Gaji", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
     {"code": "6102", "name": "Beban Sewa", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
@@ -285,7 +308,7 @@ FIXED_COST_TO_COA = {
     "Gaji": "6101", "Sewa": "6102", "Utilities": "6103",
     "Marketing": "6104", "Administrasi": "6105", "Lainnya": "6199",
 }
-COST_CATEGORY_TO_COA = {"Vendor": "5101", "Operational": "5102", "Lintas": "5103"}
+COST_CATEGORY_TO_COA = {"Vendor": "5101", "Operational": "5102", "Lintas": "5103", "Marketing": "5104"}
 
 async def get_account(code: str) -> Optional[dict]:
     return await db.chart_of_accounts.find_one({"code": code})
@@ -432,7 +455,7 @@ async def seed_data():
             )
 
     # Tax settings
-    for key, val in [("tax_ppn_0", "0"), ("tax_ppn_11", "11"), ("tax_ppn_12", "12")]:
+    for key, val in [("tax_ppn_0", "0"), ("tax_ppn_1", "1"), ("tax_ppn_11", "11"), ("tax_ppn_12", "12")]:
         await db.settings.update_one(
             {"key_name": key},
             {"$setOnInsert": {"key_name": key, "key_value": val}},
@@ -849,23 +872,52 @@ async def get_order(oid: str, user: dict = Depends(get_current_user)):
 async def create_order(data: OrderIn, user: dict = Depends(require_role("operation"))):
     total = round(data.tariff_per_kg * data.qty_kg, 2)
     tax_amt = round(total * data.tax_percentage / 100, 2)
+    # AWB number: manual takes precedence; check uniqueness
+    awb_no = (data.awb_number or "").strip() or await next_awb_number()
+    if data.awb_number:
+        if await db.awb_orders.find_one({"awb_number": awb_no}):
+            raise HTTPException(400, f"Nomor AWB '{awb_no}' sudah dipakai")
+    # Pickup / created date
+    if data.pickup_date:
+        try:
+            y, m, d = [int(x) for x in data.pickup_date.split("-")]
+            created_at = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "pickup_date harus YYYY-MM-DD")
+    else:
+        created_at = datetime.now(timezone.utc)
+    status_p = (data.status_pengiriman or "").strip() or None
     doc = {
-        "awb_number": await next_awb_number(),
+        "awb_number": awb_no,
+        "reff_no": (data.reff_no or "").strip() or None,
+        "company_name": data.company_name,
+        "consignee": (data.consignee or "").strip() or None,
         "customer_id": _oid(data.customer_id),
         "contract_id": _oid(data.contract_id) if data.contract_id else None,
         "item_description": data.item_description,
         "goods_content": data.goods_content,
         "origin": data.origin,
         "destination": data.destination,
+        "service": data.service,
+        "via": data.via,
+        "status_pengiriman": status_p,
         "tariff_per_kg": data.tariff_per_kg,
         "qty_kg": data.qty_kg,
         "total_tariff": total,
         "tax_percentage": data.tax_percentage,
         "tax_amount": tax_amt,
         "grand_total": round(total + tax_amt, 2),
+        "koli_count": data.koli_count,
+        "koli_qty_per": (data.koli_qty_per or "").strip() or None,
+        "armada": (data.armada or "").strip() or None,
+        "driver_name": (data.driver_name or "").strip() or None,
+        "nopol": (data.nopol or "").strip() or None,
+        "insurance_enabled": bool(data.insurance_enabled),
+        "insurance_policy": (data.insurance_policy or "").strip() or None,
+        "insurance_amount": float(data.insurance_amount or 0) if data.insurance_enabled else 0,
         "status": "Open",
         "created_by": user["id"],
-        "created_at": datetime.now(timezone.utc),
+        "created_at": created_at,
     }
     r = await db.awb_orders.insert_one(doc)
     new = await db.awb_orders.find_one({"_id": r.inserted_id})
@@ -929,9 +981,9 @@ async def create_cost(data: CostIn, user: dict = Depends(get_current_user)):
             raise HTTPException(403, "Hanya role Operation/Administrator yang dapat input biaya Vendor")
         payment_type = "Accrue"
         is_settled = False
-    elif data.cost_category in ("Operational", "Lintas"):
+    elif data.cost_category in ("Operational", "Lintas", "Marketing"):
         if not (is_admin or role == "finance"):
-            raise HTTPException(403, "Hanya role Finance/Administrator yang dapat input biaya Operational/Lintas")
+            raise HTTPException(403, "Hanya role Finance/Administrator yang dapat input biaya Operational/Lintas/Marketing")
         payment_type = "Cash"
         is_settled = True
     else:
@@ -1044,11 +1096,21 @@ class ReconcileIn(BaseModel):
 @app.post("/api/orders/reconcile")
 async def reconcile_orders(data: ReconcileIn, user: dict = Depends(require_role("operation"))):
     ids = [_oid(i) for i in data.awb_ids]
+    # Only AWBs that have at least 1 cost can be reconciled
+    cost_doc = await db.awb_costs.aggregate([
+        {"$match": {"awb_id": {"$in": ids}}},
+        {"$group": {"_id": "$awb_id"}},
+    ]).to_list(10000)
+    awb_with_cost = {d["_id"] for d in cost_doc}
+    valid_ids = [i for i in ids if i in awb_with_cost]
+    skipped = len(ids) - len(valid_ids)
+    if not valid_ids:
+        raise HTTPException(400, "Tidak ada AWB yang siap direkonsiliasi (semua belum punya biaya/cost)")
     res = await db.awb_orders.update_many(
-        {"_id": {"$in": ids}, "status": "Open"},
+        {"_id": {"$in": valid_ids}, "status": "Open"},
         {"$set": {"status": "Reconciled", "reconciled_at": datetime.now(timezone.utc)}},
     )
-    return {"updated": res.modified_count}
+    return {"updated": res.modified_count, "skipped_no_cost": skipped}
 
 @app.post("/api/orders/{oid}/revert-to-open")
 async def revert_to_open(oid: str, user: dict = Depends(require_role("operation"))):
@@ -1093,6 +1155,45 @@ async def create_invoice(data: InvoiceCreateIn, user: dict = Depends(require_rol
     )
     new = await db.invoices.find_one({"_id": r.inserted_id})
     return serialize(new)
+
+class InvoiceBulkIn(BaseModel):
+    awb_ids: List[str]
+
+@app.post("/api/invoices/bulk")
+async def create_invoice_bulk(data: InvoiceBulkIn, user: dict = Depends(require_role("operation"))):
+    created = []
+    skipped = []
+    now = datetime.now(timezone.utc)
+    for sid in data.awb_ids:
+        try:
+            oid = _oid(sid)
+        except Exception:
+            skipped.append({"awb_id": sid, "reason": "invalid id"})
+            continue
+        o = await db.awb_orders.find_one({"_id": oid})
+        if not o:
+            skipped.append({"awb_id": sid, "reason": "not found"})
+            continue
+        existing = await db.invoices.find_one({"awb_id": o["_id"]})
+        if existing:
+            skipped.append({"awb_id": sid, "reason": "already invoiced", "invoice_number": existing["invoice_number"]})
+            continue
+        if o["status"] != "Reconciled":
+            skipped.append({"awb_id": sid, "reason": f"status={o['status']}"})
+            continue
+        doc = {
+            "awb_id": o["_id"],
+            "invoice_number": await next_invoice_number(),
+            "created_at": now,
+            "created_by": user["id"],
+        }
+        r = await db.invoices.insert_one(doc)
+        await db.awb_orders.update_one(
+            {"_id": o["_id"]},
+            {"$set": {"status": "Invoiced", "invoiced_at": now}},
+        )
+        created.append({"awb_id": sid, "invoice_number": doc["invoice_number"], "id": str(r.inserted_id)})
+    return {"created": created, "skipped": skipped, "created_count": len(created), "skipped_count": len(skipped)}
 
 @app.get("/api/invoices")
 async def list_invoices(user: dict = Depends(get_current_user)):
@@ -1149,11 +1250,18 @@ async def mark_paid(oid: str, data: MarkPaidIn = MarkPaidIn(), user: dict = Depe
     acc = await get_account(cash_acc)
     if not acc or not acc.get("is_cash"):
         raise HTTPException(400, "Akun kas/bank tidak valid")
-    now = datetime.now(timezone.utc)
-    await db.awb_orders.update_one(
-        {"_id": _oid(oid)},
-        {"$set": {"status": "Paid", "paid_at": now, "paid_by": user["id"], "cash_account_code": cash_acc}},
-    )
+    if data.paid_date:
+        try:
+            y, m, d = [int(x) for x in data.paid_date.split("-")]
+            now = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "paid_date harus YYYY-MM-DD")
+    else:
+        now = datetime.now(timezone.utc)
+    upd = {"status": "Paid", "paid_at": now, "paid_by": user["id"], "cash_account_code": cash_acc}
+    if data.payment_invoice_number:
+        upd["payment_invoice_number"] = data.payment_invoice_number.strip()
+    await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
     # Auto-post journal: DR Cash / CR Piutang Usaha
     try:
         await post_journal(
@@ -1168,6 +1276,61 @@ async def mark_paid(oid: str, data: MarkPaidIn = MarkPaidIn(), user: dict = Depe
     except HTTPException as e:
         return {"ok": True, "journal_warning": e.detail}
     return {"ok": True}
+
+class BulkMarkPaidIn(BaseModel):
+    awb_ids: List[str]
+    cash_account_code: Optional[str] = None
+    payment_invoice_number: Optional[str] = None
+    paid_date: Optional[str] = None
+
+@app.post("/api/payments/bulk-mark-paid")
+async def bulk_mark_paid(data: BulkMarkPaidIn, user: dict = Depends(require_role("finance"))):
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    if data.paid_date:
+        try:
+            y, m, d = [int(x) for x in data.paid_date.split("-")]
+            now = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "paid_date harus YYYY-MM-DD")
+    else:
+        now = datetime.now(timezone.utc)
+    paid = []
+    skipped = []
+    pn = (data.payment_invoice_number or "").strip()
+    for sid in data.awb_ids:
+        try:
+            oid = _oid(sid)
+        except Exception:
+            skipped.append({"awb_id": sid, "reason": "invalid id"})
+            continue
+        o = await db.awb_orders.find_one({"_id": oid})
+        if not o:
+            skipped.append({"awb_id": sid, "reason": "not found"})
+            continue
+        if o["status"] != "Invoiced":
+            skipped.append({"awb_id": sid, "reason": f"status={o['status']}"})
+            continue
+        upd = {"status": "Paid", "paid_at": now, "paid_by": user["id"], "cash_account_code": cash_acc}
+        if pn:
+            upd["payment_invoice_number"] = pn
+        await db.awb_orders.update_one({"_id": oid}, {"$set": upd})
+        try:
+            await post_journal(
+                date=now,
+                description=f"Penerimaan pelunasan invoice {o['awb_number']}" + (f" (Inv {pn})" if pn else ""),
+                lines=[
+                    {"account_code": cash_acc, "debit": o["grand_total"], "credit": 0, "memo": o["awb_number"]},
+                    {"account_code": "1201", "debit": 0, "credit": o["grand_total"], "memo": o["awb_number"]},
+                ],
+                reference_type="payment", reference_id=sid, posted_by=user["id"],
+            )
+        except HTTPException:
+            pass
+        paid.append({"awb_id": sid, "awb_number": o["awb_number"], "amount": o["grand_total"]})
+    return {"paid": paid, "skipped": skipped, "paid_count": len(paid), "skipped_count": len(skipped)}
 
 # ---------------------------------------------------------------------------
 # Fixed Costs (Overhead — Finance only)
@@ -2584,10 +2747,63 @@ class AwbExtendedUpdate(BaseModel):
     fleet_type: Optional[str] = None
     armada_type: Optional[str] = None
     external_invoice_number: Optional[str] = None
+    # --- New extended fields ---
+    awb_number: Optional[str] = None
+    reff_no: Optional[str] = None
+    company_name: Optional[str] = None
+    consignee: Optional[str] = None
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    service: Optional[str] = None
+    via: Optional[str] = None
+    status_pengiriman: Optional[str] = None
+    item_description: Optional[str] = None
+    goods_content: Optional[str] = None
+    tariff_per_kg: Optional[float] = None
+    qty_kg: Optional[float] = None
+    tax_percentage: Optional[float] = None
+    koli_count: Optional[int] = None
+    koli_qty_per: Optional[str] = None
+    armada: Optional[str] = None
+    driver_name: Optional[str] = None
+    nopol: Optional[str] = None
+    insurance_enabled: Optional[bool] = None
+    insurance_policy: Optional[str] = None
+    insurance_amount: Optional[float] = None
+    pickup_date: Optional[str] = None  # YYYY-MM-DD
 
 @app.patch("/api/orders/{oid}/extended")
 async def patch_awb_extended(oid: str, data: AwbExtendedUpdate, user: dict = Depends(get_current_user)):
-    upd = {k: v for k, v in data.model_dump().items() if v is not None}
+    raw = data.model_dump()
+    upd = {k: v for k, v in raw.items() if v is not None}
+    # Only allow editing for Open AWBs unless admin
+    o = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not o:
+        raise HTTPException(404, "Order tidak ditemukan")
+    if user["role"] != "administrator" and o.get("status") not in ("Open", None):
+        raise HTTPException(403, f"Hanya AWB Open yang dapat di-edit (status saat ini: {o.get('status')})")
+    # AWB number uniqueness if changed
+    if "awb_number" in upd and upd["awb_number"] and upd["awb_number"] != o.get("awb_number"):
+        if await db.awb_orders.find_one({"awb_number": upd["awb_number"], "_id": {"$ne": _oid(oid)}}):
+            raise HTTPException(400, f"Nomor AWB '{upd['awb_number']}' sudah dipakai")
+    # Pickup date → created_at
+    if "pickup_date" in upd and upd["pickup_date"]:
+        try:
+            y, m, d = [int(x) for x in upd["pickup_date"].split("-")]
+            upd["created_at"] = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "pickup_date harus YYYY-MM-DD")
+        upd.pop("pickup_date", None)
+    # Recalculate totals when tariff/qty/tax changes
+    if any(k in upd for k in ("tariff_per_kg", "qty_kg", "tax_percentage")):
+        tariff = float(upd.get("tariff_per_kg", o.get("tariff_per_kg") or 0))
+        qty = float(upd.get("qty_kg", o.get("qty_kg") or 0))
+        pct = float(upd.get("tax_percentage", o.get("tax_percentage") or 0))
+        total = round(tariff * qty, 2)
+        tax_amt = round(total * pct / 100, 2)
+        upd["total_tariff"] = total
+        upd["tax_amount"] = tax_amt
+        upd["grand_total"] = round(total + tax_amt, 2)
     if upd:
         await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
     return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
@@ -3665,3 +3881,141 @@ async def delete_saved_view(vid: str, user: dict = Depends(get_current_user)):
     await db.saved_views.delete_one({"_id": v["_id"]})
     return {"ok": True, "deleted": vid}
 
+
+# ===========================================================================
+# Panjar Kerja (Cash Advance) — operational cash given to staff/driver/etc
+# ===========================================================================
+class CashAdvanceIn(BaseModel):
+    recipient_name: str
+    purpose: Optional[str] = None
+    amount: float
+    advance_date: Optional[str] = None  # YYYY-MM-DD; default today
+    cash_account_code: Optional[str] = None  # default 1101
+    notes: Optional[str] = None
+
+class CashAdvanceSettleIn(BaseModel):
+    actual_amount: Optional[float] = None  # actual expense from the advance
+    refund_amount: Optional[float] = None  # cash returned by recipient (if any)
+    settle_date: Optional[str] = None      # YYYY-MM-DD; default today
+    cash_account_code: Optional[str] = None  # for refund; default 1101
+    notes: Optional[str] = None
+
+async def next_cash_advance_number() -> str:
+    yyyymm = datetime.now(timezone.utc).strftime("%Y%m")
+    prefix = f"PNJ-{yyyymm}-"
+    last = await db.cash_advances.find_one(
+        {"number": {"$regex": f"^{prefix}"}},
+        sort=[("number", -1)],
+    )
+    seq = 1
+    if last:
+        m = re.search(r"-(\d+)$", last["number"])
+        if m:
+            seq = int(m.group(1)) + 1
+    return f"{prefix}{seq:04d}"
+
+@app.get("/api/cash-advances")
+async def list_cash_advances(
+    status_v: Optional[str] = None,  # Open / Settled
+    user: dict = Depends(get_current_user),
+):
+    q = {}
+    if status_v:
+        q["status"] = status_v
+    docs = await db.cash_advances.find(q).sort("advance_date", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/cash-advances")
+async def create_cash_advance(data: CashAdvanceIn, user: dict = Depends(require_role("finance", "operation"))):
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    if data.advance_date:
+        try:
+            y, m, d = [int(x) for x in data.advance_date.split("-")]
+            adv_date = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "advance_date harus YYYY-MM-DD")
+    else:
+        adv_date = datetime.now(timezone.utc)
+    doc = {
+        "number": await next_cash_advance_number(),
+        "recipient_name": data.recipient_name.strip(),
+        "purpose": (data.purpose or "").strip() or None,
+        "amount": float(data.amount),
+        "advance_date": adv_date,
+        "cash_account_code": cash_acc,
+        "status": "Open",
+        "actual_amount": None,
+        "refund_amount": None,
+        "settled_at": None,
+        "notes": (data.notes or "").strip() or None,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.cash_advances.insert_one(doc)
+    # Journal: DR 1108 Panjar Kerja / CR Cash
+    try:
+        await post_journal(
+            date=adv_date,
+            description=f"Panjar kerja {doc['number']} - {data.recipient_name}",
+            lines=[
+                {"account_code": "1108", "debit": doc["amount"], "credit": 0, "memo": doc["recipient_name"]},
+                {"account_code": cash_acc, "debit": 0, "credit": doc["amount"], "memo": doc["number"]},
+            ],
+            reference_type="cash_advance", reference_id=str(r.inserted_id), posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
+    return serialize(await db.cash_advances.find_one({"_id": r.inserted_id}))
+
+@app.post("/api/cash-advances/{cid}/settle")
+async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = Depends(require_role("finance"))):
+    ca = await db.cash_advances.find_one({"_id": _oid(cid)})
+    if not ca:
+        raise HTTPException(404, "Panjar tidak ditemukan")
+    if ca.get("status") == "Settled":
+        raise HTTPException(400, "Panjar sudah disettle")
+    actual = float(data.actual_amount if data.actual_amount is not None else ca["amount"])
+    refund = float(data.refund_amount or 0)
+    if data.settle_date:
+        try:
+            y, m, d = [int(x) for x in data.settle_date.split("-")]
+            sd = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "settle_date harus YYYY-MM-DD")
+    else:
+        sd = datetime.now(timezone.utc)
+    cash_acc = data.cash_account_code or ca.get("cash_account_code") or "1101"
+    await db.cash_advances.update_one(
+        {"_id": _oid(cid)},
+        {"$set": {
+            "status": "Settled",
+            "actual_amount": actual,
+            "refund_amount": refund,
+            "settled_at": sd,
+            "settled_by": user["id"],
+            "settle_notes": (data.notes or "").strip() or None,
+        }},
+    )
+    # Journal: DR 5105 (actual expense) [+DR Cash refund if any] / CR 1108 (panjar)
+    try:
+        lines = [{"account_code": "5105", "debit": actual, "credit": 0, "memo": f"Panjar {ca['number']} - {ca['recipient_name']}"}]
+        if refund > 0:
+            lines.append({"account_code": cash_acc, "debit": refund, "credit": 0, "memo": f"Refund panjar {ca['number']}"})
+        lines.append({"account_code": "1108", "debit": 0, "credit": actual + refund, "memo": ca["number"]})
+        await post_journal(
+            date=sd,
+            description=f"Settle panjar kerja {ca['number']}",
+            lines=lines,
+            reference_type="cash_advance_settle", reference_id=cid, posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
+    return serialize(await db.cash_advances.find_one({"_id": _oid(cid)}))
+
+@app.delete("/api/cash-advances/{cid}")
+async def delete_cash_advance(cid: str, user: dict = Depends(require_role("administrator"))):
+    await db.cash_advances.delete_one({"_id": _oid(cid)})
+    return {"ok": True}
