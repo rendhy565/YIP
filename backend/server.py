@@ -222,6 +222,19 @@ class MarkPaidIn(BaseModel):
     payment_invoice_number: Optional[str] = None  # nomor invoice yang dibayar (eksternal)
     paid_date: Optional[str] = None  # YYYY-MM-DD; if not given, today
 
+class ReceiveAwbIn(BaseModel):
+    """Tanggal Terima — Barang Diterima form."""
+    received_date: Optional[str] = None  # YYYY-MM-DD; default today
+    received_by_name: str
+    polis: Optional[str] = None         # polis (override, default = AWB.insurance_policy)
+    asuransi_amount: Optional[float] = None  # insurance value (override)
+    spsi_enabled: Optional[bool] = False
+    spsi_amount: Optional[float] = None
+    sewa_forklift_enabled: Optional[bool] = False
+    sewa_forklift_amount: Optional[float] = None
+    work_type: Literal["Kirim Barang", "Dismantle Barang", "Relokasi Barang"]
+    mode: Literal["Air", "Trucking", "Konsul"]
+
 # ---------------------------------------------------------------------------
 # AWB number generator
 # ---------------------------------------------------------------------------
@@ -476,6 +489,20 @@ async def seed_data():
         {"$setOnInsert": {"key_name": "company_address", "key_value": "Jl. Soekarno Hatta No. 1, Jakarta"}},
         upsert=True,
     )
+    # Per-issuer-company settings (Pradana / Pratama) — signer & address
+    for k, v in [
+        ("signer_PT. Abirama Mitra Pradana", ""),
+        ("signer_PT. Abirama Mitra Pratama", ""),
+        ("address_PT. Abirama Mitra Pradana", ""),
+        ("address_PT. Abirama Mitra Pratama", ""),
+        ("npwp_PT. Abirama Mitra Pradana", ""),
+        ("npwp_PT. Abirama Mitra Pratama", ""),
+    ]:
+        await db.settings.update_one(
+            {"key_name": k},
+            {"$setOnInsert": {"key_name": k, "key_value": v}},
+            upsert=True,
+        )
 
     # Sample/Demo data — STRICTLY opt-in.
     # Demo data is ONLY seeded when env var SEED_DEMO_DATA=true (default: false).
@@ -1282,6 +1309,36 @@ class BulkMarkPaidIn(BaseModel):
     cash_account_code: Optional[str] = None
     payment_invoice_number: Optional[str] = None
     paid_date: Optional[str] = None
+
+@app.post("/api/orders/{oid}/receive")
+async def receive_awb(oid: str, data: ReceiveAwbIn, user: dict = Depends(get_current_user)):
+    """Mark AWB as Received (Barang Diterima) with checklist details."""
+    o = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not o:
+        raise HTTPException(404, "Order tidak ditemukan")
+    if data.received_date:
+        try:
+            y, m, d = [int(x) for x in data.received_date.split("-")]
+            rd = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "received_date harus YYYY-MM-DD")
+    else:
+        rd = datetime.now(timezone.utc)
+    upd = {
+        "received_at": rd,
+        "received_by_name": data.received_by_name.strip(),
+        "received_polis": (data.polis or o.get("insurance_policy") or "") or None,
+        "received_asuransi_amount": float(data.asuransi_amount if data.asuransi_amount is not None else (o.get("insurance_amount") or 0)),
+        "spsi_enabled": bool(data.spsi_enabled),
+        "spsi_amount": float(data.spsi_amount or 0) if data.spsi_enabled else 0,
+        "sewa_forklift_enabled": bool(data.sewa_forklift_enabled),
+        "sewa_forklift_amount": float(data.sewa_forklift_amount or 0) if data.sewa_forklift_enabled else 0,
+        "work_type": data.work_type,
+        "mode": data.mode,
+        "received_by": user["id"],
+    }
+    await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
+    return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
 
 @app.post("/api/payments/bulk-mark-paid")
 async def bulk_mark_paid(data: BulkMarkPaidIn, user: dict = Depends(require_role("finance"))):
@@ -4019,3 +4076,424 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
 async def delete_cash_advance(cid: str, user: dict = Depends(require_role("administrator"))):
     await db.cash_advances.delete_one({"_id": _oid(cid)})
     return {"ok": True}
+
+# ===========================================================================
+# Excel Exports — REPORT AR & Invoice (matching templates from user)
+# ===========================================================================
+from fastapi.responses import StreamingResponse
+import io
+import openpyxl
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.utils import get_column_letter
+
+REPORT_AR_HEADER_ROW1 = [
+    # main cols (1-17)
+    "Bulan", "Tgl Pick Up", "Tanggal Terima", "Status Pengiriman", "AWB",
+    "Vendor Name", "Transport", "From", "Destination", "No Mobil",
+    "Penerima", "Qty", "Koli", "KG", "Min Kg", "Final KG", "Harga /KG",
+    # Group: Kirim Barang (R-Z = 9 sub-cols, col 18-26)
+    "Kirim Barang", "", "", "", "", "", "", "", "",
+    # Group: Dismantle Barang (AA-AI = 9 sub-cols, col 27-35)
+    "Dismantle Barang", "", "", "", "", "", "", "", "",
+    # Group: Relokasi Barang (AJ-AR = 9 sub-cols, col 36-44)
+    "Relokasi Barang", "", "", "", "", "", "", "", "",
+    # Trailing single cols (AS-AX, col 45-50)
+    "Amount\n(Exc VAT)", "Keterangan", "Harga", "List Muatan", "Asuransi", "No Invoice",
+]
+# Row 2 sub-headers (only for the 3 groups)
+REPORT_AR_HEADER_ROW2_GROUPS = {
+    "kirim":     ["Polis", "Insurance", "SPSI", "Sewa Froklift", "Kirim Barang", "Loading/Unloading", "Air", "Konsul", "Trucking"],
+    "dismantle": ["Polis", "Insurance", "SPSI", "Sewa Froklift", "Packing",      "Loading/Unloading", "Air", "Konsul", "Trucking"],
+    "relokasi":  ["Polis", "Insurance", "SPSI", "Sewa Froklift", "Loading/Unloading", "Packing",       "Air", "Konsul", "Trucking"],
+}
+
+INDO_MONTHS = ["JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"]
+
+def _ar_group_start(group_key: str) -> int:
+    # 1-indexed column where each group starts (Kirim=18, Dismantle=27, Relokasi=36)
+    return {"kirim": 18, "dismantle": 27, "relokasi": 36}[group_key]
+
+def _ar_subcol_offset(group_key: str, sub_name: str) -> Optional[int]:
+    subs = REPORT_AR_HEADER_ROW2_GROUPS[group_key]
+    try:
+        return subs.index(sub_name)
+    except ValueError:
+        return None
+
+@app.get("/api/exports/report-ar")
+async def export_report_ar(
+    month: Optional[str] = None,  # YYYY-MM
+    customer_id: Optional[str] = None,
+    status_v: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    q = {}
+    if status_v:
+        q["status"] = status_v
+    if customer_id:
+        q["customer_id"] = _oid(customer_id)
+    if month:
+        try:
+            y, m = [int(x) for x in month.split("-")]
+            start = datetime(y, m, 1, tzinfo=timezone.utc)
+            end = datetime(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1, tzinfo=timezone.utc)
+            q["created_at"] = {"$gte": start, "$lt": end}
+        except Exception:
+            raise HTTPException(400, "month harus YYYY-MM")
+    orders = await db.awb_orders.find(q).sort("created_at", 1).to_list(20000)
+    # Pre-fetch customer names
+    cust_ids = list({o.get("customer_id") for o in orders if o.get("customer_id")})
+    cust_map = {}
+    if cust_ids:
+        async for c in db.customers.find({"_id": {"$in": cust_ids}}):
+            cust_map[str(c["_id"])] = c
+    # Pre-fetch invoice numbers
+    awb_ids = [o["_id"] for o in orders]
+    inv_map = {}
+    if awb_ids:
+        async for inv in db.invoices.find({"awb_id": {"$in": awb_ids}}):
+            inv_map[str(inv["awb_id"])] = inv.get("invoice_number", "")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "REPORT AR"
+
+    # Styles
+    hdr_fill = PatternFill("solid", fgColor="FFD966")        # gold
+    grp_fill = {
+        "kirim":     PatternFill("solid", fgColor="C6E0B4"), # green
+        "dismantle": PatternFill("solid", fgColor="F4B084"), # orange
+        "relokasi":  PatternFill("solid", fgColor="B4C7E7"), # blue
+    }
+    sub_fill = {
+        "kirim":     PatternFill("solid", fgColor="E2EFDA"),
+        "dismantle": PatternFill("solid", fgColor="FCE4D6"),
+        "relokasi":  PatternFill("solid", fgColor="D9E1F2"),
+    }
+    hdr_font = Font(bold=True, color="000000", size=10)
+    thin = Side(border_style="thin", color="404040")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Row 1
+    for i, h in enumerate(REPORT_AR_HEADER_ROW1, start=1):
+        c = ws.cell(1, i, h)
+        c.font = hdr_font
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = border
+        # Coloring
+        if 18 <= i <= 26: c.fill = grp_fill["kirim"]
+        elif 27 <= i <= 35: c.fill = grp_fill["dismantle"]
+        elif 36 <= i <= 44: c.fill = grp_fill["relokasi"]
+        else: c.fill = hdr_fill
+
+    # Merge group headers in row 1
+    ws.merge_cells(start_row=1, start_column=18, end_row=1, end_column=26)  # Kirim
+    ws.merge_cells(start_row=1, start_column=27, end_row=1, end_column=35)  # Dismantle
+    ws.merge_cells(start_row=1, start_column=36, end_row=1, end_column=44)  # Relokasi
+
+    # Merge main cols vertically (rows 1-2)
+    for col in list(range(1, 18)) + list(range(45, 51)):
+        ws.merge_cells(start_row=1, start_column=col, end_row=2, end_column=col)
+
+    # Row 2 sub-headers
+    for offset, sub in enumerate(REPORT_AR_HEADER_ROW2_GROUPS["kirim"]):
+        c = ws.cell(2, 18 + offset, sub); c.font = hdr_font; c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True); c.fill = sub_fill["kirim"]; c.border = border
+    for offset, sub in enumerate(REPORT_AR_HEADER_ROW2_GROUPS["dismantle"]):
+        c = ws.cell(2, 27 + offset, sub); c.font = hdr_font; c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True); c.fill = sub_fill["dismantle"]; c.border = border
+    for offset, sub in enumerate(REPORT_AR_HEADER_ROW2_GROUPS["relokasi"]):
+        c = ws.cell(2, 36 + offset, sub); c.font = hdr_font; c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True); c.fill = sub_fill["relokasi"]; c.border = border
+
+    # Column widths
+    widths = [8, 12, 12, 14, 12, 18, 22, 22, 22, 14, 18, 10, 8, 10, 10, 10, 12]
+    for i, w in enumerate(widths, start=1): ws.column_dimensions[get_column_letter(i)].width = w
+    for i in range(18, 45): ws.column_dimensions[get_column_letter(i)].width = 11
+    for i, w in zip(range(45, 51), [14, 16, 12, 14, 14, 20]):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[2].height = 28
+    ws.freeze_panes = "F3"
+
+    # Data rows
+    row_idx = 3
+    for o in orders:
+        cust = cust_map.get(str(o.get("customer_id"))) if o.get("customer_id") else None
+        pickup_dt = o.get("created_at")
+        recv_dt = o.get("received_at")
+        bulan = INDO_MONTHS[pickup_dt.month - 1] if pickup_dt else ""
+        ws.cell(row_idx, 1, bulan)
+        ws.cell(row_idx, 2, pickup_dt.replace(tzinfo=None) if pickup_dt else None).number_format = "yyyy-mm-dd"
+        if recv_dt:
+            ws.cell(row_idx, 3, recv_dt.replace(tzinfo=None)).number_format = "yyyy-mm-dd"
+        ws.cell(row_idx, 4, (o.get("status_pengiriman") or "").upper())
+        ws.cell(row_idx, 5, o.get("awb_number"))
+        # Vendor Name: take from awb_costs (1st vendor cost), else blank
+        vname = ""
+        cost_doc = await db.awb_costs.find_one({"awb_id": o["_id"], "cost_category": "Vendor", "vendor_name": {"$ne": None}})
+        if cost_doc: vname = cost_doc.get("vendor_name", "") or ""
+        ws.cell(row_idx, 6, vname)
+        # Transport: combine armada + service
+        transport_parts = []
+        if o.get("armada"): transport_parts.append(o["armada"])
+        if o.get("service"): transport_parts.append(o["service"])
+        ws.cell(row_idx, 7, " ".join(transport_parts))
+        ws.cell(row_idx, 8, o.get("origin"))
+        ws.cell(row_idx, 9, o.get("destination"))
+        ws.cell(row_idx, 10, o.get("nopol"))
+        ws.cell(row_idx, 11, o.get("received_by_name") or o.get("consignee") or "")
+        ws.cell(row_idx, 12, o.get("qty_kg"))
+        ws.cell(row_idx, 13, o.get("koli_count"))
+        ws.cell(row_idx, 14, o.get("qty_kg"))  # KG
+        # Min Kg / Final KG: leave blank unless we add a field; default to qty_kg
+        ws.cell(row_idx, 16, o.get("qty_kg"))  # Final KG
+        ws.cell(row_idx, 17, o.get("tariff_per_kg"))
+
+        # Group placement based on work_type
+        wt = (o.get("work_type") or "").lower()
+        grp_key = None
+        if "kirim" in wt: grp_key = "kirim"
+        elif "dismantle" in wt: grp_key = "dismantle"
+        elif "relokasi" in wt: grp_key = "relokasi"
+
+        if grp_key:
+            gstart = _ar_group_start(grp_key)
+            # Polis (col offset 0), Insurance (1), SPSI (2), Sewa Froklift (3)
+            if o.get("received_polis"): ws.cell(row_idx, gstart + 0, o["received_polis"])
+            if o.get("received_asuransi_amount"): ws.cell(row_idx, gstart + 1, o["received_asuransi_amount"])
+            if o.get("spsi_enabled") and o.get("spsi_amount"): ws.cell(row_idx, gstart + 2, o["spsi_amount"])
+            if o.get("sewa_forklift_enabled") and o.get("sewa_forklift_amount"): ws.cell(row_idx, gstart + 3, o["sewa_forklift_amount"])
+            # Mode column: Air / Trucking / Konsul → grand_total value
+            mode = (o.get("mode") or "").strip()
+            if mode in ("Air", "Trucking", "Konsul"):
+                off = _ar_subcol_offset(grp_key, mode)
+                if off is not None:
+                    ws.cell(row_idx, gstart + off, o.get("grand_total"))
+
+        ws.cell(row_idx, 45, o.get("grand_total"))  # Amount (Exc VAT) — using grand_total
+        ws.cell(row_idx, 46, o.get("item_description"))  # Keterangan
+        ws.cell(row_idx, 47, o.get("tariff_per_kg"))     # Harga
+        ws.cell(row_idx, 48, o.get("goods_content"))     # List Muatan
+        ws.cell(row_idx, 49, o.get("received_asuransi_amount") or o.get("insurance_amount") or "")
+        ws.cell(row_idx, 50, inv_map.get(str(o["_id"]), ""))
+
+        # Number formatting & borders for data cells
+        for col in [12, 13, 14, 15, 16, 17, 45, 47, 49] + list(range(18, 45)):
+            cc = ws.cell(row_idx, col)
+            if cc.value is not None and isinstance(cc.value, (int, float)):
+                cc.number_format = "#,##0"
+        for col in range(1, 51):
+            ws.cell(row_idx, col).border = border
+        row_idx += 1
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"REPORT_AR_{month or 'ALL'}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# --- Invoice Excel matching Master INV format -------------------------------
+async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[dict]):
+    """Render a single invoice into the given worksheet using Master INV layout."""
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    bold = Font(bold=True, size=11)
+    bold_big = Font(bold=True, size=18)
+    italic = Font(italic=True, size=10)
+    thin = Side(border_style="thin", color="000000")
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Issuer company info — pull per-issuer settings
+    issuer = awb.get("company_name") or ""
+    settings = {s["key_name"]: s.get("key_value", "") async for s in db.settings.find({"key_name": {"$regex": "^(signer_|address_|npwp_|company_)"}})}
+    issuer_address = settings.get(f"address_{issuer}") or settings.get("company_address", "")
+    issuer_npwp = settings.get(f"npwp_{issuer}") or settings.get("company_npwp", "")
+    signer_name = settings.get(f"signer_{issuer}", "")
+
+    # Set column widths similar to template
+    widths = {"A": 2, "B": 4, "C": 11, "D": 10, "E": 6, "F": 6, "G": 12, "H": 4, "I": 6, "J": 6,
+              "K": 6, "L": 6, "M": 6, "N": 8, "O": 8, "P": 6, "Q": 3, "R": 9, "S": 5, "T": 5, "U": 9, "V": 5, "W": 4}
+    for k, v in widths.items(): ws.column_dimensions[k].width = v
+
+    # Title
+    ws.merge_cells("B6:W6")
+    c = ws["B6"]; c.value = "INVOICE"; c.font = bold_big; c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[6].height = 30
+
+    # Issuer block (B8-...)
+    ws["B8"] = issuer or "PT. Abirama Mitra"
+    ws["B8"].font = bold
+    ws.merge_cells("B9:H11")
+    ws["B9"] = issuer_address
+    ws["B9"].alignment = Alignment(wrap_text=True, vertical="top")
+
+    # Invoice meta (N-R)
+    ws["N8"] = "Invoice No"; ws["Q8"] = ":"
+    ws.merge_cells("R8:U8"); ws["R8"] = invoice.get("invoice_number", ""); ws["R8"].font = bold
+    ws["N9"] = "Date"; ws["Q9"] = ":"
+    ws.merge_cells("R9:U9"); ws["R9"] = (invoice.get("created_at") or datetime.now(timezone.utc)).replace(tzinfo=None)
+    ws["R9"].number_format = "yyyy-mm-dd"
+    # Due Date = +30 days
+    due = (invoice.get("created_at") or datetime.now(timezone.utc)).replace(tzinfo=None) + timedelta(days=30)
+    ws["N10"] = "Due Date"; ws["Q10"] = ":"
+    ws.merge_cells("R10:U10"); ws["R10"] = due; ws["R10"].number_format = "yyyy-mm-dd"
+
+    # Attn (from consignee)
+    attn = awb.get("consignee") or ""
+    ws["B13"] = "Attn :"; ws["C13"] = attn; ws["C13"].font = bold
+
+    # Customer block — Bill to
+    if customer:
+        ws["B14"] = customer.get("name", "")
+        ws["B14"].font = bold
+        ws["B15"] = customer.get("address", "")
+        ws["B15"].alignment = Alignment(wrap_text=True, vertical="top")
+
+    # Table header
+    ws.merge_cells("D17:S17"); ws["D17"] = "DESCRIPTION"; ws["D17"].font = bold; ws["D17"].alignment = Alignment(horizontal="center")
+    ws.merge_cells("T17:W17"); ws["T17"] = "AMOUNT"; ws["T17"].font = bold; ws["T17"].alignment = Alignment(horizontal="center")
+    ws["B17"] = "No"; ws["B17"].font = bold; ws["B17"].alignment = Alignment(horizontal="center")
+    for col in ["B", "C", "D", "T", "U"]:
+        ws[f"{col}17"].border = box
+
+    # Build line items
+    rows_items = []
+    main_desc_parts = [awb.get("item_description") or "Biaya Pengiriman Barang"]
+    if awb.get("armada"): main_desc_parts.append(awb["armada"])
+    if awb.get("service"): main_desc_parts.append(awb["service"])
+    rows_items.append({"desc": " - ".join([str(x) for x in main_desc_parts if x]), "amount": awb.get("total_tariff") or 0, "with_detail": True})
+
+    if (awb.get("received_asuransi_amount") or awb.get("insurance_amount")):
+        rows_items.append({"desc": "Asuransi", "amount": awb.get("received_asuransi_amount") or awb.get("insurance_amount") or 0})
+    if awb.get("received_polis") or awb.get("insurance_policy"):
+        rows_items.append({"desc": "Polis", "amount": 20000.0})  # nominal polis; could be field later
+    if awb.get("spsi_enabled") and awb.get("spsi_amount"):
+        rows_items.append({"desc": "SPSI", "amount": awb["spsi_amount"]})
+    if awb.get("sewa_forklift_enabled") and awb.get("sewa_forklift_amount"):
+        rows_items.append({"desc": "Sewa Forklift", "amount": awb["sewa_forklift_amount"]})
+
+    row = 19
+    for idx, it in enumerate(rows_items, 1):
+        ws[f"B{row}"] = f"{idx}."
+        ws.merge_cells(start_row=row, start_column=3, end_row=row, end_column=19)
+        ws.cell(row, 3, it["desc"])
+        ws.merge_cells(start_row=row, start_column=20, end_row=row, end_column=23)
+        ws.cell(row, 20, it["amount"]).number_format = "#,##0"
+        if it.get("with_detail"):
+            # Tanggal / Origin / Tujuan sub-rows
+            row += 1; ws[f"C{row}"] = "Tanggal"; ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=10); ws.cell(row, 7, (awb.get("created_at") or datetime.now(timezone.utc)).replace(tzinfo=None)).number_format = "yyyy-mm-dd"
+            row += 1; ws[f"C{row}"] = "Origin"; ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=10); ws.cell(row, 7, awb.get("origin", ""))
+            row += 1; ws[f"C{row}"] = "Tujuan"; ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=10); ws.cell(row, 7, awb.get("destination", ""))
+        row += 2
+
+    # Ref PO row
+    if awb.get("reff_no"):
+        ws[f"C{row}"] = "Ref. PO No."; ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=10); ws.cell(row, 7, awb["reff_no"])
+        row += 2
+
+    # Summary block (right side, O-W columns)
+    sub_total = awb.get("total_tariff") or 0
+    ppn_pct = awb.get("tax_percentage") or 0
+    ppn_amt = awb.get("tax_amount") or 0
+    asuransi = awb.get("received_asuransi_amount") or awb.get("insurance_amount") or 0
+    polis_amt = 20000.0 if (awb.get("received_polis") or awb.get("insurance_policy")) else 0
+    spsi = (awb.get("spsi_amount") or 0) if awb.get("spsi_enabled") else 0
+    forklift = (awb.get("sewa_forklift_amount") or 0) if awb.get("sewa_forklift_enabled") else 0
+    grand_total = sub_total + ppn_amt + asuransi + polis_amt + spsi + forklift
+
+    s_row = max(row + 1, 31)
+    def _sum(label_at, label, val):
+        ws[f"O{label_at}"] = label
+        ws[f"T{label_at}"] = "Rp."
+        ws.merge_cells(start_row=label_at, start_column=21, end_row=label_at, end_column=23)
+        ws.cell(label_at, 21, val).number_format = "#,##0"
+
+    _sum(s_row, "Jumlah", sub_total)
+    _sum(s_row + 1, f"   >> PPN {ppn_pct}%", ppn_amt)
+    _sum(s_row + 2, "Sub Total", sub_total + ppn_amt)
+    _sum(s_row + 3, "   >> Asuransi", asuransi)
+    _sum(s_row + 4, "   >> Polis", polis_amt)
+    if spsi: _sum(s_row + 5, "   >> SPSI", spsi)
+    if forklift: _sum(s_row + 5 + (1 if spsi else 0), "   >> Sewa Forklift", forklift)
+    last_sum = s_row + 5 + (1 if spsi else 0) + (1 if forklift else 0) + 1
+    _sum(last_sum, "TOTAL", grand_total); ws[f"O{last_sum}"].font = bold; ws[f"U{last_sum}"].font = bold
+
+    # Terbilang
+    ws[f"B{s_row + 1}"] = "Terbilang"; ws[f"B{s_row + 1}"].font = bold
+    ws.merge_cells(start_row=s_row + 3, start_column=3, end_row=s_row + 7, end_column=13)
+    ws.cell(s_row + 3, 3, _terbilang_id(int(grand_total)) + " Rupiah").alignment = Alignment(wrap_text=True, vertical="top")
+
+    # Signature block
+    sig_row = last_sum + 4
+    ws[f"P{sig_row}"] = "Jakarta,"
+    ws.merge_cells(start_row=sig_row, start_column=19, end_row=sig_row, end_column=22)
+    ws.cell(sig_row, 19, (invoice.get("created_at") or datetime.now(timezone.utc)).replace(tzinfo=None)).number_format = "yyyy-mm-dd"
+    ws.merge_cells(start_row=sig_row + 7, start_column=14, end_row=sig_row + 7, end_column=23)
+    ws.cell(sig_row + 7, 14, f"(  {signer_name or '...........................'}  )").alignment = Alignment(horizontal="center")
+
+def _terbilang_id(n: int) -> str:
+    """Simple Indonesian number-to-words."""
+    if n < 0: return "Minus " + _terbilang_id(-n)
+    angka = ["", "Satu", "Dua", "Tiga", "Empat", "Lima", "Enam", "Tujuh", "Delapan", "Sembilan",
+             "Sepuluh", "Sebelas"]
+    if n < 12:
+        return angka[n] if n > 0 else "Nol"
+    if n < 20: return _terbilang_id(n - 10) + " Belas"
+    if n < 100: return _terbilang_id(n // 10) + " Puluh" + ("" if n % 10 == 0 else " " + _terbilang_id(n % 10))
+    if n < 200: return "Seratus" + ("" if n == 100 else " " + _terbilang_id(n - 100))
+    if n < 1000: return _terbilang_id(n // 100) + " Ratus" + ("" if n % 100 == 0 else " " + _terbilang_id(n % 100))
+    if n < 2000: return "Seribu" + ("" if n == 1000 else " " + _terbilang_id(n - 1000))
+    if n < 1_000_000: return _terbilang_id(n // 1000) + " Ribu" + ("" if n % 1000 == 0 else " " + _terbilang_id(n % 1000))
+    if n < 1_000_000_000: return _terbilang_id(n // 1_000_000) + " Juta" + ("" if n % 1_000_000 == 0 else " " + _terbilang_id(n % 1_000_000))
+    return _terbilang_id(n // 1_000_000_000) + " Miliar" + ("" if n % 1_000_000_000 == 0 else " " + _terbilang_id(n % 1_000_000_000))
+
+
+async def _fetch_invoice_bundle(invoice_id: str):
+    inv = await db.invoices.find_one({"_id": _oid(invoice_id)})
+    if not inv: raise HTTPException(404, "Invoice tidak ditemukan")
+    awb = await db.awb_orders.find_one({"_id": inv["awb_id"]})
+    customer = await db.customers.find_one({"_id": awb["customer_id"]}) if awb else None
+    return inv, awb, customer
+
+
+@app.get("/api/exports/invoice/{invoice_id}")
+async def export_invoice(invoice_id: str, user: dict = Depends(get_current_user)):
+    inv, awb, customer = await _fetch_invoice_bundle(invoice_id)
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = (inv.get("invoice_number") or "Invoice")[-31:]
+    await _build_invoice_sheet(ws, inv, awb, customer)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f"Invoice_{inv.get('invoice_number', invoice_id)}.xlsx"
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+class BulkExportIn(BaseModel):
+    invoice_ids: List[str]
+
+@app.post("/api/exports/invoices/bulk")
+async def export_invoices_bulk(data: BulkExportIn, user: dict = Depends(get_current_user)):
+    if not data.invoice_ids: raise HTTPException(400, "invoice_ids kosong")
+    wb = openpyxl.Workbook()
+    # Remove default sheet
+    wb.remove(wb.active)
+    count = 0
+    for iid in data.invoice_ids:
+        try:
+            inv, awb, customer = await _fetch_invoice_bundle(iid)
+            sname = (inv.get("invoice_number") or iid)[-31:].replace("/", "-")
+            ws = wb.create_sheet(title=sname)
+            await _build_invoice_sheet(ws, inv, awb, customer)
+            count += 1
+        except Exception:
+            continue
+    if count == 0: raise HTTPException(400, "Tidak ada invoice valid")
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f"Invoice_Bulk_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'})

@@ -40,10 +40,17 @@ export default function Settings() {
 
   const tax = rows.filter((r) => r.key_name.startsWith("tax_ppn"));
   const company = rows.filter((r) => r.key_name.startsWith("company_"));
+  const issuerKeys = rows.filter((r) => r.key_name.startsWith("signer_") || r.key_name.startsWith("address_") || r.key_name.startsWith("npwp_"));
 
   const labelMap = {
-    company_name: "Nama Perusahaan", company_npwp: "NPWP Perusahaan", company_address: "Alamat Perusahaan",
-    tax_ppn_0: "PPN 0%", tax_ppn_11: "PPN 11%", tax_ppn_12: "PPN 12%",
+    company_name: "Nama Perusahaan (Default)", company_npwp: "NPWP Perusahaan (Default)", company_address: "Alamat Perusahaan (Default)",
+    tax_ppn_0: "PPN 0%", tax_ppn_1: "PPN 1%", tax_ppn_11: "PPN 11%", tax_ppn_12: "PPN 12%",
+  };
+  const issuerLabel = (key) => {
+    if (key.startsWith("signer_")) return `Penandatangan — ${key.slice(7)}`;
+    if (key.startsWith("address_")) return `Alamat — ${key.slice(8)}`;
+    if (key.startsWith("npwp_")) return `NPWP — ${key.slice(5)}`;
+    return key;
   };
 
   const renderRow = (r) => (
@@ -97,11 +104,36 @@ export default function Settings() {
         </Table>
       </Card>
 
-      <Card>
-        <div className="px-4 py-3 border-b border-slate-200"><h3 className="font-bold">Profil Perusahaan</h3></div>
+      <Card className="mb-5">
+        <div className="px-4 py-3 border-b border-slate-200"><h3 className="font-bold">Profil Perusahaan (Default)</h3></div>
         <Table>
           <thead><tr><Th>Key</Th><Th>Label</Th><Th>Nilai</Th><Th></Th></tr></thead>
           <tbody>{company.map(renderRow)}</tbody>
+        </Table>
+      </Card>
+
+      <Card>
+        <div className="px-4 py-3 border-b border-slate-200">
+          <h3 className="font-bold">Per Issuer — Signer / Alamat / NPWP</h3>
+          <p className="text-xs text-slate-500 mt-1">Setting per Perusahaan Issuer (PT. Abirama Mitra Pradana / Pratama) untuk dipakai di Invoice Excel.</p>
+        </div>
+        <Table>
+          <thead><tr><Th>Key</Th><Th>Label</Th><Th>Nilai</Th><Th></Th></tr></thead>
+          <tbody>
+            {issuerKeys.map((r) => (
+              <tr key={r.key_name}>
+                <Td className="font-mono text-[10px]">{r.key_name}</Td>
+                <Td>{issuerLabel(r.key_name)}</Td>
+                <Td>
+                  <Input data-testid={`setting-${r.key_name}`} value={edited[r.key_name] ?? r.key_value} onChange={(e) => setEdited({ ...edited, [r.key_name]: e.target.value })}/>
+                </Td>
+                <Td className="text-right">
+                  <Button variant="secondary" onClick={() => save(r.key_name)} disabled={!(r.key_name in edited)}><Save size={14}/> Simpan</Button>
+                </Td>
+              </tr>
+            ))}
+            {issuerKeys.length === 0 && <tr><Td colSpan={4} className="text-center text-slate-500 py-6">Belum ada setting per issuer.</Td></tr>}
+          </tbody>
         </Table>
       </Card>
     </div>

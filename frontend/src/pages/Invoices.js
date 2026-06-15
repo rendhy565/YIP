@@ -6,7 +6,6 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
 import { FileText, Printer, FilePlus2, Download, CheckSquare, Square, FileSignature } from "lucide-react";
-import * as XLSX from "xlsx";
 
 export default function Invoices() {
   const { user } = useAuth();
@@ -54,62 +53,26 @@ export default function Invoices() {
   const bulkExport = async () => {
     const ids = selectedInv.size > 0 ? Array.from(selectedInv) : invoices.map((i) => i.id);
     if (ids.length === 0) { toast.error("Tidak ada invoice"); return; }
-
-    const buildSheetData = (invoice, awb, customer, company) => ([
-      ["LAMPIRAN INVOICE", ""],
-      ["No. Invoice", invoice.invoice_number],
-      ["Tanggal", fmtDate(invoice.created_at)],
-      [],
-      ["Penerbit", company.name],
-      ["NPWP", company.npwp],
-      ["Alamat", company.address],
-      [],
-      ["Customer", customer?.name || ""],
-      ["NPWP Customer", customer?.npwp || ""],
-      ["Alamat Customer", customer?.address || ""],
-      [],
-      ["No. AWB", awb.awb_number],
-      ["Origin", awb.origin],
-      ["Destination", awb.destination],
-      ["Item", awb.item_description],
-      ["Goods Content", awb.goods_content],
-      ["Qty (Kg)", awb.qty_kg],
-      ["Tarif/Kg (IDR)", awb.tariff_per_kg],
-      ["Total Tarif (IDR)", awb.total_tariff],
-      [`PPN ${awb.tax_percentage}%`, awb.tax_amount],
-      ["Grand Total (IDR)", awb.grand_total],
-    ]);
-
-    if (ids.length === 1) {
-      try {
-        const r = await api.get(`/invoices/${ids[0]}/full`);
-        const { invoice, awb, customer, company } = r.data;
-        const ws = XLSX.utils.aoa_to_sheet(buildSheetData(invoice, awb, customer, company));
-        ws["!cols"] = [{ wch: 24 }, { wch: 36 }];
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Lampiran");
-        XLSX.writeFile(wb, `Lampiran_${invoice.invoice_number}.xlsx`);
-        toast.success(`Lampiran ${invoice.invoice_number} ter-export`);
-      } catch (e) { toast.error(errMsg(e)); }
-      return;
-    }
-
-    const wb = XLSX.utils.book_new();
-    let count = 0;
-    for (const id of ids) {
-      try {
-        const r = await api.get(`/invoices/${id}/full`);
-        const { invoice, awb, customer, company } = r.data;
-        const ws = XLSX.utils.aoa_to_sheet(buildSheetData(invoice, awb, customer, company));
-        ws["!cols"] = [{ wch: 24 }, { wch: 36 }];
-        const sheetName = invoice.invoice_number.slice(0, 31);
-        XLSX.utils.book_append_sheet(wb, ws, sheetName);
-        count++;
-      } catch (e) { /* skip */ }
-    }
-    if (count === 0) { toast.error("Tidak ada data terexport"); return; }
-    XLSX.writeFile(wb, `Lampiran_Bulk_${new Date().toISOString().slice(0, 10)}.xlsx`);
-    toast.success(`Bulk Lampiran ter-export (${count} tab)`);
+    try {
+      if (ids.length === 1) {
+        const r = await api.get(`/exports/invoice/${ids[0]}`, { responseType: "blob" });
+        const url = window.URL.createObjectURL(new Blob([r.data]));
+        const inv = invoices.find((i) => i.id === ids[0]);
+        const a = document.createElement("a"); a.href = url;
+        a.download = `Invoice_${inv?.invoice_number || ids[0]}.xlsx`;
+        document.body.appendChild(a); a.click(); a.remove();
+        window.URL.revokeObjectURL(url);
+        toast.success("Invoice ter-export");
+      } else {
+        const r = await api.post(`/exports/invoices/bulk`, { invoice_ids: ids }, { responseType: "blob" });
+        const url = window.URL.createObjectURL(new Blob([r.data]));
+        const a = document.createElement("a"); a.href = url;
+        a.download = `Invoice_Bulk_${new Date().toISOString().slice(0, 10)}.xlsx`;
+        document.body.appendChild(a); a.click(); a.remove();
+        window.URL.revokeObjectURL(url);
+        toast.success(`Bulk export ${ids.length} invoice`);
+      }
+    } catch (e) { toast.error(errMsg(e)); }
   };
 
   const bulkPrintPdf = () => {
@@ -182,7 +145,7 @@ export default function Invoices() {
               <Printer size={14}/> Print to PDF ({selectedInv.size || invoices.length})
             </Button>
             <Button data-testid="bulk-export-btn" variant="secondary" onClick={bulkExport} disabled={invoices.length === 0}>
-              <Download size={14}/> Bulk Export ({selectedInv.size || invoices.length})
+              <Download size={14}/> Export Excel ({selectedInv.size || invoices.length})
             </Button>
           </div>
         </div>

@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircle, Edit3, Save, X } from "lucide-react";
+import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircle, Edit3, Save, X, FileSpreadsheet } from "lucide-react";
 
 function todayStr() {
   const d = new Date();
@@ -178,7 +178,23 @@ export default function Recap() {
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </div>
-          <div className="ml-auto">
+          <div className="ml-auto flex gap-2">
+            <Button data-testid="export-report-ar-btn" variant="secondary" onClick={async () => {
+              try {
+                const params = {};
+                if (month) params.month = month;
+                if (customerId) params.customer_id = customerId;
+                const r = await api.get("/exports/report-ar", { params, responseType: "blob" });
+                const url = window.URL.createObjectURL(new Blob([r.data]));
+                const a = document.createElement("a"); a.href = url;
+                a.download = `REPORT_AR_${month || "ALL"}.xlsx`;
+                document.body.appendChild(a); a.click(); a.remove();
+                window.URL.revokeObjectURL(url);
+                toast.success("Report AR ter-export");
+              } catch (e) { toast.error(errMsg(e)); }
+            }}>
+              <FileSpreadsheet size={16}/> Export Report AR
+            </Button>
             <Button data-testid="reconcile-selected-btn" onClick={reconcileSelected} disabled={readyRows.length === 0}>
               <Download size={16}/> Reconcile {selected.size > 0 ? `(${selected.size} dipilih)` : `(${readyRows.length} ready)`}
             </Button>
