@@ -17,7 +17,8 @@ const NAV = [
   { to: "/orders/new", label: "Input Order", icon: PackagePlus, perm: "orders_input" },
   { to: "/orders", label: "Daftar AWB", icon: ListChecks, perm: "orders_list" },
   { to: "/recap", label: "Rekap & Rekonsiliasi", icon: FileSpreadsheet, perm: "recap" },
-  { to: "/invoices", label: "Invoice", icon: FileText, perm: "invoices" },
+  { to: "/invoices", label: "Buat Invoice", icon: FileText, perm: "invoices" },
+  { to: "/invoices/created", label: "Invoice Tercetak", icon: FileText, perm: "invoices" },
   { to: "/payments", label: "Pembayaran", icon: BadgeDollarSign, perm: "payments" },
 
   { type: "section", label: "Biaya" },

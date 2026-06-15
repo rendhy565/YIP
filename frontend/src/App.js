@@ -37,6 +37,7 @@ import BankReconciliation from "./pages/BankReconciliation";
 import ImportExcel from "./pages/ImportExcel";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import PanjarKerja from "./pages/PanjarKerja";
+import InvoicesCreated from "./pages/InvoicesCreated";
 
 function Protected({ children, roles }) {
   const { user } = useAuth();
@@ -74,6 +75,7 @@ export default function App() {
             <Route path="/accrue" element={<Protected roles={["finance"]}><Shell><AccrueSettlement /></Shell></Protected>} />
             <Route path="/recap" element={<Protected roles={["operation"]}><Shell><Recap /></Shell></Protected>} />
             <Route path="/invoices" element={<Protected><Shell><Invoices /></Shell></Protected>} />
+            <Route path="/invoices/created" element={<Protected><Shell><InvoicesCreated /></Shell></Protected>} />
             <Route path="/invoices/:id/print" element={<Protected><InvoicePrint /></Protected>} />
             <Route path="/payments" element={<Protected roles={["finance"]}><Shell><Payments /></Shell></Protected>} />
             <Route path="/fixed-costs" element={<Protected roles={["finance"]}><Shell><FixedCosts /></Shell></Protected>} />

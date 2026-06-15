@@ -28,7 +28,7 @@ export default function OrdersList() {
   const [recvForm, setRecvForm] = useState({
     received_date: todayStr(),
     received_by_name: "",
-    polis: "",
+    polis_amount: "",
     asuransi_amount: "",
     spsi_enabled: false,
     spsi_amount: "",
@@ -70,7 +70,7 @@ export default function OrdersList() {
     setRecvForm({
       received_date: todayStr(),
       received_by_name: r.consignee || "",
-      polis: r.insurance_policy || "",
+      polis_amount: r.polis_amount ? String(r.polis_amount) : "",
       asuransi_amount: r.insurance_amount ? String(r.insurance_amount) : "",
       spsi_enabled: false,
       spsi_amount: "",
@@ -87,6 +87,7 @@ export default function OrdersList() {
     try {
       const payload = {
         ...recvForm,
+        polis_amount: recvForm.polis_amount !== "" ? parseFloat(recvForm.polis_amount) : null,
         asuransi_amount: recvForm.asuransi_amount !== "" ? parseFloat(recvForm.asuransi_amount) : null,
         spsi_amount: recvForm.spsi_enabled && recvForm.spsi_amount !== "" ? parseFloat(recvForm.spsi_amount) : null,
         sewa_forklift_amount: recvForm.sewa_forklift_enabled && recvForm.sewa_forklift_amount !== "" ? parseFloat(recvForm.sewa_forklift_amount) : null,
@@ -202,17 +203,18 @@ export default function OrdersList() {
                 <Input data-testid="receive-name" value={recvForm.received_by_name} onChange={(e) => setRecvForm({ ...recvForm, received_by_name: e.target.value })} required placeholder="Nama orang yang menerima"/>
               </div>
               <div>
-                <Label>Polis</Label>
-                <Input data-testid="receive-polis" value={recvForm.polis} onChange={(e) => setRecvForm({ ...recvForm, polis: e.target.value })} placeholder={recvFor.insurance_policy || "No polis (auto dari order)"}/>
+                <Label>Nilai Polis (IDR)</Label>
+                <Input data-testid="receive-polis-amount" type="number" step="0.01" value={recvForm.polis_amount} onChange={(e) => setRecvForm({ ...recvForm, polis_amount: e.target.value })} placeholder={recvFor.polis_amount ? String(recvFor.polis_amount) : "0 (penambah total invoice)"}/>
               </div>
               <div>
                 <Label>Nilai Asuransi (IDR)</Label>
-                <Input data-testid="receive-asuransi" type="number" step="0.01" value={recvForm.asuransi_amount} onChange={(e) => setRecvForm({ ...recvForm, asuransi_amount: e.target.value })} placeholder={recvFor.insurance_amount ? String(recvFor.insurance_amount) : "0"}/>
+                <Input data-testid="receive-asuransi" type="number" step="0.01" value={recvForm.asuransi_amount} onChange={(e) => setRecvForm({ ...recvForm, asuransi_amount: e.target.value })} placeholder={recvFor.insurance_amount ? String(recvFor.insurance_amount) : "0 (penambah total invoice)"}/>
               </div>
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-200">
               <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Biaya Tambahan</h4>
+              <p className="text-[11px] text-slate-500 mb-2">Nilai SPSI & Sewa Forklift otomatis tersimpan sebagai <strong>cost (Operational)</strong> di AWB ini dan akan tampil rinci di invoice.</p>
               <div className="space-y-2">
                 <div className="flex items-center gap-3">
                   <label className="inline-flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">

@@ -102,9 +102,9 @@ export default function Contracts() {
                   <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Via</label>
                   <Select data-testid="contract-via-select" value={form.via} onChange={(e) => setForm({ ...form, via: e.target.value })}>
                     <option value="">— Pilih —</option>
-                    <option value="D">D — Darat</option>
-                    <option value="L">L — Laut</option>
-                    <option value="U">U — Udara</option>
+                    <option value="D">Darat</option>
+                    <option value="L">Laut</option>
+                    <option value="U">Udara</option>
                   </Select>
                 </div>
                 <div>

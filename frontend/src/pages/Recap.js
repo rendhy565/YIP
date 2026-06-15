@@ -19,6 +19,7 @@ export default function Recap() {
   const [month, setMonth] = useState(""); // empty = semua bulan
   const [customerId, setCustomerId] = useState("");
   const [selected, setSelected] = useState(new Set());
+  const [selectedReconciled, setSelectedReconciled] = useState(new Set());
 
   // Edit modal state
   const [editRow, setEditRow] = useState(null);
@@ -51,6 +52,7 @@ export default function Recap() {
     }
     setCostMap(cmap);
     setSelected(new Set());
+    setSelectedReconciled(new Set());
   };
 
   useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); }, []);
@@ -90,6 +92,23 @@ export default function Recap() {
     if (!window.confirm("Kembalikan AWB ini ke status Open?")) return;
     try { await api.post(`/orders/${id}/revert-to-open`); toast.success("Direvert ke Open"); load(); }
     catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const toggleRec = (id) => {
+    const n = new Set(selectedReconciled); n.has(id) ? n.delete(id) : n.add(id); setSelectedReconciled(n);
+  };
+  const toggleAllRec = () => {
+    if (selectedReconciled.size === reconciledRows.length) setSelectedReconciled(new Set());
+    else setSelectedReconciled(new Set(reconciledRows.map((r) => r.id)));
+  };
+  const bulkRevert = async () => {
+    if (selectedReconciled.size === 0) { toast.error("Pilih minimal 1 AWB"); return; }
+    if (!window.confirm(`Reject ${selectedReconciled.size} AWB kembali ke Open?`)) return;
+    try {
+      const r = await api.post("/orders/bulk-revert-to-open", { awb_ids: Array.from(selectedReconciled) });
+      toast.success(`${r.data.updated} AWB direvert ke Open`);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
   };
 
   const openEdit = (r) => {
@@ -300,19 +319,34 @@ export default function Recap() {
 
       {/* TABLE 3: Already Reconciled */}
       <Card>
-        <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <Undo2 size={16} className="text-amber-600"/>
           <h3 className="font-bold">Sudah Reconciled — Tangani Reject</h3>
           <span className="text-xs text-slate-500 ml-2">{reconciledRows.length} baris</span>
+          <div className="ml-auto">
+            <Button data-testid="bulk-revert-btn" variant="secondary" onClick={bulkRevert} disabled={selectedReconciled.size === 0}>
+              <Undo2 size={14}/> Reject {selectedReconciled.size > 0 ? `(${selectedReconciled.size})` : "(pilih dulu)"} → Open
+            </Button>
+          </div>
         </div>
         <Table>
           <thead><tr>
+            <Th>
+              <button onClick={toggleAllRec}>
+                {selectedReconciled.size === reconciledRows.length && reconciledRows.length > 0 ? <CheckSquare size={14}/> : <Square size={14}/>}
+              </button>
+            </Th>
             <Th>AWB</Th><Th>Tanggal</Th><Th>Customer</Th><Th>Rute</Th>
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
             {reconciledRows.map((r) => (
               <tr key={r.id} data-testid={`reconciled-row-${r.id}`}>
+                <Td>
+                  <button data-testid={`reconciled-toggle-${r.id}`} onClick={() => toggleRec(r.id)}>
+                    {selectedReconciled.has(r.id) ? <CheckSquare size={14} className="text-blue-700"/> : <Square size={14} className="text-slate-400"/>}
+                  </button>
+                </Td>
                 <Td className="font-mono font-semibold">{r.awb_number}</Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
                 <Td>{r.customer_name}</Td>
@@ -321,12 +355,12 @@ export default function Recap() {
                 <Td><StatusBadge status={r.status}/></Td>
                 <Td className="text-right">
                   <Button data-testid={`revert-btn-${r.id}`} variant="secondary" onClick={() => revert(r.id)}>
-                    <Undo2 size={14}/> Reject → Open
+                    <Undo2 size={14}/> Reject
                   </Button>
                 </Td>
               </tr>
             ))}
-            {reconciledRows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-8">Tidak ada AWB Reconciled.</Td></tr>}
+            {reconciledRows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-8">Tidak ada AWB Reconciled.</Td></tr>}
           </tbody>
         </Table>
       </Card>
@@ -357,7 +391,7 @@ export default function Recap() {
                 <Label>Via</Label>
                 <Select value={editForm.via} onChange={(e) => setEditForm({ ...editForm, via: e.target.value })}>
                   <option value="">—</option>
-                  <option value="D">D — Darat</option><option value="L">L — Laut</option><option value="U">U — Udara</option>
+                  <option value="D">Darat</option><option value="L">Laut</option><option value="U">Udara</option>
                 </Select>
               </div>
               <div>

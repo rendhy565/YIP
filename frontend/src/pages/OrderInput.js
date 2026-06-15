@@ -23,9 +23,9 @@ const COMPANY_OPTIONS = [
 
 const SERVICE_OPTIONS = ["LCL", "FCL", "LTL", "FTL", "AIR"];
 const VIA_OPTIONS = [
-  { value: "D", label: "D — Darat" },
-  { value: "L", label: "L — Laut" },
-  { value: "U", label: "U — Udara" },
+  { value: "D", label: "Darat" },
+  { value: "L", label: "Laut" },
+  { value: "U", label: "Udara" },
 ];
 const STATUS_PENGIRIMAN = ["", "Reguler", "Project"];
 
@@ -69,7 +69,7 @@ export default function OrderInput() {
     driver_name: "",
     nopol: "",
     insurance_enabled: false,
-    insurance_policy: "",
+    polis_amount: "",
     insurance_amount: "",
   });
 
@@ -110,9 +110,11 @@ export default function OrderInput() {
   const tariff = parseFloat(form.tariff_per_kg) || 0;
   const qty = parseFloat(form.qty_kg) || 0;
   const taxPct = parseFloat(form.tax_percentage) || 0;
+  const polisAmt = form.insurance_enabled ? (parseFloat(form.polis_amount) || 0) : 0;
+  const insAmt = form.insurance_enabled ? (parseFloat(form.insurance_amount) || 0) : 0;
   const totalTariff = useMemo(() => tariff * qty, [tariff, qty]);
   const taxAmt = useMemo(() => (totalTariff * taxPct) / 100, [totalTariff, taxPct]);
-  const grandTotal = useMemo(() => totalTariff + taxAmt, [totalTariff, taxAmt]);
+  const grandTotal = useMemo(() => totalTariff + taxAmt + polisAmt + insAmt, [totalTariff, taxAmt, polisAmt, insAmt]);
   const contractLocked = !!form.contract_id;
 
   const submit = async (e) => {
@@ -124,6 +126,7 @@ export default function OrderInput() {
         qty_kg: qty,
         tax_percentage: taxPct,
         koli_count: form.koli_count === "" ? null : parseInt(form.koli_count, 10),
+        polis_amount: form.insurance_enabled && form.polis_amount !== "" ? parseFloat(form.polis_amount) : null,
         insurance_amount: form.insurance_enabled && form.insurance_amount !== "" ? parseFloat(form.insurance_amount) : null,
         contract_id: form.contract_id || null,
       };
@@ -350,8 +353,8 @@ export default function OrderInput() {
             {form.insurance_enabled && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <Label>No. Polis</Label>
-                  <Input data-testid="insurance-policy" value={form.insurance_policy} onChange={(e) => setForm({ ...form, insurance_policy: e.target.value })} placeholder="Nomor polis"/>
+                  <Label>Nilai Polis (IDR)</Label>
+                  <Input data-testid="polis-amount" type="number" step="0.01" value={form.polis_amount} onChange={(e) => setForm({ ...form, polis_amount: e.target.value })} placeholder="0"/>
                 </div>
                 <div>
                   <Label>Nilai Asuransi (IDR)</Label>
@@ -380,6 +383,18 @@ export default function OrderInput() {
               <span className="text-slate-500">PPN ({taxPct}%)</span>
               <span data-testid="calc-tax-amount" className="font-semibold">{fmtIDR(taxAmt)}</span>
             </div>
+            {polisAmt > 0 && (
+              <div className="flex justify-between border-b border-slate-100 pb-2">
+                <span className="text-slate-500">Polis</span>
+                <span className="font-semibold">{fmtIDR(polisAmt)}</span>
+              </div>
+            )}
+            {insAmt > 0 && (
+              <div className="flex justify-between border-b border-slate-100 pb-2">
+                <span className="text-slate-500">Asuransi</span>
+                <span className="font-semibold">{fmtIDR(insAmt)}</span>
+              </div>
+            )}
             <div className="flex justify-between pt-2 border-t-2 border-slate-900">
               <span className="font-bold uppercase text-xs tracking-wider">Grand Total</span>
               <span data-testid="calc-grand-total" className="font-heading font-black text-lg text-blue-700">{fmtIDR(grandTotal)}</span>

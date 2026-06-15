@@ -40,16 +40,35 @@ export default function Settings() {
 
   const tax = rows.filter((r) => r.key_name.startsWith("tax_ppn"));
   const company = rows.filter((r) => r.key_name.startsWith("company_"));
-  const issuerKeys = rows.filter((r) => r.key_name.startsWith("signer_") || r.key_name.startsWith("address_") || r.key_name.startsWith("npwp_"));
+  const issuerKeys = rows.filter((r) => (r.key_name.startsWith("signer_") || r.key_name.startsWith("address_") || r.key_name.startsWith("npwp_") || r.key_name.startsWith("bank_")));
+  const logoRow = rows.find((r) => r.key_name === "invoice_logo_b64");
+
+  const uploadLogo = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { toast.error("Logo > 2MB"); return; }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        await api.post("/settings/invoice-logo", { image_b64: reader.result });
+        toast.success("Logo tersimpan");
+        load();
+      } catch (e2) { toast.error(errMsg(e2)); }
+    };
+    reader.readAsDataURL(file);
+  };
 
   const labelMap = {
     company_name: "Nama Perusahaan (Default)", company_npwp: "NPWP Perusahaan (Default)", company_address: "Alamat Perusahaan (Default)",
-    tax_ppn_0: "PPN 0%", tax_ppn_1: "PPN 1%", tax_ppn_11: "PPN 11%", tax_ppn_12: "PPN 12%",
+    tax_ppn_0: "PPN 0%", tax_ppn_1: "PPN 1%", tax_ppn_11: "PPN 11%",
   };
   const issuerLabel = (key) => {
     if (key.startsWith("signer_")) return `Penandatangan — ${key.slice(7)}`;
     if (key.startsWith("address_")) return `Alamat — ${key.slice(8)}`;
     if (key.startsWith("npwp_")) return `NPWP — ${key.slice(5)}`;
+    if (key.startsWith("bank_name_")) return `Bank Name — ${key.slice(10)}`;
+    if (key.startsWith("bank_holder_")) return `Bank A/N — ${key.slice(12)}`;
+    if (key.startsWith("bank_account_")) return `Bank A/C — ${key.slice(13)}`;
     return key;
   };
 
@@ -112,9 +131,31 @@ export default function Settings() {
         </Table>
       </Card>
 
+      <Card className="mb-5">
+        <div className="px-4 py-3 border-b border-slate-200">
+          <h3 className="font-bold">Logo Invoice</h3>
+          <p className="text-xs text-slate-500 mt-1">Logo dipakai di Excel invoice template. Max 2MB, format PNG/JPG.</p>
+        </div>
+        <div className="p-4 flex items-start gap-6">
+          <div className="w-48 h-32 bg-slate-50 border-2 border-dashed border-slate-300 rounded flex items-center justify-center overflow-hidden" data-testid="logo-preview">
+            {logoRow?.key_value ? (
+              <img src={logoRow.key_value.startsWith("data:") ? logoRow.key_value : `data:image/png;base64,${logoRow.key_value}`} alt="Logo" className="max-w-full max-h-full"/>
+            ) : (
+              <span className="text-xs text-slate-400">Belum ada logo</span>
+            )}
+          </div>
+          <div className="flex-1">
+            <label className="inline-block">
+              <input data-testid="logo-upload-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadLogo} className="block w-full text-xs file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-blue-600 file:text-white file:font-bold file:cursor-pointer hover:file:bg-blue-700"/>
+            </label>
+            <p className="text-[11px] text-slate-500 mt-2">Logo akan muncul di pojok kiri atas invoice Excel di atas banner "INVOICE".</p>
+          </div>
+        </div>
+      </Card>
+
       <Card>
         <div className="px-4 py-3 border-b border-slate-200">
-          <h3 className="font-bold">Per Issuer — Signer / Alamat / NPWP</h3>
+          <h3 className="font-bold">Per Issuer — Signer / Alamat / NPWP / Bank</h3>
           <p className="text-xs text-slate-500 mt-1">Setting per Perusahaan Issuer (PT. Abirama Mitra Pradana / Pratama) untuk dipakai di Invoice Excel.</p>
         </div>
         <Table>
