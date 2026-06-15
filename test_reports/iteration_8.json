@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration-10 FRONTEND e2e PASS. All 9 review items verified end-to-end via Playwright against the live preview URL (https://arc-staging-1.preview.emergentagent.com/arc/). Order creation with Polis/Asuransi + PPN1% gave Grand Total Rp 221.000 exactly as expected. Bulk-revert flow, Invoices split (creation vs tercetak), Receive modal with numeric polis + SPSI/Forklift conditional fields, Panjar settle with 3-AWB breakdown (200k/200k/100k=500k balanced green banner), Settings logo+bank fields, and sidebar 'Buat Invoice'+'Invoice Tercetak' all functioning correctly.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": [
+    "OrderInput Via dropdown shows Darat/Laut/Udara (no D-/L-/U- prefix) — confirmed via DOM inspection of order-via-select options",
+    "OrderInput PPN dropdown shows only PPN 0%/1%/11% — no PPN 12% — also confirmed on Settings page (tax_ppn_0/1/11 only)",
+    "Insurance Yes toggle reveals polis-amount (type=number) AND insurance-amount (type=number) — both numeric inputs",
+    "Calc panel renders 'Polis Rp 20.000' and 'Asuransi Rp 100.000' as separate lines added to Grand Total",
+    "Created order ITER10-TEST-1781566793 with tariff 10000 x 10 + PPN1% + polis 20k + asuransi 100k => calc-grand-total = Rp 221.000 (correct: 100000+1000+20000+100000)",
+    "Submit produced toast 'AWB ITER10-TEST-1781566793 berhasil dibuat' and navigated to /arc/orders",
+    "Recap page: bulk-revert-btn initially disabled (text 'Reject (pilih dulu) → Open'), enables to 'Reject (2) → Open' after selecting 2 reconciled-toggle-{id} checkboxes; clicking + confirming JS dialog produced toast '2 AWB direvert ke Open'",
+    "Invoices page (/arc/invoices) shows title 'Pembuatan Invoice' + goto-invoices-created-btn linking to /arc/invoices/created",
+    "InvoicesCreated page contains invoices-created-page wrapper + invoice-search + invoice-customer-filter + export-report-ar-from-invoices-btn + export-invoice-excel-btn + bulk-print-pdf-btn — all rendered and search filter narrows rows (search '0036' → 2 rows down from 36)",
+    "Receive modal opens via receive-btn-{awb}; receive-polis-amount has type=number; receive-spsi-check + receive-forklift-check toggles reveal receive-spsi-amount/receive-forklift-amount fields conditionally",
+    "Panjar settle modal (settle-panjar-PNJ-202606-0012) renders breakdown table with breakdown-row-0/1/2, breakdown-awb-{idx}, breakdown-amount-{idx}, breakdown-desc-{idx}. '+ Baris' adds rows. With 3 AWBs at 200k/200k/100k=500k balance, banner shows 'Total Settle: Rp 500.000 / Rp 500.000' green. confirm-settle-panjar succeeded; toast 'Panjar PNJ-202606-0012 disettle ke 3 AWB'; row updated to Settled with breakdown column listing the 3 AWBs",
+    "Settings page (admin) has logo-preview + logo-upload-input (type=file). Per-issuer bank rows present for BOTH issuers: setting-bank_name_PT. Abirama Mitra Pradana/Pratama, setting-bank_holder_*, setting-bank_account_* (6 fields total — matches spec)",
+    "Sidebar: nav--invoices ('Buat Invoice' → /arc/invoices) and nav--invoices-created ('Invoice Tercetak' → /arc/invoices/created) both present"
+  ],
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "All required data-testid attributes present and correctly named — testability is excellent.",
+    "Bulk-revert confirmation uses native window.confirm (handled by Playwright dialog handler). Acceptable but a custom shadcn AlertDialog would be more consistent with the rest of the app.",
+    "Receive modal does not use role='dialog' wrapper — query_selector('[role=\"dialog\"]') returns null. Still functions correctly because elements render inline. Consider adding role='dialog' for a11y."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not tested (frontend-only per request)", "frontend": "100% (9/9 review items verified)"},
+  "test_credentials": "admin/admin123, operation/operation123, finance/finance123 — all working",
+  "seed_data_creation": "Created 1 new order (AWB=ITER10-TEST-1781566793, Grand Total Rp 221.000, polis=20k, asuransi=100k) via the operation user. Settled panjar PNJ-202606-0012 (Rp 500k → 3 AWB breakdown: AWB-202606-0099 Rp 200k + AWB-202606-0096 Rp 200k + TEST-UNIQ-B2B32B Rp 100k). Reverted 2 reconciled AWBs back to Open via bulk-revert.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration-10 frontend changes are FULLY functional. Backend was 17/17 PASS in iter-7 and frontend integration is now also 100% green. No follow-up testing required unless main agent ships new changes. Note: invoice-search filter narrows by AWB+invoice_number combined — '0036' returns 2 rows because it matches both invoice number suffix and AWB number suffix; this is expected behavior.",
+  "rca_of_the_issue": "n/a — no bugs found in iteration-10 frontend work."
+}

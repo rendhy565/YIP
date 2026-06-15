@@ -468,6 +468,7 @@ async def seed_data():
             )
 
     # Tax settings (default 0/1/11). PPN 12 dipensiunkan per request user iter-10.
+    await db.settings.delete_many({"key_name": "tax_ppn_12"})  # migrate: drop legacy if present
     for key, val in [("tax_ppn_0", "0"), ("tax_ppn_1", "1"), ("tax_ppn_11", "11")]:
         await db.settings.update_one(
             {"key_name": key},
