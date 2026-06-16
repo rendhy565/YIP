@@ -21,6 +21,18 @@ export default function Recap() {
   const [selected, setSelected] = useState(new Set());
   const [selectedReconciled, setSelectedReconciled] = useState(new Set());
 
+  // Per-table search bars (selection preserved across filter)
+  const [qNoCost, setQNoCost] = useState("");
+  const [qReady, setQReady] = useState("");
+  const [qReconciled, setQReconciled] = useState("");
+
+  // helper: filter rows by AWB or customer name
+  const matchQ = (r, q) => {
+    if (!q) return true;
+    const s = q.toLowerCase();
+    return `${r.awb_number || ""} ${r.customer_name || ""} ${r.consignee || ""} ${r.reff_no || ""}`.toLowerCase().includes(s);
+  };
+
   // Edit modal state
   const [editRow, setEditRow] = useState(null);
   const [editForm, setEditForm] = useState({});
@@ -69,6 +81,11 @@ export default function Recap() {
     }
     return { readyRows: ready, noCostRows: noCost };
   }, [openRows, costMap]);
+
+  // Filtered views (selection preserved on un-filtered sets)
+  const noCostFiltered = useMemo(() => noCostRows.filter((r) => matchQ(r, qNoCost)), [noCostRows, qNoCost]);
+  const readyFiltered = useMemo(() => readyRows.filter((r) => matchQ(r, qReady)), [readyRows, qReady]);
+  const reconciledFiltered = useMemo(() => reconciledRows.filter((r) => matchQ(r, qReconciled)), [reconciledRows, qReconciled]);
 
   const toggle = (id) => {
     const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n);
@@ -226,8 +243,11 @@ export default function Recap() {
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <AlertCircle size={16} className="text-amber-600"/>
           <h3 className="font-bold">Open — Belum Ada Cost (Perlu Plotting Biaya)</h3>
-          <span className="text-xs text-slate-500 ml-2">{noCostRows.length} baris</span>
+          <span className="text-xs text-slate-500 ml-2">{noCostFiltered.length}/{noCostRows.length} baris</span>
           <span className="text-[10px] uppercase tracking-wider font-bold text-amber-700 bg-amber-100 rounded px-2 py-0.5 ml-2">Tidak bisa direkonsiliasi tanpa cost</span>
+          <div className="ml-auto" style={{ minWidth: 240 }}>
+            <Input data-testid="search-nocost" placeholder="Cari AWB / Customer / Reff..." value={qNoCost} onChange={(e) => setQNoCost(e.target.value)}/>
+          </div>
         </div>
         <Table>
           <thead><tr>
@@ -235,7 +255,7 @@ export default function Recap() {
             <Th>Rute</Th><Th>Service/Via</Th><Th className="text-right">Selling</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {noCostRows.map((r) => (
+            {noCostFiltered.map((r) => (
               <tr key={r.id} data-testid={`open-nocost-row-${r.id}`}>
                 <Td className="font-mono font-semibold">{r.awb_number}</Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
@@ -257,7 +277,7 @@ export default function Recap() {
                 </Td>
               </tr>
             ))}
-            {noCostRows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-8">Tidak ada AWB Open tanpa cost.</Td></tr>}
+            {noCostFiltered.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-8">{qNoCost ? "Tidak ada hasil cocok dengan filter." : "Tidak ada AWB Open tanpa cost."}</Td></tr>}
           </tbody>
         </Table>
       </Card>
@@ -267,7 +287,10 @@ export default function Recap() {
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <ClipboardCheck size={16} className="text-emerald-700"/>
           <h3 className="font-bold">Ready to Reconcile — Sudah Ada Cost</h3>
-          <span className="text-xs text-slate-500 ml-2">{readyRows.length} baris</span>
+          <span className="text-xs text-slate-500 ml-2">{readyFiltered.length}/{readyRows.length} baris{selected.size > 0 ? ` · ${selected.size} dipilih` : ""}</span>
+          <div className="ml-auto" style={{ minWidth: 240 }}>
+            <Input data-testid="search-ready" placeholder="Cari AWB / Customer / Reff..." value={qReady} onChange={(e) => setQReady(e.target.value)}/>
+          </div>
         </div>
         <Table>
           <thead><tr>
@@ -282,7 +305,7 @@ export default function Recap() {
             <Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {readyRows.map((r) => (
+            {readyFiltered.map((r) => (
               <tr key={r.id} data-testid={`ready-row-${r.id}`}>
                 <Td>
                   <button onClick={() => toggle(r.id)}>
@@ -312,7 +335,7 @@ export default function Recap() {
                 </Td>
               </tr>
             ))}
-            {readyRows.length === 0 && <tr><Td colSpan={13} className="text-center text-slate-500 py-8">Belum ada AWB siap rekonsiliasi.</Td></tr>}
+            {readyFiltered.length === 0 && <tr><Td colSpan={13} className="text-center text-slate-500 py-8">{qReady ? "Tidak ada hasil cocok dengan filter." : "Belum ada AWB siap rekonsiliasi."}</Td></tr>}
           </tbody>
         </Table>
       </Card>
@@ -322,7 +345,10 @@ export default function Recap() {
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <Undo2 size={16} className="text-amber-600"/>
           <h3 className="font-bold">Sudah Reconciled — Tangani Reject</h3>
-          <span className="text-xs text-slate-500 ml-2">{reconciledRows.length} baris</span>
+          <span className="text-xs text-slate-500 ml-2">{reconciledFiltered.length}/{reconciledRows.length} baris{selectedReconciled.size > 0 ? ` · ${selectedReconciled.size} dipilih` : ""}</span>
+          <div style={{ minWidth: 240 }}>
+            <Input data-testid="search-reconciled" placeholder="Cari AWB / Customer / Reff..." value={qReconciled} onChange={(e) => setQReconciled(e.target.value)}/>
+          </div>
           <div className="ml-auto">
             <Button data-testid="bulk-revert-btn" variant="secondary" onClick={bulkRevert} disabled={selectedReconciled.size === 0}>
               <Undo2 size={14}/> Reject {selectedReconciled.size > 0 ? `(${selectedReconciled.size})` : "(pilih dulu)"} → Open
@@ -340,7 +366,7 @@ export default function Recap() {
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
-            {reconciledRows.map((r) => (
+            {reconciledFiltered.map((r) => (
               <tr key={r.id} data-testid={`reconciled-row-${r.id}`}>
                 <Td>
                   <button data-testid={`reconciled-toggle-${r.id}`} onClick={() => toggleRec(r.id)}>
@@ -360,7 +386,7 @@ export default function Recap() {
                 </Td>
               </tr>
             ))}
-            {reconciledRows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-8">Tidak ada AWB Reconciled.</Td></tr>}
+            {reconciledFiltered.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-8">{qReconciled ? "Tidak ada hasil cocok dengan filter." : "Tidak ada AWB Reconciled."}</Td></tr>}
           </tbody>
         </Table>
       </Card>

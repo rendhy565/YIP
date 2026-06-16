@@ -226,8 +226,10 @@ class ReceiveAwbIn(BaseModel):
     """Tanggal Terima — Barang Diterima form."""
     received_date: Optional[str] = None  # YYYY-MM-DD; default today
     received_by_name: str
-    polis_amount: Optional[float] = None  # Nilai Polis (IDR) — override; default = AWB.polis_amount
-    asuransi_amount: Optional[float] = None  # Nilai Asuransi (IDR) — override
+    polis_enabled: Optional[bool] = False  # checkbox; default OFF — UI auto-on if order has value
+    polis_amount: Optional[float] = None
+    asuransi_enabled: Optional[bool] = False  # checkbox; default OFF — UI auto-on if order has value
+    asuransi_amount: Optional[float] = None
     spsi_enabled: Optional[bool] = False
     spsi_amount: Optional[float] = None
     sewa_forklift_enabled: Optional[bool] = False
@@ -1274,14 +1276,20 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
     awb = await db.awb_orders.find_one({"_id": inv["awb_id"]})
     cust = await db.customers.find_one({"_id": awb["customer_id"]}) if awb else None
     settings = {s["key_name"]: s["key_value"] for s in await db.settings.find().to_list(1000)}
+    issuer = (awb or {}).get("company_name") or ""
     return {
         "invoice": serialize(inv),
         "awb": serialize(awb),
         "customer": serialize(cust),
         "company": {
-            "name": settings.get("company_name", ""),
-            "npwp": settings.get("company_npwp", ""),
-            "address": settings.get("company_address", ""),
+            "name": issuer or settings.get("company_name", ""),
+            "npwp": settings.get(f"npwp_{issuer}") or settings.get("company_npwp", ""),
+            "address": settings.get(f"address_{issuer}") or settings.get("company_address", ""),
+            "signer": settings.get(f"signer_{issuer}", ""),
+            "bank_name": settings.get(f"bank_name_{issuer}", "Mandiri"),
+            "bank_holder": settings.get(f"bank_holder_{issuer}", issuer.replace("PT. ", "")),
+            "bank_account": settings.get(f"bank_account_{issuer}", ""),
+            "logo_b64": settings.get("invoice_logo_b64", ""),
         },
     }
 
@@ -1346,11 +1354,15 @@ async def receive_awb(oid: str, data: ReceiveAwbIn, user: dict = Depends(get_cur
             raise HTTPException(400, "received_date harus YYYY-MM-DD")
     else:
         rd = datetime.now(timezone.utc)
+    polis_eff = float(data.polis_amount or 0) if data.polis_enabled else 0
+    asur_eff  = float(data.asuransi_amount or 0) if data.asuransi_enabled else 0
     upd = {
         "received_at": rd,
         "received_by_name": data.received_by_name.strip(),
-        "received_polis_amount": float(data.polis_amount if data.polis_amount is not None else (o.get("polis_amount") or 0)),
-        "received_asuransi_amount": float(data.asuransi_amount if data.asuransi_amount is not None else (o.get("insurance_amount") or 0)),
+        "received_polis_enabled": bool(data.polis_enabled),
+        "received_polis_amount": polis_eff,
+        "received_asuransi_enabled": bool(data.asuransi_enabled),
+        "received_asuransi_amount": asur_eff,
         "spsi_enabled": bool(data.spsi_enabled),
         "spsi_amount": float(data.spsi_amount or 0) if data.spsi_enabled else 0,
         "sewa_forklift_enabled": bool(data.sewa_forklift_enabled),

@@ -8,12 +8,16 @@ import { Calculator, Save, FileLock2, UserPlus, X, ShieldCheck } from "lucide-re
 
 const emptyCust = { name: "", company_details: "", address: "", npwp: "" };
 
-// Daftar kota dasar Indonesia (starter list; user akan tambahkan via dropdown free-input)
+// Daftar kota dasar Indonesia (starter list — format: "NAMA KOTA - SINGKATAN")
 const DEFAULT_CITIES = [
-  "JKT", "SBY", "SMG", "BDG", "MDN", "DPS", "MKS", "BPN", "PLM", "PKB",
-  "PNK", "BKS", "TGR", "BGR", "SOC", "JOG", "MLG", "PWK", "TKG", "JBI",
-  "PDG", "PKU", "BPP", "BTH", "MTR", "KDI", "AMQ", "BIK", "MNG", "TIM",
-  "DJB", "BDJ", "PGK", "TJQ",
+  "JAKARTA - JKT", "SURABAYA - SBY", "SEMARANG - SMG", "BANDUNG - BDG", "MEDAN - MDN",
+  "DENPASAR - DPS", "MAKASSAR - MKS", "BALIKPAPAN - BPN", "PALEMBANG - PLM", "PEKANBARU - PKB",
+  "PONTIANAK - PNK", "BEKASI - BKS", "TANGERANG - TGR", "BOGOR - BGR", "SOLO - SOC",
+  "YOGYAKARTA - JOG", "MALANG - MLG", "PURWOKERTO - PWK", "TANJUNG KARANG - TKG", "JAMBI - JBI",
+  "PADANG - PDG", "PEKAN BARU - PKU", "BANDAR LAMPUNG - BLP", "BATAM - BTH", "MATARAM - MTR",
+  "KENDARI - KDI", "AMBON - AMQ", "BIAK - BIK", "MANADO - MND", "TIMIKA - TIM",
+  "JAYAPURA - DJB", "BANJARMASIN - BDJ", "PANGKAL PINANG - PGK", "TANJUNG PINANG - TJQ",
+  "BANYUASIN - BMI", "SANGGAR - SGR",
 ];
 
 const COMPANY_OPTIONS = [
@@ -114,7 +118,10 @@ export default function OrderInput() {
   const insAmt = form.insurance_enabled ? (parseFloat(form.insurance_amount) || 0) : 0;
   const totalTariff = useMemo(() => tariff * qty, [tariff, qty]);
   const taxAmt = useMemo(() => (totalTariff * taxPct) / 100, [totalTariff, taxPct]);
-  const grandTotal = useMemo(() => totalTariff + taxAmt + polisAmt + insAmt, [totalTariff, taxAmt, polisAmt, insAmt]);
+  // Grand Total order (sebelum penerimaan) = tarif × qty + PPN. Polis & Asuransi default value
+  // ada di sini tapi BARU menambah nilai invoice saat di-checklist di Penerimaan.
+  const grandTotal = useMemo(() => totalTariff + taxAmt, [totalTariff, taxAmt]);
+  const invoiceEstimate = useMemo(() => grandTotal + polisAmt + insAmt, [grandTotal, polisAmt, insAmt]);
   const contractLocked = !!form.contract_id;
 
   const submit = async (e) => {
@@ -234,8 +241,9 @@ export default function OrderInput() {
                 data-testid="order-origin-input"
                 list="city-list"
                 value={form.origin}
-                onChange={(e) => setForm({ ...form, origin: e.target.value.toUpperCase() })}
+                onChange={(e) => setForm({ ...form, origin: e.target.value })}
                 required disabled={contractLocked}
+                placeholder="Mis. JAKARTA - JKT"
               />
             </div>
             <div>
@@ -244,8 +252,9 @@ export default function OrderInput() {
                 data-testid="order-destination-input"
                 list="city-list"
                 value={form.destination}
-                onChange={(e) => setForm({ ...form, destination: e.target.value.toUpperCase() })}
+                onChange={(e) => setForm({ ...form, destination: e.target.value })}
                 required disabled={contractLocked}
+                placeholder="Mis. SURABAYA - SBY"
               />
             </div>
             <div>
@@ -291,7 +300,7 @@ export default function OrderInput() {
               <Input data-testid="order-koli-count-input" type="number" min="0" value={form.koli_count} onChange={(e) => setForm({ ...form, koli_count: e.target.value })} placeholder="Mis. 10"/>
             </div>
             <div>
-              <Label>Qty Isi per Koli</Label>
+              <Label>Qty</Label>
               <Input data-testid="order-koli-qty-input" value={form.koli_qty_per} onChange={(e) => setForm({ ...form, koli_qty_per: e.target.value })} placeholder="Mis. 5 pcs / 2.5 kg"/>
             </div>
           </div>
@@ -383,22 +392,20 @@ export default function OrderInput() {
               <span className="text-slate-500">PPN ({taxPct}%)</span>
               <span data-testid="calc-tax-amount" className="font-semibold">{fmtIDR(taxAmt)}</span>
             </div>
-            {polisAmt > 0 && (
-              <div className="flex justify-between border-b border-slate-100 pb-2">
-                <span className="text-slate-500">Polis</span>
-                <span className="font-semibold">{fmtIDR(polisAmt)}</span>
-              </div>
-            )}
-            {insAmt > 0 && (
-              <div className="flex justify-between border-b border-slate-100 pb-2">
-                <span className="text-slate-500">Asuransi</span>
-                <span className="font-semibold">{fmtIDR(insAmt)}</span>
-              </div>
-            )}
             <div className="flex justify-between pt-2 border-t-2 border-slate-900">
-              <span className="font-bold uppercase text-xs tracking-wider">Grand Total</span>
+              <span className="font-bold uppercase text-xs tracking-wider">Grand Total AWB</span>
               <span data-testid="calc-grand-total" className="font-heading font-black text-lg text-blue-700">{fmtIDR(grandTotal)}</span>
             </div>
+            {(polisAmt > 0 || insAmt > 0) && (
+              <div className="mt-3 px-3 py-2 bg-amber-50 border border-amber-200 rounded text-xs space-y-1">
+                <div className="text-amber-800 font-semibold uppercase tracking-wider text-[10px]">Penambah Default (di-checklist saat Penerimaan)</div>
+                {polisAmt > 0 && <div className="flex justify-between"><span>Polis</span><span className="font-mono">{fmtIDR(polisAmt)}</span></div>}
+                {insAmt > 0 && <div className="flex justify-between"><span>Asuransi</span><span className="font-mono">{fmtIDR(insAmt)}</span></div>}
+                <div className="flex justify-between pt-1 border-t border-amber-300 font-bold text-amber-900">
+                  <span>Estimasi Invoice (max)</span><span className="font-heading">{fmtIDR(invoiceEstimate)}</span>
+                </div>
+              </div>
+            )}
           </div>
           <Button data-testid="submit-order-btn" className="w-full mt-5" type="submit">
             <Save size={16}/> Simpan AWB

@@ -17,7 +17,7 @@ export default function PanjarKerja() {
   const { user } = useAuth();
   const isAdmin = user?.role === "administrator";
   const [rows, setRows] = useState([]);
-  const [openOrders, setOpenOrders] = useState([]);
+  const [allOrders, setAllOrders] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
@@ -31,9 +31,9 @@ export default function PanjarKerja() {
   const load = async () => {
     const [ca, os] = await Promise.all([
       api.get("/cash-advances"),
-      api.get("/orders", { params: { status_v: "Open" } }),
+      api.get("/orders"),  // ALL AWBs (any status)
     ]);
-    setRows(ca.data); setOpenOrders(os.data);
+    setRows(ca.data); setAllOrders(os.data);
   };
   useEffect(() => { load(); }, []);
 
@@ -217,8 +217,8 @@ export default function PanjarKerja() {
                       <div className="col-span-5">
                         <Select data-testid={`breakdown-awb-${i}`} value={b.awb_id} onChange={(e) => updateRow(i, "awb_id", e.target.value)}>
                           <option value="">— Pilih AWB —</option>
-                          {openOrders.map((o) => (
-                            <option key={o.id} value={o.id}>{o.awb_number} · {o.customer_name} · {o.origin}→{o.destination}</option>
+                          {allOrders.map((o) => (
+                            <option key={o.id} value={o.id}>{o.awb_number} · {o.status} · {o.customer_name} · {o.origin}→{o.destination}</option>
                           ))}
                         </Select>
                       </div>

@@ -20,12 +20,15 @@ export default function InvoicesCreated() {
   };
   useEffect(() => { load(); }, []);
 
-  // Client-side filter
+  // Client-side filter — OR logic between search & customer
   const filtered = useMemo(() => {
+    const hasQ = !!q.trim();
+    const hasCustomer = !!customerId;
+    if (!hasQ && !hasCustomer) return invoices;
     return invoices.filter((i) => {
-      if (q && !`${i.invoice_number} ${i.awb_number}`.toLowerCase().includes(q.toLowerCase())) return false;
-      if (customerId && i.customer_id !== customerId) return false;
-      return true;
+      const matchQ = hasQ && `${i.invoice_number} ${i.awb_number} ${i.customer_name || ""}`.toLowerCase().includes(q.trim().toLowerCase());
+      const matchCust = hasCustomer && i.customer_id === customerId;
+      return matchQ || matchCust;
     });
   }, [invoices, q, customerId]);
 
@@ -97,14 +100,14 @@ export default function InvoicesCreated() {
       <Card className="p-4 mb-5">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[260px]">
-            <Label>Cari (No. Invoice / No. AWB)</Label>
+            <Label>Cari (OR — No. Invoice / AWB / Customer)</Label>
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
               <Input data-testid="invoice-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contoh: INV-202606-0001 atau AWB-..." className="pl-9"/>
             </div>
           </div>
           <div className="min-w-[220px]">
-            <Label>Filter Customer</Label>
+            <Label>Filter Customer (OR)</Label>
             <Select data-testid="invoice-customer-filter" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               <option value="">Semua Customer</option>
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}

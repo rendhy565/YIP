@@ -28,7 +28,9 @@ export default function OrdersList() {
   const [recvForm, setRecvForm] = useState({
     received_date: todayStr(),
     received_by_name: "",
+    polis_enabled: false,
     polis_amount: "",
+    asuransi_enabled: false,
     asuransi_amount: "",
     spsi_enabled: false,
     spsi_amount: "",
@@ -67,11 +69,15 @@ export default function OrdersList() {
 
   const openReceive = (r) => {
     setRecvFor(r);
+    const hasPolis = !!(r.polis_amount && r.polis_amount > 0);
+    const hasAsuransi = !!(r.insurance_amount && r.insurance_amount > 0);
     setRecvForm({
       received_date: todayStr(),
       received_by_name: r.consignee || "",
-      polis_amount: r.polis_amount ? String(r.polis_amount) : "",
-      asuransi_amount: r.insurance_amount ? String(r.insurance_amount) : "",
+      polis_enabled: hasPolis,
+      polis_amount: hasPolis ? String(r.polis_amount) : "",
+      asuransi_enabled: hasAsuransi,
+      asuransi_amount: hasAsuransi ? String(r.insurance_amount) : "",
       spsi_enabled: false,
       spsi_amount: "",
       sewa_forklift_enabled: false,
@@ -87,8 +93,8 @@ export default function OrdersList() {
     try {
       const payload = {
         ...recvForm,
-        polis_amount: recvForm.polis_amount !== "" ? parseFloat(recvForm.polis_amount) : null,
-        asuransi_amount: recvForm.asuransi_amount !== "" ? parseFloat(recvForm.asuransi_amount) : null,
+        polis_amount: recvForm.polis_enabled && recvForm.polis_amount !== "" ? parseFloat(recvForm.polis_amount) : null,
+        asuransi_amount: recvForm.asuransi_enabled && recvForm.asuransi_amount !== "" ? parseFloat(recvForm.asuransi_amount) : null,
         spsi_amount: recvForm.spsi_enabled && recvForm.spsi_amount !== "" ? parseFloat(recvForm.spsi_amount) : null,
         sewa_forklift_amount: recvForm.sewa_forklift_enabled && recvForm.sewa_forklift_amount !== "" ? parseFloat(recvForm.sewa_forklift_amount) : null,
       };
@@ -202,20 +208,33 @@ export default function OrdersList() {
                 <Label>Nama Penerima *</Label>
                 <Input data-testid="receive-name" value={recvForm.received_by_name} onChange={(e) => setRecvForm({ ...recvForm, received_by_name: e.target.value })} required placeholder="Nama orang yang menerima"/>
               </div>
-              <div>
-                <Label>Nilai Polis (IDR)</Label>
-                <Input data-testid="receive-polis-amount" type="number" step="0.01" value={recvForm.polis_amount} onChange={(e) => setRecvForm({ ...recvForm, polis_amount: e.target.value })} placeholder={recvFor.polis_amount ? String(recvFor.polis_amount) : "0 (penambah total invoice)"}/>
-              </div>
-              <div>
-                <Label>Nilai Asuransi (IDR)</Label>
-                <Input data-testid="receive-asuransi" type="number" step="0.01" value={recvForm.asuransi_amount} onChange={(e) => setRecvForm({ ...recvForm, asuransi_amount: e.target.value })} placeholder={recvFor.insurance_amount ? String(recvFor.insurance_amount) : "0 (penambah total invoice)"}/>
-              </div>
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-200">
-              <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Biaya Tambahan</h4>
-              <p className="text-[11px] text-slate-500 mb-2">Nilai SPSI & Sewa Forklift otomatis tersimpan sebagai <strong>cost (Operational)</strong> di AWB ini dan akan tampil rinci di invoice.</p>
+              <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Penambah Nilai Invoice</h4>
+              <p className="text-[11px] text-slate-500 mb-3">Checkbox default OFF. Aktif otomatis jika nilai sudah diisi di Input Order. Saat aktif, nilainya jadi penambah Grand Total invoice (realtime kalkulasi).</p>
               <div className="space-y-2">
+                {/* Polis */}
+                <div className="flex items-center gap-3">
+                  <label className="inline-flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">
+                    <input data-testid="receive-polis-check" type="checkbox" checked={recvForm.polis_enabled} onChange={(e) => setRecvForm({ ...recvForm, polis_enabled: e.target.checked })}/>
+                    <span className="font-semibold">Polis</span>
+                  </label>
+                  {recvForm.polis_enabled && (
+                    <Input data-testid="receive-polis-amount" type="number" step="0.01" placeholder="Nilai Polis (IDR)" value={recvForm.polis_amount} onChange={(e) => setRecvForm({ ...recvForm, polis_amount: e.target.value })} className="flex-1"/>
+                  )}
+                </div>
+                {/* Asuransi */}
+                <div className="flex items-center gap-3">
+                  <label className="inline-flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">
+                    <input data-testid="receive-asuransi-check" type="checkbox" checked={recvForm.asuransi_enabled} onChange={(e) => setRecvForm({ ...recvForm, asuransi_enabled: e.target.checked })}/>
+                    <span className="font-semibold">Asuransi</span>
+                  </label>
+                  {recvForm.asuransi_enabled && (
+                    <Input data-testid="receive-asuransi" type="number" step="0.01" placeholder="Nilai Asuransi (IDR)" value={recvForm.asuransi_amount} onChange={(e) => setRecvForm({ ...recvForm, asuransi_amount: e.target.value })} className="flex-1"/>
+                  )}
+                </div>
+                {/* SPSI */}
                 <div className="flex items-center gap-3">
                   <label className="inline-flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">
                     <input data-testid="receive-spsi-check" type="checkbox" checked={recvForm.spsi_enabled} onChange={(e) => setRecvForm({ ...recvForm, spsi_enabled: e.target.checked })}/>
@@ -225,6 +244,7 @@ export default function OrdersList() {
                     <Input data-testid="receive-spsi-amount" type="number" step="0.01" placeholder="Nilai SPSI (IDR)" value={recvForm.spsi_amount} onChange={(e) => setRecvForm({ ...recvForm, spsi_amount: e.target.value })} className="flex-1"/>
                   )}
                 </div>
+                {/* Sewa Forklift */}
                 <div className="flex items-center gap-3">
                   <label className="inline-flex items-center gap-2 text-sm cursor-pointer min-w-[140px]">
                     <input data-testid="receive-forklift-check" type="checkbox" checked={recvForm.sewa_forklift_enabled} onChange={(e) => setRecvForm({ ...recvForm, sewa_forklift_enabled: e.target.checked })}/>
@@ -235,6 +255,28 @@ export default function OrdersList() {
                   )}
                 </div>
               </div>
+
+              {/* Realtime calc summary */}
+              {(() => {
+                const polis = recvForm.polis_enabled ? (parseFloat(recvForm.polis_amount) || 0) : 0;
+                const asuransi = recvForm.asuransi_enabled ? (parseFloat(recvForm.asuransi_amount) || 0) : 0;
+                const spsi = recvForm.spsi_enabled ? (parseFloat(recvForm.spsi_amount) || 0) : 0;
+                const forklift = recvForm.sewa_forklift_enabled ? (parseFloat(recvForm.sewa_forklift_amount) || 0) : 0;
+                const penambah = polis + asuransi + spsi + forklift;
+                const gt = (recvFor.grand_total || 0) + penambah;
+                return (
+                  <div className="mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                    <div className="flex items-center justify-between"><span>Nilai AWB:</span><span className="font-mono">{fmtIDR(recvFor.grand_total)}</span></div>
+                    <div className="flex items-center justify-between"><span>+ Polis:</span><span className="font-mono">{fmtIDR(polis)}</span></div>
+                    <div className="flex items-center justify-between"><span>+ Asuransi:</span><span className="font-mono">{fmtIDR(asuransi)}</span></div>
+                    <div className="flex items-center justify-between"><span>+ SPSI:</span><span className="font-mono">{fmtIDR(spsi)}</span></div>
+                    <div className="flex items-center justify-between"><span>+ Sewa Forklift:</span><span className="font-mono">{fmtIDR(forklift)}</span></div>
+                    <div className="flex items-center justify-between mt-1 pt-1 border-t border-blue-300 font-bold text-blue-900" data-testid="receive-total-preview">
+                      <span>Total Invoice (preview):</span><span className="font-heading">{fmtIDR(gt)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-200">

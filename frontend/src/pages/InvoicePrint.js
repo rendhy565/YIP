@@ -2,26 +2,30 @@ import React, { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import api from "../lib/api";
 import { Button } from "../components/ui";
-import { fmtIDR, fmtDate } from "../lib/utils";
+import { fmtIDR } from "../lib/utils";
 import { Printer, ArrowLeft } from "lucide-react";
 
-const Section = ({ title, children }) => (
-  <div className="print-page bg-white">
-    <div className="max-w-3xl mx-auto p-8 border border-slate-300">
-      <div className="text-center mb-6">
-        <div className="font-heading font-black text-2xl tracking-tight uppercase">{title}</div>
-      </div>
-      {children}
-    </div>
-  </div>
-);
+const ID_MONTHS = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+const fmtIdDate = (d) => {
+  if (!d) return "";
+  const dt = new Date(d);
+  return `${dt.getDate()} ${ID_MONTHS[dt.getMonth()]} ${dt.getFullYear()}`;
+};
 
-const Row = ({ label, value }) => (
-  <div className="flex border-b border-slate-200 py-1.5 text-sm">
-    <div className="w-48 text-slate-500 font-semibold">{label}</div>
-    <div className="flex-1 text-slate-900">{value || "-"}</div>
-  </div>
-);
+// Indonesian terbilang (number to words)
+function terbilangId(n) {
+  if (n < 0) return "Minus " + terbilangId(-n);
+  const a = ["", "Satu", "Dua", "Tiga", "Empat", "Lima", "Enam", "Tujuh", "Delapan", "Sembilan", "Sepuluh", "Sebelas"];
+  if (n < 12) return n > 0 ? a[n] : "Nol";
+  if (n < 20) return terbilangId(n - 10) + " Belas";
+  if (n < 100) return terbilangId(Math.floor(n / 10)) + " Puluh" + (n % 10 === 0 ? "" : " " + terbilangId(n % 10));
+  if (n < 200) return "Seratus" + (n === 100 ? "" : " " + terbilangId(n - 100));
+  if (n < 1000) return terbilangId(Math.floor(n / 100)) + " Ratus" + (n % 100 === 0 ? "" : " " + terbilangId(n % 100));
+  if (n < 2000) return "Seribu" + (n === 1000 ? "" : " " + terbilangId(n - 1000));
+  if (n < 1_000_000) return terbilangId(Math.floor(n / 1000)) + " Ribu" + (n % 1000 === 0 ? "" : " " + terbilangId(n % 1000));
+  if (n < 1_000_000_000) return terbilangId(Math.floor(n / 1_000_000)) + " Juta" + (n % 1_000_000 === 0 ? "" : " " + terbilangId(n % 1_000_000));
+  return terbilangId(Math.floor(n / 1_000_000_000)) + " Miliar" + (n % 1_000_000_000 === 0 ? "" : " " + terbilangId(n % 1_000_000_000));
+}
 
 export default function InvoicePrint() {
   const { id } = useParams();
@@ -35,141 +39,212 @@ export default function InvoicePrint() {
 
   const { invoice, awb, customer, company } = data;
 
+  const invDate = new Date(invoice.created_at);
+  const dueDate = new Date(invDate.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+  const subTotal = awb.total_tariff || 0;
+  const ppnAmt = awb.tax_amount || 0;
+  const ppnPct = awb.tax_percentage || 0;
+  const subAfterTax = subTotal + ppnAmt;
+  const asuransi = awb.received_asuransi_amount || 0;
+  const polis = awb.received_polis_amount || 0;
+  const spsi = awb.spsi_enabled ? (awb.spsi_amount || 0) : 0;
+  const forklift = awb.sewa_forklift_enabled ? (awb.sewa_forklift_amount || 0) : 0;
+  const adm = 0;
+  const materai = 0;
+  const grandTotal = subAfterTax + asuransi + polis + spsi + forklift + adm + materai;
+
+  const logoSrc = company.logo_b64
+    ? (company.logo_b64.startsWith("data:") ? company.logo_b64 : `data:image/png;base64,${company.logo_b64}`)
+    : null;
+
   return (
-    <div className="min-h-screen bg-slate-100 py-6">
-      <div className="max-w-3xl mx-auto px-4 mb-4 flex items-center gap-2 no-print">
+    <div className="min-h-screen bg-slate-100 py-6 print:bg-white print:py-0">
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          @page { size: A4; margin: 10mm; }
+          .print-page { box-shadow: none !important; border: none !important; page-break-after: always; }
+          .print-page:last-child { page-break-after: auto; }
+        }
+        .invoice-page { font-family: Calibri, 'Segoe UI', Arial, sans-serif; }
+        .grey-band { background: #7F7F7F; color: #fff; }
+        .dark-band { background: #595959; color: #fff; }
+        .light-grey { background: #F2F2F2; }
+      `}</style>
+
+      <div className="max-w-[210mm] mx-auto px-4 mb-4 flex items-center gap-2 no-print">
         <Button variant="secondary" onClick={() => window.close()}><ArrowLeft size={14}/> Tutup</Button>
-        <Button data-testid="print-now-btn" onClick={() => window.print()} className="ml-auto"><Printer size={14}/> Cetak Semua (Invoice + Faktur + Lampiran + PO)</Button>
+        <Button data-testid="print-now-btn" onClick={() => window.print()} className="ml-auto"><Printer size={14}/> Cetak Invoice + Lampiran</Button>
       </div>
 
-      {/* INVOICE */}
-      <Section title="Invoice">
-        <div className="grid grid-cols-2 gap-6 mb-5">
-          <div>
-            <div className="text-xs uppercase tracking-wider font-bold text-slate-500 mb-1">Dari</div>
-            <div className="font-bold">{awb.company_name || company.name}</div>
-            <div className="text-sm text-slate-600">{company.address}</div>
-            <div className="text-sm text-slate-600 font-mono">NPWP: {company.npwp}</div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-wider font-bold text-slate-500 mb-1">Kepada</div>
-            <div className="font-bold">{customer?.name}</div>
-            <div className="text-sm text-slate-600">{customer?.address || "-"}</div>
-            <div className="text-sm text-slate-600 font-mono">NPWP: {customer?.npwp || "-"}</div>
-            {awb.consignee && <div className="text-sm text-slate-700 mt-1"><span className="font-semibold">Consignee:</span> {awb.consignee}</div>}
+      {/* PAGE 1: INVOICE (AR Cargo template) */}
+      <div className="print-page invoice-page max-w-[210mm] mx-auto bg-white shadow border border-slate-200 p-8 mb-6">
+        {/* Logo row */}
+        <div className="flex items-start mb-2">
+          <div className="w-32 h-20 flex items-center justify-start">
+            {logoSrc ? <img src={logoSrc} alt="Logo" className="max-w-full max-h-full object-contain"/> : <span className="text-xs text-slate-300">[ LOGO ]</span>}
           </div>
         </div>
-        <Row label="No. Invoice" value={<span className="font-mono font-bold">{invoice.invoice_number}</span>} />
-        <Row label="Tanggal" value={fmtDate(invoice.created_at)} />
-        <Row label="No. AWB" value={<span className="font-mono">{awb.awb_number}</span>} />
-        {awb.reff_no && <Row label="Reff No" value={<span className="font-mono">{awb.reff_no}</span>} />}
-        <Row label="Rute" value={`${awb.origin} → ${awb.destination}`} />
-        {(awb.service || awb.via) && <Row label="Service / Via" value={[awb.service, awb.via].filter(Boolean).join(" / ")} />}
-        {awb.status_pengiriman && <Row label="Status Pengiriman" value={awb.status_pengiriman} />}
-        <Row label="Deskripsi" value={awb.item_description} />
-        {(awb.koli_count || awb.koli_qty_per) && <Row label="Koli" value={`${awb.koli_count || "-"} koli · isi ${awb.koli_qty_per || "-"}`} />}
-        {awb.insurance_enabled && (
-          <Row label="Asuransi" value={`Polis: ${awb.insurance_policy || "-"} · Nilai: ${fmtIDR(awb.insurance_amount || 0)}`} />
-        )}
 
-        <table className="w-full mt-5 text-sm">
-          <thead><tr className="bg-slate-100 text-xs uppercase">
-            <th className="text-left p-2">Item</th>
-            <th className="text-right p-2">Qty (Kg)</th>
-            <th className="text-right p-2">Tarif/Kg</th>
-            <th className="text-right p-2">Total</th>
-          </tr></thead>
-          <tbody>
-            <tr className="border-b border-slate-200">
-              <td className="p-2">{awb.goods_content}</td>
-              <td className="p-2 text-right">{awb.qty_kg}</td>
-              <td className="p-2 text-right">{fmtIDR(awb.tariff_per_kg)}</td>
-              <td className="p-2 text-right">{fmtIDR(awb.total_tariff)}</td>
+        {/* Grey INVOICE banner */}
+        <div className="grey-band text-center py-3 mb-5 font-bold text-3xl tracking-wide">INVOICE</div>
+
+        {/* Issuer left + Meta right */}
+        <div className="grid grid-cols-2 gap-6 mb-5 text-sm">
+          <div>
+            <div className="font-bold">{company.name}</div>
+            <div className="whitespace-pre-line text-slate-700">{company.address}</div>
+            {company.npwp && <div className="text-slate-700 font-mono text-xs mt-0.5">NPWP: {company.npwp}</div>}
+          </div>
+          <div className="text-sm">
+            <div className="grid grid-cols-[110px_10px_1fr] gap-x-2 gap-y-0.5">
+              <div className="font-semibold">Invoice No</div><div>:</div><div className="font-bold font-mono">{invoice.invoice_number}</div>
+              <div className="font-semibold">Date</div><div>:</div><div>{fmtIdDate(invDate)}</div>
+              <div className="font-semibold">Due Date</div><div>:</div><div>{fmtIdDate(dueDate)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Attn */}
+        <div className="text-sm mb-4">
+          <span className="text-slate-700">Attn :</span> <span className="font-semibold">{awb.consignee || customer?.name || ""}</span>
+        </div>
+
+        {/* Items table */}
+        <table className="w-full text-sm border border-slate-700">
+          <thead>
+            <tr className="dark-band">
+              <th className="p-2 border border-slate-700 w-12 text-center">No</th>
+              <th className="p-2 border border-slate-700 text-center">DESCRIPTION</th>
+              <th className="p-2 border border-slate-700 w-44 text-center">AMOUNT</th>
             </tr>
-            <tr><td colSpan={3} className="p-2 text-right text-slate-600">Subtotal</td><td className="p-2 text-right">{fmtIDR(awb.total_tariff)}</td></tr>
-            <tr><td colSpan={3} className="p-2 text-right text-slate-600">PPN {awb.tax_percentage}%</td><td className="p-2 text-right">{fmtIDR(awb.tax_amount)}</td></tr>
-            <tr className="bg-slate-900 text-white"><td colSpan={3} className="p-2 text-right font-bold">GRAND TOTAL</td><td className="p-2 text-right font-bold">{fmtIDR(awb.grand_total)}</td></tr>
-          </tbody>
-        </table>
-
-        <div className="mt-12 grid grid-cols-2 gap-8 text-sm">
-          <div className="text-center"><div className="border-t border-slate-400 mt-16 pt-2 text-xs">Penerbit</div></div>
-          <div className="text-center"><div className="border-t border-slate-400 mt-16 pt-2 text-xs">Diterima</div></div>
-        </div>
-      </Section>
-
-      {/* FAKTUR PAJAK */}
-      <Section title="Faktur Pajak">
-        <Row label="Kode & No. Seri" value={<span className="font-mono">010.000-{invoice.invoice_number.replace(/[^0-9]/g, "").slice(-8).padStart(8, "0")}</span>} />
-        <Row label="Pengusaha Kena Pajak" value={company.name} />
-        <Row label="NPWP" value={<span className="font-mono">{company.npwp}</span>} />
-        <Row label="Alamat" value={company.address} />
-        <div className="my-4 border-t border-slate-300"/>
-        <Row label="Pembeli BKP/JKP" value={customer?.name} />
-        <Row label="NPWP Pembeli" value={<span className="font-mono">{customer?.npwp || "-"}</span>} />
-        <Row label="Alamat Pembeli" value={customer?.address || "-"} />
-        <div className="my-4 border-t border-slate-300"/>
-        <table className="w-full text-sm">
-          <thead><tr className="bg-slate-100 text-xs uppercase">
-            <th className="text-left p-2">No.</th>
-            <th className="text-left p-2">Nama BKP/JKP</th>
-            <th className="text-right p-2">Harga Jual (Rp)</th>
-          </tr></thead>
+          </thead>
           <tbody>
-            <tr className="border-b"><td className="p-2">1</td><td className="p-2">Jasa Pengangkutan {awb.origin}-{awb.destination} (AWB {awb.awb_number})</td><td className="p-2 text-right">{fmtIDR(awb.total_tariff)}</td></tr>
-            <tr><td colSpan={2} className="p-2 text-right">Dasar Pengenaan Pajak</td><td className="p-2 text-right">{fmtIDR(awb.total_tariff)}</td></tr>
-            <tr><td colSpan={2} className="p-2 text-right">PPN {awb.tax_percentage}%</td><td className="p-2 text-right font-bold">{fmtIDR(awb.tax_amount)}</td></tr>
+            <tr>
+              <td className="p-2 border-l border-r border-slate-700 align-top">1.</td>
+              <td className="p-2 border-l border-r border-slate-700">
+                <div>Biaya Pengiriman Barang{(awb.service || awb.armada) ? ` - ${[awb.service, awb.armada].filter(Boolean).join(" ")}` : ""}</div>
+                <div className="mt-1 grid grid-cols-[80px_8px_1fr] gap-x-2 text-xs text-slate-700">
+                  <div>Tanggal</div><div>:</div><div>{fmtIdDate(awb.created_at)}</div>
+                  <div>Origin</div><div>:</div><div>{awb.origin}</div>
+                  <div>Tujuan</div><div>:</div><div>{awb.destination}</div>
+                </div>
+              </td>
+              <td className="p-2 border-l border-r border-slate-700 text-right align-top font-mono">{fmtIDR(subTotal)}</td>
+            </tr>
+            {asuransi > 0 && (
+              <tr>
+                <td className="p-2 border-l border-r border-slate-700">2.</td>
+                <td className="p-2 border-l border-r border-slate-700">Asuransi</td>
+                <td className="p-2 border-l border-r border-slate-700 text-right font-mono">{fmtIDR(asuransi)}</td>
+              </tr>
+            )}
+            {polis > 0 && (
+              <tr>
+                <td className="p-2 border-l border-r border-slate-700">{2 + (asuransi > 0 ? 1 : 0)}.</td>
+                <td className="p-2 border-l border-r border-slate-700">Polis</td>
+                <td className="p-2 border-l border-r border-slate-700 text-right font-mono">{fmtIDR(polis)}</td>
+              </tr>
+            )}
+            {spsi > 0 && (
+              <tr>
+                <td className="p-2 border-l border-r border-slate-700">{2 + (asuransi > 0 ? 1 : 0) + (polis > 0 ? 1 : 0)}.</td>
+                <td className="p-2 border-l border-r border-slate-700">SPSI</td>
+                <td className="p-2 border-l border-r border-slate-700 text-right font-mono">{fmtIDR(spsi)}</td>
+              </tr>
+            )}
+            {forklift > 0 && (
+              <tr>
+                <td className="p-2 border-l border-r border-slate-700">{2 + (asuransi > 0 ? 1 : 0) + (polis > 0 ? 1 : 0) + (spsi > 0 ? 1 : 0)}.</td>
+                <td className="p-2 border-l border-r border-slate-700">Sewa Forklift</td>
+                <td className="p-2 border-l border-r border-slate-700 text-right font-mono">{fmtIDR(forklift)}</td>
+              </tr>
+            )}
+            {/* spacer + bottom border closing */}
+            <tr><td colSpan={3} className="border-b border-slate-700 p-1"></td></tr>
           </tbody>
         </table>
-      </Section>
 
-      {/* LAMPIRAN */}
-      <Section title="Lampiran Invoice">
+        {/* Terbilang + Summary */}
+        <div className="grid grid-cols-2 gap-6 mt-4">
+          <div className="text-sm">
+            <div className="font-semibold">Terbilang</div>
+            <div className="italic mt-2 leading-relaxed">{terbilangId(Math.round(grandTotal))} Rupiah</div>
+          </div>
+          <div className="text-sm">
+            <table className="w-full">
+              <tbody>
+                <tr><td className="py-1 text-slate-700">Jumlah</td><td className="py-1 w-8 text-slate-700">Rp.</td><td className="py-1 text-right font-mono">{fmtIDR(subTotal)}</td></tr>
+                <tr><td className="py-1 text-slate-700 pl-3">{`>> PPN ${ppnPct}%`}</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono">{fmtIDR(ppnAmt)}</td></tr>
+                <tr><td className="py-1 text-slate-700 font-semibold">Sub Total</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono font-semibold">{fmtIDR(subAfterTax)}</td></tr>
+                <tr><td className="py-1 text-slate-700 pl-3">{`>> Asuransi`}</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono">{asuransi > 0 ? fmtIDR(asuransi) : "-"}</td></tr>
+                <tr><td className="py-1 text-slate-700 pl-3">{`>> Polis`}</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono">{polis > 0 ? fmtIDR(polis) : "-"}</td></tr>
+                <tr><td className="py-1 text-slate-700 pl-3">{`>> Adm`}</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono">-</td></tr>
+                <tr><td className="py-1 text-slate-700 pl-3">{`>> Materai`}</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono">-</td></tr>
+                {spsi > 0 && <tr><td className="py-1 text-slate-700 pl-3">{`>> SPSI`}</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono">{fmtIDR(spsi)}</td></tr>}
+                {forklift > 0 && <tr><td className="py-1 text-slate-700 pl-3">{`>> Sewa Forklift`}</td><td className="py-1">Rp.</td><td className="py-1 text-right font-mono">{fmtIDR(forklift)}</td></tr>}
+                <tr className="light-grey font-bold"><td className="py-2 px-1">TOTAL</td><td className="py-2">Rp.</td><td className="py-2 text-right font-mono">{fmtIDR(grandTotal)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Bank box + Signature */}
+        <div className="grid grid-cols-2 gap-6 mt-8 items-start">
+          <div className="border border-slate-700 p-3 text-center text-sm" data-testid="bank-box">
+            <div className="font-bold">BANK ADDRESS</div>
+            <div className="text-xs text-slate-600">Account Rupiah ( IDR )</div>
+            <div className="dark-band mt-3 py-3 text-2xl font-bold tracking-wide">{company.bank_name}</div>
+            <div className="text-xs text-slate-600">PT. Bank {company.bank_name} (Persero)</div>
+            <div className="mt-3 text-sm text-left grid grid-cols-[40px_1fr] gap-x-2">
+              <div>A/N</div><div>: {company.bank_holder}</div>
+              <div>A/C</div><div>: {company.bank_account || "________________________________"}</div>
+            </div>
+          </div>
+          <div className="text-sm text-center">
+            <div className="text-left">Jakarta,  {fmtIdDate(invDate)}</div>
+            <div className="h-28"></div>
+            <div className="font-bold">(  {company.signer || "..........................."}  )</div>
+          </div>
+        </div>
+      </div>
+
+      {/* PAGE 2: LAMPIRAN */}
+      <div className="print-page invoice-page max-w-[210mm] mx-auto bg-white shadow border border-slate-200 p-8">
+        <h2 className="font-heading font-black text-2xl tracking-tight uppercase text-center mb-6">Lampiran Invoice</h2>
         <table className="w-full text-xs border border-slate-300">
-          <thead><tr className="bg-slate-100 uppercase">
-            <th className="p-2 border border-slate-300 text-left">No. AWB</th>
-            <th className="p-2 border border-slate-300 text-left">Tanggal</th>
-            <th className="p-2 border border-slate-300 text-left">Origin</th>
-            <th className="p-2 border border-slate-300 text-left">Dest</th>
-            <th className="p-2 border border-slate-300 text-left">Goods</th>
-            <th className="p-2 border border-slate-300 text-right">Qty</th>
-            <th className="p-2 border border-slate-300 text-right">Tarif/Kg</th>
-            <th className="p-2 border border-slate-300 text-right">Total</th>
-            <th className="p-2 border border-slate-300 text-right">PPN</th>
-            <th className="p-2 border border-slate-300 text-right">Grand</th>
-          </tr></thead>
+          <thead>
+            <tr className="dark-band">
+              <th className="p-2 border border-slate-700 text-left">No. AWB</th>
+              <th className="p-2 border border-slate-700 text-left">Tanggal</th>
+              <th className="p-2 border border-slate-700 text-left">Origin</th>
+              <th className="p-2 border border-slate-700 text-left">Tujuan</th>
+              <th className="p-2 border border-slate-700 text-left">Goods</th>
+              <th className="p-2 border border-slate-700 text-right">Qty</th>
+              <th className="p-2 border border-slate-700 text-right">Tarif/Kg</th>
+              <th className="p-2 border border-slate-700 text-right">Subtotal</th>
+              <th className="p-2 border border-slate-700 text-right">PPN</th>
+              <th className="p-2 border border-slate-700 text-right">Grand</th>
+            </tr>
+          </thead>
           <tbody>
             <tr>
               <td className="p-2 border border-slate-300 font-mono">{awb.awb_number}</td>
-              <td className="p-2 border border-slate-300">{fmtDate(awb.created_at)}</td>
+              <td className="p-2 border border-slate-300">{fmtIdDate(awb.created_at)}</td>
               <td className="p-2 border border-slate-300">{awb.origin}</td>
               <td className="p-2 border border-slate-300">{awb.destination}</td>
               <td className="p-2 border border-slate-300">{awb.goods_content}</td>
               <td className="p-2 border border-slate-300 text-right">{awb.qty_kg}</td>
               <td className="p-2 border border-slate-300 text-right">{fmtIDR(awb.tariff_per_kg)}</td>
-              <td className="p-2 border border-slate-300 text-right">{fmtIDR(awb.total_tariff)}</td>
-              <td className="p-2 border border-slate-300 text-right">{fmtIDR(awb.tax_amount)}</td>
-              <td className="p-2 border border-slate-300 text-right font-bold">{fmtIDR(awb.grand_total)}</td>
+              <td className="p-2 border border-slate-300 text-right">{fmtIDR(subTotal)}</td>
+              <td className="p-2 border border-slate-300 text-right">{fmtIDR(ppnAmt)}</td>
+              <td className="p-2 border border-slate-300 text-right font-bold">{fmtIDR(grandTotal)}</td>
             </tr>
           </tbody>
         </table>
         <p className="text-xs text-slate-500 mt-3">Lampiran ini merupakan bagian yang tidak terpisahkan dari Invoice No. {invoice.invoice_number}.</p>
-      </Section>
-
-      {/* PO Placeholder */}
-      <Section title="Purchase Order (Placeholder)">
-        <p className="text-sm text-slate-600 mb-4">
-          Lembar ini merupakan placeholder untuk Purchase Order dari pelanggan. Lampirkan PO asli dari {customer?.name} di sini saat dicetak.
-        </p>
-        <Row label="No. PO" value="________________________________" />
-        <Row label="Tanggal PO" value="________________________________" />
-        <Row label="Penanggung Jawab" value="________________________________" />
-        <Row label="Catatan" value="________________________________" />
-        <div className="mt-16 grid grid-cols-2 gap-8 text-sm">
-          <div className="text-center"><div className="border-t border-slate-400 mt-16 pt-2 text-xs">{customer?.name}</div></div>
-          <div className="text-center"><div className="border-t border-slate-400 mt-16 pt-2 text-xs">{company.name}</div></div>
-        </div>
-      </Section>
+      </div>
     </div>
   );
 }
