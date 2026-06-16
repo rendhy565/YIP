@@ -69,6 +69,30 @@ def serialize(doc: dict) -> dict:
             doc[k] = v.isoformat()
     return doc
 
+# ----- PPh withholding helpers (sprint 1) ---------------------------------
+# Maps the vendor master `pph_type` to the applicable withholding rate and COA.
+PPH_RATES = {
+    "PPh23": (0.02, "2223", "PPh 23"),       # Jasa, sewa, dll
+    "PPh15": (0.02, "2223", "PPh 15"),       # Jasa pelayaran/penerbangan
+    "PP23UMKM": (0.005, "2223", "PPh Final UMKM (PP 23)"),
+}
+
+def pph_info_for_vendor(vendor_doc: Optional[dict]):
+    """Return (rate, account_code, label). Rate=0 means no deduction."""
+    if not vendor_doc:
+        return (0.0, "2223", "")
+    pt = vendor_doc.get("pph_type")
+    if not pt or pt not in PPH_RATES:
+        return (0.0, "2223", "")
+    return PPH_RATES[pt]
+
+def fmt_idr(n: float) -> str:
+    """Minimal IDR formatter used inside journal memo strings."""
+    try:
+        return f"Rp {int(round(n)):,}".replace(",", ".")
+    except Exception:
+        return f"Rp {n}"
+
 async def get_current_user(request: Request) -> dict:
     auth = request.headers.get("Authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else request.cookies.get("access_token")
@@ -112,6 +136,12 @@ MODULES = [
     {"key": "pnl", "label": "Laporan Laba Rugi", "default_roles": ["operation", "finance"]},
     {"key": "settings", "label": "Pengaturan", "default_roles": ["operation", "finance"]},
     {"key": "user_management", "label": "User Management", "default_roles": []},
+    # ---- Optional modules (toggled globally via feature flags). Permission per-user is still required. ----
+    {"key": "accounting", "label": "Akunting (PSAK)", "default_roles": ["finance"], "is_feature": True},
+    {"key": "hr", "label": "HR & Payroll", "default_roles": [], "is_feature": True},
+    {"key": "tax", "label": "Perpajakan (PPN/PPh)", "default_roles": [], "is_feature": True},
+    {"key": "asset", "label": "Aset Tetap & Depresiasi", "default_roles": [], "is_feature": True},
+    {"key": "bank_recon", "label": "Rekonsiliasi Bank", "default_roles": [], "is_feature": True},
 ]
 MODULE_KEYS = [m["key"] for m in MODULES]
 
@@ -299,6 +329,11 @@ DEFAULT_COA = [
     {"code": "2101", "name": "Hutang Usaha", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
     {"code": "2210", "name": "PPN Keluaran", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
     {"code": "2220", "name": "Hutang PPh", "type": "liability", "subtype": "current_liability", "normal": "credit"},
+    {"code": "2221", "name": "Hutang PPh 21", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
+    {"code": "2223", "name": "Hutang PPh 23", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
+    {"code": "2230", "name": "Hutang PPN Kurang Bayar", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
+    {"code": "1401", "name": "PPN Masukan", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
+    {"code": "1402", "name": "PPN Lebih Bayar / Kompensasi", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     # 3xxx - EKUITAS
     {"code": "3101", "name": "Modal Disetor", "type": "equity", "subtype": "equity", "normal": "credit", "is_system": True},
     {"code": "3201", "name": "Laba Ditahan", "type": "equity", "subtype": "equity", "normal": "credit", "is_system": True},
@@ -1087,32 +1122,66 @@ async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depend
     if not acc or not acc.get("is_cash"):
         raise HTTPException(400, "Akun kas/bank tidak valid")
     now = datetime.now(timezone.utc)
-    await db.awb_costs.update_one(
-        {"_id": _oid(cid)},
-        {"$set": {
-            "payment_type": "Cash",
-            "is_settled": True,
-            "settled_at": now,
-            "settled_by": user["id"],
-            "cash_account_code": cash_acc,
-        }},
-    )
-    # Auto-post journal: DR Hutang Usaha / CR Cash
+
+    # ---- PPh 23 auto-deduction (sprint 1) ----
+    # Look up the vendor master by name and apply withholding tax if pph_type is set.
+    vendor_name = cost.get("vendor_name") or ""
+    vendor_doc = None
+    if vendor_name:
+        vendor_doc = await db.vendors.find_one({"name": vendor_name})
+    pph_rate, pph_account, pph_type_label = pph_info_for_vendor(vendor_doc)
+    gross = float(cost["amount"])
+    pph_amount = round(gross * pph_rate, 2) if pph_rate > 0 else 0.0
+    net_paid = round(gross - pph_amount, 2)
+
+    update = {
+        "payment_type": "Cash",
+        "is_settled": True,
+        "settled_at": now,
+        "settled_by": user["id"],
+        "cash_account_code": cash_acc,
+    }
+    if pph_amount > 0:
+        update.update({"pph_type": pph_type_label, "pph_rate": pph_rate, "pph_amount": pph_amount, "net_paid": net_paid})
+    await db.awb_costs.update_one({"_id": _oid(cid)}, {"$set": update})
+
+    # Auto-post journal: DR Hutang Usaha (gross) / CR Cash (net) / CR Hutang PPh (potongan)
     try:
         awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
         awb_no = awb["awb_number"] if awb else ""
+        lines = [
+            {"account_code": "2101", "debit": gross, "credit": 0, "memo": vendor_name},
+            {"account_code": cash_acc, "debit": 0, "credit": net_paid, "memo": f"Settle {awb_no}"},
+        ]
+        desc = f"Pelunasan hutang vendor {vendor_name} ({awb_no})"
+        if pph_amount > 0:
+            lines.append({"account_code": pph_account, "debit": 0, "credit": pph_amount, "memo": f"{pph_type_label} {pph_rate*100:.1f}% dari {vendor_name}"})
+            desc += f" — dipotong {pph_type_label} {fmt_idr(pph_amount)}"
+            # Audit trail in db.pph_records for the Tax module
+            await db.pph_records.insert_one({
+                "period_month": now.strftime("%Y-%m"),
+                "pph_type": pph_type_label,
+                "rate": pph_rate,
+                "description": f"Potongan dari {vendor_name} atas {awb_no} (cost {cid})",
+                "vendor_name": vendor_name,
+                "vendor_id": str(vendor_doc["_id"]) if vendor_doc else None,
+                "awb_number": awb_no,
+                "cost_id": cid,
+                "gross": gross,
+                "amount": pph_amount,
+                "auto_generated": True,
+                "created_by": user["id"],
+                "created_at": now,
+            })
         await post_journal(
             date=now,
-            description=f"Pelunasan hutang vendor {cost.get('vendor_name') or ''} ({awb_no})",
-            lines=[
-                {"account_code": "2101", "debit": cost["amount"], "credit": 0, "memo": cost.get("vendor_name") or ""},
-                {"account_code": cash_acc, "debit": 0, "credit": cost["amount"], "memo": f"Settle {awb_no}"},
-            ],
+            description=desc,
+            lines=lines,
             reference_type="settlement", reference_id=cid, posted_by=user["id"],
         )
     except HTTPException as e:
-        return {"ok": True, "journal_warning": e.detail}
-    return {"ok": True}
+        return {"ok": True, "journal_warning": e.detail, "pph_amount": pph_amount, "net_paid": net_paid}
+    return {"ok": True, "pph_type": pph_type_label, "pph_rate": pph_rate, "pph_amount": pph_amount, "net_paid": net_paid, "gross": gross}
 
 @app.delete("/api/costs/{cid}")
 async def delete_cost(cid: str, user: dict = Depends(get_current_user)):
@@ -2325,6 +2394,11 @@ def require_feature(key: str):
     async def dep(user: dict = Depends(get_current_user)) -> dict:
         if not await is_feature_enabled(key):
             raise HTTPException(status_code=503, detail=f"Modul '{key}' sedang dinonaktifkan oleh administrator")
+        # Per-user permission check (admin bypasses). Allows admin to grant module access selectively.
+        if user.get("role") != "administrator":
+            perms = user.get("permissions") or []
+            if key not in perms:
+                raise HTTPException(status_code=403, detail=f"Anda tidak memiliki izin untuk modul '{key}'. Hubungi administrator.")
         return user
     return dep
 
@@ -2522,6 +2596,88 @@ async def ppn_summary(period: Optional[str] = None, user: dict = Depends(require
         "detail_keluaran": detail_kel,
         "detail_masukan": detail_mas,
     }
+
+class PpnMasukanIn(BaseModel):
+    date: str                          # YYYY-MM-DD
+    supplier_name: str
+    no_faktur: Optional[str] = None
+    dpp: float
+    ppn_pct: float = 11.0
+    expense_account_code: str = "6199"   # default: Beban Lainnya
+    cash_account_code: str = "1101"      # default: Kas
+    description: Optional[str] = None
+
+@app.get("/api/tax/ppn-masukan")
+async def list_ppn_masukan(period: Optional[str] = None, user: dict = Depends(require_feature("tax"))):
+    q = {}
+    if period:
+        q["period_month"] = period
+    docs = await db.ppn_masukan_entries.find(q).sort("date", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/tax/ppn-masukan")
+async def create_ppn_masukan(data: PpnMasukanIn, user: dict = Depends(require_feature("tax"))):
+    try:
+        y, m, d = [int(x) for x in data.date.split("-")]
+        dt = datetime(y, m, d, tzinfo=timezone.utc)
+    except Exception:
+        raise HTTPException(400, "Format tanggal harus YYYY-MM-DD")
+    dpp = round(float(data.dpp), 2)
+    if dpp <= 0:
+        raise HTTPException(400, "DPP harus > 0")
+    ppn_amount = round(dpp * float(data.ppn_pct) / 100.0, 2)
+    total = round(dpp + ppn_amount, 2)
+    # Validate accounts
+    exp_acc = await get_account(data.expense_account_code)
+    if not exp_acc:
+        raise HTTPException(400, "Akun beban tidak valid")
+    cash_acc = await get_account(data.cash_account_code)
+    if not cash_acc or not cash_acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    # Auto-post journal: DR Beban + DR PPN Masukan / CR Kas/Bank
+    desc = f"Pembelian {data.supplier_name}" + (f" - {data.description}" if data.description else "")
+    lines = [
+        {"account_code": data.expense_account_code, "debit": dpp, "credit": 0, "memo": data.supplier_name},
+        {"account_code": "1401", "debit": ppn_amount, "credit": 0, "memo": f"PPN {data.ppn_pct}% {data.no_faktur or ''}".strip()},
+        {"account_code": data.cash_account_code, "debit": 0, "credit": total, "memo": f"Bayar {data.supplier_name}"},
+    ]
+    je = await post_journal(
+        date=dt, description=desc, lines=lines,
+        reference_type="ppn_masukan", reference_id=None, posted_by=user["id"],
+    )
+    entry = {
+        "date": dt,
+        "period_month": dt.strftime("%Y-%m"),
+        "supplier_name": data.supplier_name,
+        "no_faktur": data.no_faktur,
+        "dpp": dpp,
+        "ppn_pct": float(data.ppn_pct),
+        "ppn_amount": ppn_amount,
+        "total": total,
+        "expense_account_code": data.expense_account_code,
+        "cash_account_code": data.cash_account_code,
+        "description": data.description,
+        "journal_entry_no": je.get("entry_no") if isinstance(je, dict) else None,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.ppn_masukan_entries.insert_one(entry)
+    return serialize(await db.ppn_masukan_entries.find_one({"_id": r.inserted_id}))
+
+@app.delete("/api/tax/ppn-masukan/{pid}")
+async def delete_ppn_masukan(pid: str, user: dict = Depends(require_feature("tax"))):
+    doc = await db.ppn_masukan_entries.find_one({"_id": _oid(pid)})
+    if not doc:
+        raise HTTPException(404, "Entry tidak ditemukan")
+    # Also delete the linked journal entry (if not period-locked)
+    if doc.get("journal_entry_no"):
+        je = await db.journal_entries.find_one({"entry_no": doc["journal_entry_no"]})
+        if je and je.get("is_locked"):
+            raise HTTPException(400, "Jurnal terkait sudah terkunci (period closed)")
+        if je:
+            await db.journal_entries.delete_one({"_id": je["_id"]})
+    await db.ppn_masukan_entries.delete_one({"_id": _oid(pid)})
+    return {"ok": True}
 
 class PphRecordIn(BaseModel):
     period_month: str

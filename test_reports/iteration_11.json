@@ -1,0 +1,49 @@
+{
+  "summary": "Iteration 11 backend + frontend testing for tax module: COA seed (1401/1402/2221/2223/2230 + 2210/2220), per-user feature permission gating on /api/tax/pph, PPh23/PP23UMKM auto-deduct on settle cost, manual PPN Masukan POST/GET/DELETE + journal auto-post, /api/tax/ppn-summary, plus frontend User Management modal (18 perms incl. 5 feature modules), Tax page PPN/PPh tabs, PPN Masukan modal with live preview, Settings banner. All 11 backend tests PASS. All targeted frontend flows VERIFIED.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": [
+    "GET /api/accounts contains all 7 tax COA codes: 1401 (PPN Masukan), 1402, 2221, 2223, 2230, 2210, 2220.",
+    "Per-user permission gating: revoking 'tax' from finance.permissions → GET /api/tax/pph returns 403; re-granting → 200. Admin bypass works.",
+    "Settle vendor (PPh23 5jt): pph_amount=100000, net_paid=4900000, gross=5000000; journal includes CR 2223.",
+    "Settle vendor without pph_type: pph_amount=0, 2-line journal (gross 2jt = net_paid).",
+    "PP23UMKM 1jt → pph_amount=5000 (0.5%).",
+    "POST /api/tax/ppn-masukan (dpp=10jt, ppn=11%): ppn_amount=1100000, total=11100000, journal_entry_no returned.",
+    "GET /api/tax/ppn-masukan?period=2026-06 lists newly created entry.",
+    "GET /api/tax/ppn-summary?period=2026-06 reflects masukan (>= 1.1M, current shown 2.2M after multiple inserts).",
+    "DELETE /api/tax/ppn-masukan/<id> removes entry; subsequent GET no longer returns the id.",
+    "Frontend /users → Edit finance modal shows 18 permission checkboxes including perm-accounting / perm-hr / perm-tax / perm-asset / perm-bank_recon.",
+    "Frontend /tax loads on PPN tab by default with 3 cards (card-ppn-keluaran/masukan/selisih) and button add-ppn-masukan-btn in 'PPN Masukan — Input Manual' section.",
+    "Clicking add-ppn-masukan-btn opens modal (data-testid='ppn-masukan-modal'). Filling supplier='UI TEST', DPP=1000000, PPN=11% live preview shows DPP Rp 1.000.000 / PPN Rp 110.000 / Total Rp 1.110.000. Submit closes modal and 'UI TEST' supplier appears in PPN Masukan table.",
+    "PPh tab shows 3 auto-generated PPh records (PPh Final UMKM, PPh 23 ×2) each with green 'AUTO' badge and NO delete button (confirmed via grep — 4 occurrences of 'AUTO' on the page).",
+    "Settings page 'Aktivasi Modul' section contains a yellow warning banner with text mentioning 'Akses per-user tetap diatur di User Management — admin harus mencentang permission modul untuk setiap user.'"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration11_tax.py",
+    "/app/test_reports/pytest/iteration11_tax.xml"
+  ],
+  "action_items": [
+    "MINOR: data-testid naming inconsistency on PPN Masukan modal — task plan expects 'input-supplier' / 'input-dpp' / 'input-ppn-pct' / 'submit-ppn-masukan' / 'preview-ppn' / 'preview-total' / 'ppn-masukan-row-*' but actual implementation uses 'masukan-supplier' / 'masukan-dpp' / 'masukan-no-faktur' and the submit button + preview cells + table rows have NO data-testid. Functionality works; consider aligning testids for future automated regression."
+  ],
+  "critical_code_review_comments": [
+    "Per-user gating in require_feature() works correctly with admin bypass — confirmed empirically (admin can hit /api/tax/pph regardless of permissions).",
+    "POST /api/tax/ppn-masukan response shape is consistent (id, ppn_amount, total, journal_entry_no all populated).",
+    "Settle endpoint returns gross / net_paid / pph_amount + journal_entry_no — clean shape.",
+    "PPh records collection writes auto_generated=true for settle-derived rows; UI correctly hides delete button when auto badge present.",
+    "Existing test_iteration11_features.py is for an UNRELATED iteration-11 feature (receive enable flags + invoice full company fields); kept as-is. New tax tests added in test_iteration11_tax.py."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration11_tax.py (NEW)"
+  ],
+  "success_rate": {"backend": "100% (11/11 pytest)", "frontend": "100% (all targeted flows verified)"},
+  "test_credentials": "admin/admin123, finance/finance123, operation/operation123 (all working). Note: tests temporarily revoke 'tax' perm from finance and restore it afterward.",
+  "seed_data_creation": "Vendors QA_VENDOR_PPH23, QA_VENDOR_NO_PPH, QA_VENDOR_UMKM created/updated. Multiple TEST_IT11_PPH cost entries posted + settled on existing AWB. Several PPN Masukan entries added (period 2026-06): QA_SUPPLIER_<ts>, QA_DEL_<ts> (deleted), and 'UI TEST' via Playwright.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend tax tests in /app/backend/tests/test_iteration11_tax.py — run with: REACT_APP_BACKEND_URL=https://arc-staging-1.preview.emergentagent.com python -m pytest backend/tests/test_iteration11_tax.py -v. Cost-create endpoint requires BOTH 'cost_category' and 'category' fields (cost_category is the Pydantic-required one; category is legacy). PPN Masukan modal in TaxModule.js uses testid prefix 'masukan-*' rather than 'input-*' — note for selector reuse. Finance user permissions are modified temporarily — they are restored to include 'tax' at end of test run, so re-running is idempotent.",
+  "rca_of_the_issue": "N/A — all features working as specified."
+}

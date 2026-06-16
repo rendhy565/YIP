@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Table, Th, Td } from "../components/ui";
 import { errMsg } from "../lib/utils";
@@ -93,6 +94,9 @@ export default function Settings() {
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
           <h3 className="font-bold">Aktivasi Modul</h3>
           {!isAdmin && <span className="text-xs text-amber-700 flex items-center gap-1"><ShieldAlert size={12}/> hanya admin</span>}
+        </div>
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-900">
+          <strong>Penting:</strong> Mengaktifkan modul di sini hanya membuka modul secara global. Akses per-user tetap diatur di <Link to="/users" className="font-bold underline">User Management</Link> — admin harus mencentang permission modul untuk setiap user.
         </div>
         <div className="divide-y divide-slate-200">
           {flags.map((f) => (
