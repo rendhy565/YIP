@@ -589,3 +589,26 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 ### Files touched
 - New: `SearchableSelect.js`, `Pagination.js`
 - Updated: `OrderInput.js`, `Costs.js`, `PanjarKerja.js`, `Recap.js`, `Invoices.js`, `Payments.js`, `AccrueSettlement.js`, `OrdersList.js`, `InvoicesCreated.js`, `Layout.js`, `server.py`
+
+## Iteration 10 — Bulk Print to PDF + Recap Pagination (2026-02-16)
+
+### Bulk Print to PDF (Invoice Tercetak)
+- **InvoicePrint.js** refactor: extracted reusable `InvoicePrintBody` + `InvoicePrintStyles` named exports so a single invoice render is shared with the bulk page.
+- **InvoicePrintBulk.js (NEW)**: `/invoices/print-bulk?ids=id1,id2,...` fetches all selected invoices in parallel via `/api/invoices/:id/full` and stacks them in one document (page-break after each invoice + lampiran). Single **Cetak Semua (N)** button at the top so user presses Ctrl+P **once** to save all as one combined PDF.
+- **InvoicesCreated.js**: `bulkPrint()` now opens a single combined tab instead of one tab per invoice.
+- **App.js**: registered route `/invoices/print-bulk` under `<Protected>`.
+
+### Recap — Pagination (gap fix from iteration 9)
+- Added `Pagination` + `usePagination` to all 3 tables on `/recap` (Open-no-cost, Ready-to-reconcile, Reconciled) with isolated reset keys per table-search.
+
+### Testing
+- `iteration_10.json`: Bulk Print verified end-to-end (toolbar count, new tab opens at /print-bulk URL, stacked layout, single-row Print still works). All regressions (Pagination on /orders/invoices/created/accrue, AND/OR filter, Reclass UI, SearchableSelect) pass. /recap pagination gap fixed post-test.
+
+### Files touched
+- New: `pages/InvoicePrintBulk.js`
+- Updated: `pages/InvoicePrint.js`, `pages/InvoicesCreated.js`, `pages/Recap.js`, `App.js`
+
+## Backlog / P2
+- **"Tanggal Terima" Checklists** in the Receive popup (BAST, Surat Jalan, Faktur, etc.) mapping to DB booleans (deferred by user "Nanti dulu").
+- `server.py` refactor (~4800 lines) into routes/models/services modules — pending user approval.
+

@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircle, Edit3, Save, X, FileSpreadsheet } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
+import Pagination, { usePagination } from "../components/Pagination";
 
 function todayStr() {
   const d = new Date();
@@ -107,6 +108,10 @@ export default function Recap() {
   const noCostFiltered = useMemo(() => noCostRows.filter((r) => matchQ(r, qNoCost)), [noCostRows, qNoCost]);
   const readyFiltered = useMemo(() => readyRows.filter((r) => matchQ(r, qReady)), [readyRows, qReady]);
   const reconciledFiltered = useMemo(() => reconciledGlobal.filter((r) => matchQ(r, qReconciled)), [reconciledGlobal, qReconciled]);
+
+  const pagNoCost = usePagination(noCostFiltered, { resetKey: `nocost|${qNoCost}|${month}|${customerId}|${filterMode}` });
+  const pagReady = usePagination(readyFiltered, { resetKey: `ready|${qReady}|${month}|${customerId}|${filterMode}` });
+  const pagReconciled = usePagination(reconciledFiltered, { resetKey: `rec|${qReconciled}|${month}|${customerId}|${filterMode}` });
 
   const toggle = (id) => {
     const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n);
@@ -313,7 +318,7 @@ export default function Recap() {
             <Th>Rute</Th><Th>Service/Via</Th><Th className="text-right">Selling</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {noCostFiltered.map((r) => (
+            {pagNoCost.paged.map((r) => (
               <tr key={r.id} data-testid={`open-nocost-row-${r.id}`}>
                 <Td className="font-mono font-semibold">{r.awb_number}</Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
@@ -338,6 +343,7 @@ export default function Recap() {
             {noCostFiltered.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-8">{qNoCost ? "Tidak ada hasil cocok dengan filter." : "Tidak ada AWB Open tanpa cost."}</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pagNoCost} testid="pagination-recap-nocost"/>
       </Card>
 
       {/* TABLE 2: Open with cost — ready to reconcile */}
@@ -363,7 +369,7 @@ export default function Recap() {
             <Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {readyFiltered.map((r) => (
+            {pagReady.paged.map((r) => (
               <tr key={r.id} data-testid={`ready-row-${r.id}`}>
                 <Td>
                   <button onClick={() => toggle(r.id)}>
@@ -396,6 +402,7 @@ export default function Recap() {
             {readyFiltered.length === 0 && <tr><Td colSpan={13} className="text-center text-slate-500 py-8">{qReady ? "Tidak ada hasil cocok dengan filter." : "Belum ada AWB siap rekonsiliasi."}</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pagReady} testid="pagination-recap-ready"/>
       </Card>
 
       {/* TABLE 3: Already Reconciled */}
@@ -424,7 +431,7 @@ export default function Recap() {
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
-            {reconciledFiltered.map((r) => (
+            {pagReconciled.paged.map((r) => (
               <tr key={r.id} data-testid={`reconciled-row-${r.id}`}>
                 <Td>
                   <button data-testid={`reconciled-toggle-${r.id}`} onClick={() => toggleRec(r.id)}>
@@ -447,6 +454,7 @@ export default function Recap() {
             {reconciledFiltered.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-8">{qReconciled ? "Tidak ada hasil cocok dengan filter." : "Tidak ada AWB Reconciled."}</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pagReconciled} testid="pagination-recap-reconciled"/>
       </Card>
 
       {/* EDIT MODAL */}
