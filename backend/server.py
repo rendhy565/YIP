@@ -332,6 +332,8 @@ DEFAULT_COA = [
     {"code": "2221", "name": "Hutang PPh 21", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
     {"code": "2223", "name": "Hutang PPh 23", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
     {"code": "2230", "name": "Hutang PPN Kurang Bayar", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
+    {"code": "2390", "name": "Pendapatan Belum Diakui (Unearned Revenue)", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
+    {"code": "1290", "name": "Pendapatan Yang Masih Harus Diterima (PYMHD)", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     {"code": "1401", "name": "PPN Masukan", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     {"code": "1402", "name": "PPN Lebih Bayar / Kompensasi", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     # 3xxx - EKUITAS
@@ -943,6 +945,58 @@ async def get_order(oid: str, user: dict = Depends(get_current_user)):
     s["invoice"] = serialize(inv) if inv else None
     return s
 
+async def recognize_revenue_for_awb(awb_id, user_id: str, trigger_date: Optional[datetime] = None) -> dict:
+    """Idempotent revenue recognition for an AWB.
+
+    Posts: DR 2390 Pendapatan Belum Diakui / CR 4101 Pendapatan Jasa Pengangkutan
+    Sets order.revenue_recognized=True so subsequent triggers (cost add, reconcile,
+    invoice create) won't double-post.
+    """
+    oid = awb_id if isinstance(awb_id, ObjectId) else _oid(awb_id)
+    awb = await db.awb_orders.find_one({"_id": oid})
+    if not awb:
+        return {"ok": False, "reason": "AWB not found"}
+    if awb.get("revenue_recognized"):
+        return {"ok": True, "recognized": False, "reason": "already recognized"}
+    dpp = float(awb.get("total_tariff") or 0)
+    if dpp <= 0:
+        await db.awb_orders.update_one({"_id": oid}, {"$set": {"revenue_recognized": True}})
+        return {"ok": True, "recognized": False, "reason": "zero amount"}
+    date = trigger_date or datetime.now(timezone.utc)
+    try:
+        await post_journal(
+            date=date,
+            description=f"Pengakuan revenue {awb['awb_number']} (jasa dilaksanakan)",
+            lines=[
+                {"account_code": "2390", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+                {"account_code": "4101", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+            ],
+            reference_type="awb_revenue_recognition",
+            reference_id=str(oid),
+            posted_by=user_id,
+        )
+    except HTTPException as e:
+        # Period locked → retry with today's date so recognition still happens.
+        if e.status_code in (400, 423) and "terkunci" in str(e.detail).lower():
+            await post_journal(
+                date=datetime.now(timezone.utc),
+                description=f"Pengakuan revenue {awb['awb_number']} (period {date.strftime('%Y-%m')} locked)",
+                lines=[
+                    {"account_code": "2390", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+                    {"account_code": "4101", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+                ],
+                reference_type="awb_revenue_recognition",
+                reference_id=str(oid),
+                posted_by=user_id,
+            )
+        else:
+            raise
+    await db.awb_orders.update_one(
+        {"_id": oid},
+        {"$set": {"revenue_recognized": True, "revenue_recognized_at": date}},
+    )
+    return {"ok": True, "recognized": True, "amount": dpp}
+
 @app.post("/api/orders")
 async def create_order(data: OrderIn, user: dict = Depends(require_role("operation"))):
     total = round(data.tariff_per_kg * data.qty_kg, 2)
@@ -991,29 +1045,29 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
         "polis_amount": float(data.polis_amount or 0) if data.insurance_enabled else 0,
         "insurance_amount": float(data.insurance_amount or 0) if data.insurance_enabled else 0,
         "status": "Open",
+        "revenue_recognized": False,
         "created_by": user["id"],
         "created_at": created_at,
     }
     r = await db.awb_orders.insert_one(doc)
     new = await db.awb_orders.find_one({"_id": r.inserted_id})
-    # Auto-post journal: DR Piutang / CR Pendapatan + PPN Keluaran
+    # Auto-post journal (PYMHD model — PSAK 72): order belum diakui revenue.
+    # DR  1290 PYMHD (Pendapatan Yang Masih Harus Diterima)  = DPP
+    #     CR  2390 Pendapatan Belum Diakui (Unearned Revenue) = DPP
+    # PPN belum di-post karena Faktur Pajak baru terbit saat invoice dibuat.
     try:
-        lines = [
-            {"account_code": "1201", "debit": doc["grand_total"], "credit": 0, "memo": doc["awb_number"]},
-            {"account_code": "4101", "debit": 0, "credit": doc["total_tariff"], "memo": doc["awb_number"]},
-        ]
-        if doc["tax_amount"] > 0:
-            lines.append({"account_code": "2210", "debit": 0, "credit": doc["tax_amount"], "memo": f"PPN {doc['tax_percentage']}%"})
         await post_journal(
             date=doc["created_at"],
-            description=f"Penjualan jasa pengangkutan {doc['awb_number']}",
-            lines=lines,
-            reference_type="awb_order",
+            description=f"PYMHD - Order {doc['awb_number']} (belum diakui revenue)",
+            lines=[
+                {"account_code": "1290", "debit": doc["total_tariff"], "credit": 0, "memo": doc["awb_number"]},
+                {"account_code": "2390", "debit": 0, "credit": doc["total_tariff"], "memo": doc["awb_number"]},
+            ],
+            reference_type="awb_order_pymhd",
             reference_id=str(r.inserted_id),
             posted_by=user["id"],
         )
     except HTTPException as e:
-        # Don't block AWB creation if period is locked; log only
         new["journal_warning"] = e.detail
     return serialize(new)
 
@@ -1108,6 +1162,11 @@ async def create_cost(data: CostIn, user: dict = Depends(get_current_user)):
         )
     except HTTPException as e:
         new["journal_warning"] = e.detail
+    # PSAK 72 trigger: this is the first sign vendor delivered the service → recognize revenue.
+    try:
+        await recognize_revenue_for_awb(doc["awb_id"], user["id"], trigger_date=doc["created_at"])
+    except Exception as e:
+        new["revenue_recognition_warning"] = str(e)
     return serialize(new)
 
 @app.post("/api/costs/{cid}/settle")
@@ -1219,6 +1278,13 @@ async def reconcile_orders(data: ReconcileIn, user: dict = Depends(require_role(
         {"_id": {"$in": valid_ids}, "status": "Open"},
         {"$set": {"status": "Reconciled", "reconciled_at": datetime.now(timezone.utc)}},
     )
+    # PSAK 72 trigger: defensive recognition (cost trigger above should have already
+    # fired, but reconcile is also a valid signal — idempotent helper makes this safe).
+    for oid in valid_ids:
+        try:
+            await recognize_revenue_for_awb(oid, user["id"])
+        except Exception:
+            pass
     return {"updated": res.modified_count, "skipped_no_cost": skipped}
 
 @app.post("/api/orders/{oid}/revert-to-open")
@@ -1263,17 +1329,47 @@ async def create_invoice(data: InvoiceCreateIn, user: dict = Depends(require_rol
         return serialize(existing)
     if o["status"] != "Reconciled":
         raise HTTPException(400, "Hanya order dengan status Reconciled yang bisa dibuat invoice")
+    now = datetime.now(timezone.utc)
     doc = {
         "awb_id": o["_id"],
         "invoice_number": await next_invoice_number(),
-        "created_at": datetime.now(timezone.utc),
+        "created_at": now,
         "created_by": user["id"],
     }
     r = await db.invoices.insert_one(doc)
     await db.awb_orders.update_one(
         {"_id": o["_id"]},
-        {"$set": {"status": "Invoiced", "invoiced_at": datetime.now(timezone.utc)}},
+        {"$set": {"status": "Invoiced", "invoiced_at": now}},
     )
+    # Defensive: make sure revenue is recognized before invoice posting
+    try:
+        await recognize_revenue_for_awb(o["_id"], user["id"])
+    except Exception:
+        pass
+    # Post invoice journal:
+    #   DR  1201 Piutang Usaha   = grand_total (DPP + PPN)
+    #       CR  1290 PYMHD       = total_tariff (DPP) — clear unbilled receivable
+    #       CR  2210 PPN Keluaran = tax_amount (only when invoice/faktur terbit)
+    try:
+        dpp = float(o.get("total_tariff") or 0)
+        tax = float(o.get("tax_amount") or 0)
+        gross = round(dpp + tax, 2)
+        lines = [
+            {"account_code": "1201", "debit": gross, "credit": 0, "memo": doc["invoice_number"]},
+            {"account_code": "1290", "debit": 0, "credit": dpp, "memo": f"Clear PYMHD {o['awb_number']}"},
+        ]
+        if tax > 0:
+            lines.append({"account_code": "2210", "debit": 0, "credit": tax, "memo": f"PPN {o.get('tax_percentage') or 0}% — {doc['invoice_number']}"})
+        await post_journal(
+            date=now,
+            description=f"Invoice {doc['invoice_number']} - {o['awb_number']}",
+            lines=lines,
+            reference_type="invoice",
+            reference_id=str(r.inserted_id),
+            posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
     new = await db.invoices.find_one({"_id": r.inserted_id})
     return serialize(new)
 
@@ -1313,6 +1409,32 @@ async def create_invoice_bulk(data: InvoiceBulkIn, user: dict = Depends(require_
             {"_id": o["_id"]},
             {"$set": {"status": "Invoiced", "invoiced_at": now}},
         )
+        # Defensive recognize
+        try:
+            await recognize_revenue_for_awb(o["_id"], user["id"])
+        except Exception:
+            pass
+        # Invoice journal: DR 1201 / CR 1290 / CR 2210
+        try:
+            dpp = float(o.get("total_tariff") or 0)
+            tax = float(o.get("tax_amount") or 0)
+            gross = round(dpp + tax, 2)
+            inv_lines = [
+                {"account_code": "1201", "debit": gross, "credit": 0, "memo": doc["invoice_number"]},
+                {"account_code": "1290", "debit": 0, "credit": dpp, "memo": f"Clear PYMHD {o['awb_number']}"},
+            ]
+            if tax > 0:
+                inv_lines.append({"account_code": "2210", "debit": 0, "credit": tax, "memo": f"PPN {o.get('tax_percentage') or 0}% — {doc['invoice_number']}"})
+            await post_journal(
+                date=now,
+                description=f"Invoice {doc['invoice_number']} - {o['awb_number']}",
+                lines=inv_lines,
+                reference_type="invoice",
+                reference_id=str(r.inserted_id),
+                posted_by=user["id"],
+            )
+        except HTTPException:
+            pass
         created.append({"awb_id": sid, "invoice_number": doc["invoice_number"], "id": str(r.inserted_id)})
     return {"created": created, "skipped": skipped, "created_count": len(created), "skipped_count": len(skipped)}
 
@@ -2927,6 +3049,20 @@ async def _startup_feature_flags():
     await ensure_feature_flags()
 
 
+@app.on_event("startup")
+async def _startup_migrate_revenue_recognition():
+    """One-time migration: all AWBs created before the PYMHD model is deployed used
+    the old jurnal (DR 1201 / CR 4101 directly at order creation). Mark them as
+    already-recognized so cost-add/reconcile/invoice triggers don't double-post.
+    """
+    r = await db.awb_orders.update_many(
+        {"revenue_recognized": {"$exists": False}},
+        {"$set": {"revenue_recognized": True}},
+    )
+    if r.modified_count:
+        print(f"[migration] Marked {r.modified_count} existing AWBs as revenue_recognized=True")
+
+
 # ===========================================================================
 # IMPORT EXCEL & MASTER VENDORS  (extension v2)
 # ===========================================================================
@@ -3866,6 +4002,91 @@ async def analytics_awbs_detail(
 from fastapi.responses import StreamingResponse
 
 # ── DELETE AWB (Admin only) — cascade delete costs, invoices, journals ────
+@app.post("/api/admin/migrate-pymhd")
+async def migrate_pymhd(dry_run: bool = True, user: dict = Depends(require_role("administrator"))):
+    """Migrate historical AWBs from old jurnal model (DR 1201 / CR 4101 at order
+    creation) to new PYMHD model. Only AWBs that have NOT been invoiced yet are
+    migrated — invoiced AWBs are left alone (their journals already represent the
+    final Piutang state).
+
+    Strategy (per AWB):
+      1. Find all old `awb_order` journals for this AWB and delete them.
+      2. Post new PYMHD journal:  DR 1290 / CR 2390
+      3. If AWB already has cost AND status != Open without cost → post recognition
+         journal:  DR 2390 / CR 4101
+      4. Update awb_orders.revenue_recognized accordingly.
+
+    Set `dry_run=false` to actually execute.
+    """
+    candidates = await db.awb_orders.find({}).to_list(20000)
+    plan = []
+    now = datetime.now(timezone.utc)
+    for awb in candidates:
+        # Skip if invoiced (its old journals are valid as final Piutang state)
+        if await db.invoices.find_one({"awb_id": awb["_id"]}):
+            continue
+        old = await db.journal_entries.find({
+            "reference_type": "awb_order", "reference_id": str(awb["_id"])
+        }).to_list(20)
+        # Skip already-migrated (no old jurnal found)
+        if not old:
+            continue
+        # Skip if any old journal is in a locked period — admin must unlock first
+        locked = any(j.get("is_locked") for j in old)
+        if locked:
+            plan.append({"awb": awb["awb_number"], "action": "skip", "reason": "old journal in locked period"})
+            continue
+        has_cost = bool(await db.awb_costs.find_one({"awb_id": awb["_id"]}))
+        plan.append({
+            "awb": awb["awb_number"],
+            "action": "migrate",
+            "has_cost": has_cost,
+            "old_journals": [j["entry_no"] for j in old],
+        })
+        if dry_run:
+            continue
+        # Execute: delete old, post new
+        await db.journal_entries.delete_many({
+            "reference_type": "awb_order", "reference_id": str(awb["_id"])
+        })
+        dpp = float(awb.get("total_tariff") or 0)
+        await post_journal(
+            date=awb["created_at"],
+            description=f"PYMHD - Order {awb['awb_number']} (migrated)",
+            lines=[
+                {"account_code": "1290", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+                {"account_code": "2390", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+            ],
+            reference_type="awb_order_pymhd",
+            reference_id=str(awb["_id"]),
+            posted_by=user["id"],
+        )
+        if has_cost:
+            first_cost = await db.awb_costs.find({"awb_id": awb["_id"]}).sort("created_at", 1).limit(1).to_list(1)
+            rec_date = first_cost[0]["created_at"] if first_cost else now
+            await post_journal(
+                date=rec_date,
+                description=f"Pengakuan revenue {awb['awb_number']} (migrated)",
+                lines=[
+                    {"account_code": "2390", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+                    {"account_code": "4101", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+                ],
+                reference_type="awb_revenue_recognition",
+                reference_id=str(awb["_id"]),
+                posted_by=user["id"],
+            )
+            await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": {"revenue_recognized": True, "revenue_recognized_at": rec_date}})
+        else:
+            await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": {"revenue_recognized": False}})
+    summary = {
+        "dry_run": dry_run,
+        "total_candidates": len(plan),
+        "migrate_count": sum(1 for p in plan if p["action"] == "migrate"),
+        "skip_count": sum(1 for p in plan if p["action"] == "skip"),
+        "plan": plan,
+    }
+    return summary
+
 @app.delete("/api/orders/{oid}")
 async def delete_awb(oid: str, user: dict = Depends(require_role("administrator"))):
     awb = await db.awb_orders.find_one({"_id": _oid(oid)})
@@ -3877,6 +4098,8 @@ async def delete_awb(oid: str, user: dict = Depends(require_role("administrator"
     journal_count = (await db.journal_entries.delete_many({
         "$or": [
             {"reference_type": "awb_order", "reference_id": str(awb["_id"])},
+            {"reference_type": "awb_order_pymhd", "reference_id": str(awb["_id"])},
+            {"reference_type": "awb_revenue_recognition", "reference_id": str(awb["_id"])},
             {"reference_type": "payment", "reference_id": str(awb["_id"])},
             {"reference_type": "cost", "reference_id": {"$in": [str(awb["_id"])]}},
         ]

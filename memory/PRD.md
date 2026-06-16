@@ -655,3 +655,51 @@ User memilih: Sprint 1 (PPh 23 auto-deduct) + Sprint 3 lite (popup manual PPN Ma
 - **"Tanggal Terima" Checklists** di modal Penerimaan AWB (P2).
 - Refactor `server.py` ~4900 baris (P3).
 
+
+## Iteration 12 — PSAK 72 Revenue Recognition: PYMHD Model (2026-02-16)
+
+### Background
+User UAT menemukan **/pnl (Laba Rugi Order) ≠ /income-statement (Akunting)** untuk bulan Januari (dan bulan-bulan lain). Audit mendapati sistem lama post jurnal `DR 1201 / CR 4101 / CR 2210` **saat AWB dibuat** — revenue langsung diakui meski jasa belum dilaksanakan. /pnl filter `has_cost` → exclude AWB tanpa cost; /income-statement tidak filter → keduanya divergen.
+
+User memilih: **terapkan PSAK 72** dengan model PYMHD (Pendapatan Yang Masih Harus Diterima). Revenue diakui hanya saat ada cost (= bukti jasa berjalan) atau reconciled.
+
+### COA additions
+- **`1290 PYMHD (Pendapatan Yang Masih Harus Diterima)`** — asset, normal debit
+- **`2390 Pendapatan Belum Diakui (Unearned Revenue)`** — liability, normal credit
+
+### Alur jurnal BARU (untuk AWB created mulai sekarang)
+1. **Create AWB** → `DR 1290 / CR 2390` sebesar DPP (PPN belum di-post — sesuai aturan Faktur Pajak terbit saat invoice).
+2. **Cost pertama ditambahkan** atau **status di-Reconcile** (mana lebih dulu) → `DR 2390 / CR 4101` = revenue recognized. Idempotent via flag `order.revenue_recognized`.
+3. **Invoice dibuat** → `DR 1201 (gross) / CR 1290 (DPP) / CR 2210 (PPN)` — clear PYMHD jadi Piutang real + Faktur Pajak terbit.
+4. **Customer bayar** → `DR 1101 Kas / CR 1201 Piutang` (unchanged).
+
+### Implementation details
+- **Helper baru `recognize_revenue_for_awb(awb_id, user_id, trigger_date)`** (server.py): idempotent, retry dengan tanggal current jika period locked.
+- **Field baru** di `awb_orders`: `revenue_recognized: bool`, `revenue_recognized_at: datetime`.
+- **POST /api/orders** (L946): ubah jurnal jadi PYMHD.
+- **POST /api/costs** (L1049): trigger recognize_revenue di akhir.
+- **POST /api/orders/reconcile** (L1205): defensive recognize_revenue.
+- **POST /api/invoices** + **POST /api/invoices/bulk**: post jurnal `DR 1201 / CR 1290 / CR 2210`.
+- **DELETE /api/orders** (L3869): cascade delete journal baru `awb_order_pymhd` dan `awb_revenue_recognition`.
+- **Startup migration** (idempotent): mark all existing AWBs `revenue_recognized=True` untuk cegah double-post.
+- **Endpoint admin baru** `POST /api/admin/migrate-pymhd?dry_run=false`: backfill historical AWBs (yang belum invoiced) ke model PYMHD. Old `awb_order` journals dihapus, jurnal baru `awb_order_pymhd` + (kalau ada cost) `awb_revenue_recognition` di-post dengan tanggal sesuai.
+
+### Verifikasi Live (2026-06)
+| | Sebelum migrasi | Setelah migrasi |
+|---|---:|---:|
+| `/pnl total_revenue` | Rp 2.171.000 | Rp 2.171.000 |
+| `/income-statement total_revenue` | Rp 3.928.000 ❌ | **Rp 2.171.000** ✅ |
+| Selisih | Rp 1.757.000 | **Rp 0** ✅ |
+
+86 AWB historical (non-invoiced) berhasil dimigrasikan. AWB yang sudah Invoiced TIDAK disentuh (jurnal lama tetap valid sebagai Piutang final).
+
+### Files touched
+- `server.py`: COA seed, helper `recognize_revenue_for_awb`, POST /api/orders, POST /api/costs, POST /api/orders/reconcile, POST /api/invoices, POST /api/invoices/bulk, DELETE /api/orders, startup migration, POST /api/admin/migrate-pymhd.
+
+## Backlog / Next
+- **Sprint 2 (P0):** Rekonsiliasi PPN otomatis di Tutup Buku — saldo 2210 vs 1401 di-net ke 2230 (kurang bayar) atau 1402 (kompensasi).
+- **Sprint 3 FULL (P1):** Modul Purchase Invoice komplit dengan UI + e-Faktur format.
+- **PPh 21 progressive rate / TER (P2).**
+- **"Tanggal Terima" Checklists** (P2).
+- **Reverse cost deletion**: kalau cost terakhir dihapus dari AWB, reverse recognition jurnal agar PYMHD balance kembali (saat ini cost delete tidak men-reverse).
+
