@@ -436,3 +436,60 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 ### Files touched
 - Backend: `/app/backend/server.py` (banyak — model OrderIn/ReceiveAwbIn/CashAdvanceSettleIn, seed bank settings, tax_ppn_12 cleanup, bulk-revert, invoice excel rewrite, logo upload, cash advance breakdown side-effects).
 - Frontend: `OrderInput.js`, `Contracts.js`, `Recap.js`, `Invoices.js` (slimmed), `InvoicesCreated.js` (new), `OrdersList.js`, `PanjarKerja.js`, `Settings.js`, `App.js`, `Layout.js`.
+
+---
+
+## Iteration 11 — City Format, Receive Checkboxes, Recap Search, Invoice Filter OR, Panjar All-AWB, AR Cargo HTML Template (2026-06-16)
+
+### Input Order
+- **Origin / Destination** datalist sekarang berformat "NAMA KOTA - SINGKATAN" (mis. JAKARTA - JKT, SURABAYA - SBY). Field tidak dipaksa uppercase lagi.
+- Label "Qty Isi per Koli" → **"Qty"** (lebih ringkas).
+- Calc panel: Grand Total AWB = `tarif*qty + PPN` saja (Polis & Asuransi pindah ke **Penambah Default** kuning informational + Estimasi Invoice max).
+
+### Penerimaan (Receive modal)
+- 4 checkbox seragam: **Polis / Asuransi / SPSI / Sewa Forklift** (default OFF).
+- Auto-ON saat modal buka jika order punya nilai (`polis_amount` / `insurance_amount` > 0).
+- Input nilai numeric muncul saat di-check, bisa di-override.
+- **Realtime preview total invoice** (Nilai AWB + 4 penambah) tampil di amber box di bawah daftar checkbox.
+- Backend kontrak baru: `received_polis_amount` / `received_asuransi_amount` hanya tersimpan jika checkbox enabled = True.
+
+### Rekap & Rekonsiliasi
+- **3 search bar terpisah** per-table: `search-nocost`, `search-ready`, `search-reconciled`.
+- Filter cari berdasarkan AWB / Customer / Reff / Consignee.
+- **Selection persisten**: AWB yang sudah di-checklist tidak hilang saat user filter mencari yang lain.
+
+### Invoice Tercetak
+- **Filter OR**: Cari (No Invoice / AWB / Customer) **OR** Filter Customer — tidak lagi AND.
+- Row muncul jika MATCH salah satu filter yang aktif.
+
+### Panjar Kerja
+- Settle modal breakdown dropdown sekarang list **semua AWB** (any status: Open / Reconciled / Invoiced / Paid), bukan hanya Open. Setiap option diberi label status untuk kejelasan.
+
+### Invoice HTML Print View (`/invoices/:id/print`)
+- Layout **AR Cargo template** persis screenshot:
+  - Logo (dari setting) di pojok kiri atas.
+  - **Grey banner "INVOICE"** putih bold di tengah.
+  - Issuer kiri + Meta kanan (Invoice No / Date / Due Date) format ID.
+  - Attn dari Consignee.
+  - Table header **dark band** (#595959) putih: No / DESCRIPTION / AMOUNT.
+  - Line items: Biaya Pengiriman dengan sub-rows (Tanggal / Origin / Tujuan) + Asuransi / Polis / SPSI / Sewa Forklift (conditional).
+  - Summary kanan: Jumlah / >> PPN N% / Sub Total / >> Asuransi / >> Polis / >> Adm / >> Materai / TOTAL (bold + light grey fill).
+  - **Terbilang Bahasa Indonesia** di kiri bawah (italic).
+  - **BANK ADDRESS box** kiri bawah: bank_name dengan dark band + A/N + A/C (dari setting per issuer).
+  - Signer kanan bawah "Jakarta, {id_date}" + nama signer.
+  - **Faktur Pajak** & **Ref. PO No.** dihilangkan (akan diprint terpisah dari CORETAX).
+  - Halaman 2: **Lampiran Invoice** dengan tabel header dark band.
+- Tombol "Cetak Invoice + Lampiran" (`window.print()`) → CSS `@media print` siap untuk Save as PDF.
+
+### Backend changes
+- `ReceiveAwbIn`: tambah `polis_enabled` & `asuransi_enabled` (default False).
+- Receive endpoint: `received_*_amount = amount × enabled_flag`. Backward-compat (missing flag → False → 0).
+- `/api/invoices/{iid}/full` extend response `company` dengan `signer / bank_name / bank_holder / bank_account / logo_b64`.
+
+### Testing
+- Backend `iteration_9.json`: **5/5 PASS** (polis/asuransi flag semantics, /full endpoint, backward-compat).
+- Frontend `iteration_9.json`: **11/11 PASS** (city datalist, Qty label, receive modal real-time, recap search preserve selection, invoice filter OR, panjar all-AWB, AR Cargo HTML template all sections verified).
+
+### Files touched
+- Backend: `/app/backend/server.py` (ReceiveAwbIn, receive endpoint, invoice_full).
+- Frontend: `OrderInput.js` (cities + Qty + calc panel), `OrdersList.js` (receive modal 4-checkboxes + preview), `Recap.js` (3 search bars + filtered memos + preserved selection), `InvoicesCreated.js` (OR filter), `PanjarKerja.js` (allOrders), `InvoicePrint.js` (full rewrite AR Cargo template).
