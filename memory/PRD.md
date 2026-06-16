@@ -493,3 +493,15 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 ### Files touched
 - Backend: `/app/backend/server.py` (ReceiveAwbIn, receive endpoint, invoice_full).
 - Frontend: `OrderInput.js` (cities + Qty + calc panel), `OrdersList.js` (receive modal 4-checkboxes + preview), `Recap.js` (3 search bars + filtered memos + preserved selection), `InvoicesCreated.js` (OR filter), `PanjarKerja.js` (allOrders), `InvoicePrint.js` (full rewrite AR Cargo template).
+
+---
+
+## Iteration 12 — Invoice Company Filter (2026-06-16)
+
+### Hotfix
+- **Filter Company** ditambahkan di `/invoices/created` (sebelumnya hanya Customer).
+- Opsi: `PT. Abirama Mitra Pradana` / `PT. Abirama Mitra Pratama`.
+- **OR logic** dengan search + customer (independent — match salah satu = tampil).
+- Backend `GET /api/invoices` extend: tiap row sekarang punya `company_name` & `customer_id`.
+- Tabel daftar invoice tambah kolom **Company**.
+- Verified live: filter Company=Pradana → 23/38; + search "ZZZNONEXIST" → tetap 23 (membuktikan OR).

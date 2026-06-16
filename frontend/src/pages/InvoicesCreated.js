@@ -11,7 +11,10 @@ export default function InvoicesCreated() {
   const [customers, setCustomers] = useState([]);
   const [q, setQ] = useState("");
   const [customerId, setCustomerId] = useState("");
+  const [company, setCompany] = useState("");
   const [selected, setSelected] = useState(new Set());
+
+  const COMPANY_OPTIONS = ["PT. Abirama Mitra Pradana", "PT. Abirama Mitra Pratama"];
 
   const load = async () => {
     const [inv, cs] = await Promise.all([api.get("/invoices"), api.get("/customers")]);
@@ -20,17 +23,21 @@ export default function InvoicesCreated() {
   };
   useEffect(() => { load(); }, []);
 
-  // Client-side filter — OR logic between search & customer
+  // Client-side filter — OR logic between search, customer, & company filters.
+  // A row passes if it matches ANY active filter. When no filter active, show all.
   const filtered = useMemo(() => {
-    const hasQ = !!q.trim();
+    const qStr = q.trim().toLowerCase();
+    const hasQ = !!qStr;
     const hasCustomer = !!customerId;
-    if (!hasQ && !hasCustomer) return invoices;
+    const hasCompany = !!company;
+    if (!hasQ && !hasCustomer && !hasCompany) return invoices;
     return invoices.filter((i) => {
-      const matchQ = hasQ && `${i.invoice_number} ${i.awb_number} ${i.customer_name || ""}`.toLowerCase().includes(q.trim().toLowerCase());
+      const matchQ = hasQ && `${i.invoice_number || ""} ${i.awb_number || ""} ${i.customer_name || ""} ${i.company_name || ""}`.toLowerCase().includes(qStr);
       const matchCust = hasCustomer && i.customer_id === customerId;
-      return matchQ || matchCust;
+      const matchCompany = hasCompany && i.company_name === company;
+      return matchQ || matchCust || matchCompany;
     });
-  }, [invoices, q, customerId]);
+  }, [invoices, q, customerId, company]);
 
   const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
   const toggleAll = () => {
@@ -113,6 +120,13 @@ export default function InvoicesCreated() {
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </div>
+          <div className="min-w-[240px]">
+            <Label>Filter Company (OR)</Label>
+            <Select data-testid="invoice-company-filter" value={company} onChange={(e) => setCompany(e.target.value)}>
+              <option value="">Semua Company</option>
+              {COMPANY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </Select>
+          </div>
           <div className="ml-auto text-xs text-slate-500">
             {filtered.length} dari {invoices.length} invoice {selected.size > 0 ? `· ${selected.size} dipilih` : ""}
           </div>
@@ -141,7 +155,7 @@ export default function InvoicesCreated() {
                 {selected.size === filtered.length && filtered.length > 0 ? <CheckSquare size={14}/> : <Square size={14}/>}
               </button>
             </Th>
-            <Th>No. Invoice</Th><Th>AWB</Th><Th>Customer</Th><Th>Tanggal</Th>
+            <Th>No. Invoice</Th><Th>AWB</Th><Th>Company</Th><Th>Customer</Th><Th>Tanggal</Th>
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
@@ -154,6 +168,7 @@ export default function InvoicesCreated() {
                 </Td>
                 <Td className="font-mono font-semibold">{i.invoice_number}</Td>
                 <Td className="font-mono">{i.awb_number}</Td>
+                <Td className="text-xs">{i.company_name || <span className="text-slate-400">—</span>}</Td>
                 <Td>{i.customer_name}</Td>
                 <Td className="text-xs text-slate-600">{fmtDate(i.created_at)}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(i.grand_total)}</Td>
@@ -165,7 +180,7 @@ export default function InvoicesCreated() {
                 </Td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10">Tidak ada invoice untuk filter ini.</Td></tr>}
+            {filtered.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">Tidak ada invoice untuk filter ini.</Td></tr>}
           </tbody>
         </Table>
       </Card>

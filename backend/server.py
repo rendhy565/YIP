@@ -1263,6 +1263,8 @@ async def list_invoices(user: dict = Depends(get_current_user)):
             s["grand_total"] = a["grand_total"]
             s["total_tariff"] = a["total_tariff"]
             s["tax_amount"] = a["tax_amount"]
+            s["company_name"] = a.get("company_name")
+            s["customer_id"] = str(a.get("customer_id")) if a.get("customer_id") else None
             c = cmap.get(a.get("customer_id"))
             s["customer_name"] = c["name"] if c else None
         out.append(s)
