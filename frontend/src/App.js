@@ -50,8 +50,15 @@ function Protected({ children, roles }) {
 
 function FeatureGate({ feature, children }) {
   const { flags, loading } = useFeatureFlags();
+  const { user } = useAuth();
   if (loading) return <div className="p-8 text-slate-400 text-sm">Memuat...</div>;
+  // Global flag must be on
   if (!flags[feature]) return <Navigate to="/" replace />;
+  // Per-user permission must include the feature key (admin bypass)
+  if (user && user.role !== "administrator") {
+    const perms = Array.isArray(user.permissions) ? user.permissions : [];
+    if (!perms.includes(feature)) return <Navigate to="/" replace />;
+  }
   return children;
 }
 

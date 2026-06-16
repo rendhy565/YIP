@@ -69,6 +69,16 @@ function hasPerm(user, perm) {
   return Array.isArray(user.permissions) && user.permissions.includes(perm);
 }
 
+// Feature modules require BOTH the global feature flag to be on AND the user to
+// have the matching permission key in their `permissions` array (admin bypasses).
+function canAccessFeature(user, featureKey, flags) {
+  if (!featureKey) return true;
+  if (!flags[featureKey]) return false;
+  if (!user) return false;
+  if (user.role === "administrator") return true;
+  return Array.isArray(user.permissions) && user.permissions.includes(featureKey);
+}
+
 export default function Layout({ children }) {
   const { user, logout } = useAuth();
   const { flags } = useFeatureFlags();
@@ -98,11 +108,11 @@ export default function Layout({ children }) {
           const visible = NAV.map((item) => {
             if (item.type === "section") {
               if (item.adminOnly && user?.role !== "administrator") return null;
-              if (item.feature && !flags[item.feature]) return null;
+              if (item.feature && !canAccessFeature(user, item.feature, flags)) return null;
               return item;
             }
             if (item.adminOnly && user?.role !== "administrator") return null;
-            if (item.feature && !flags[item.feature]) return null;
+            if (item.feature && !canAccessFeature(user, item.feature, flags)) return null;
             if (!hasPerm(user, item.perm)) return null;
             return item;
           });
