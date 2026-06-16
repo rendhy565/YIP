@@ -814,3 +814,39 @@ Curl verify: `GET /api/orders?status_v=Reconciled` → AWB-IT14D **tidak ada** �
 ## Backlog (unchanged)
 - Sprint 2 PPN Reconciliation (P0), Sprint 3 Purchase Invoice (P1), PPh21 TER (P2), Tanggal Terima Checklists (P2), Aging PYMHD breakdown (P2).
 
+
+## Iteration 16 — STRICT recognition trigger + orphan cleanup (2026-02-16)
+
+### User report
+"Saya habis import ulang semuanya. Tp kok masih beda ya angka PnL Order dengan PnL Akunting. PnL akunting sudah sama dengan neraca."
+
+### Root cause
+Di iterasi 14 rule recognition di-set `has_cost OR has_invoice` — AWB legacy dengan No. Invoice Excel tapi tanpa cost TETAP ke-recognize. Bertentangan dengan iterasi 15 rule "no cost = belum recognize". Itu sebabnya /IS > /pnl: Rp 1.600.000 (2 AWB orphan TEST-IT13 dari testing iter 13).
+
+### Fix
+**1. Backend rule tighten (`_parse_excel` post-import sweep):**
+- `needs_recognition = has_cost` ONLY (drop `has_invoice` trigger).
+- `should_post_invoice_journal = has_cost AND has_invoice` — invoice clearance journal hanya post kalau cost sudah ada.
+
+**2. Endpoint baru `POST /api/admin/cleanup-pymhd-orphans?dry_run=true`** (admin only):
+- Cari AWB dengan `revenue_recognized=True` TAPI no cost (orphan dari rule lama).
+- Action per orphan: delete journal entries `awb_revenue_recognition`, `invoice`, `awb_order` (legacy), `payment` (legacy). Reset `revenue_recognized=False`, status="Open". PYMHD journal & invoice doc tetap.
+
+### Hasil cleanup live
+- 2 orphans cleaned, Rp 1.600.000 reverted.
+- **Semua bulan /pnl = /IS** ✅ (2026-01..06).
+- Neraca: PYMHD 10.7jt, Piutang 9.25jt, PPN Keluaran 926rb, PPN Masukan 2.31jt — sehat.
+
+### Files touched
+- `backend/server.py`: 
+  - `_parse_excel` post-import sweep — `needs_recognition` strict ke `has_cost`, tambah var `should_post_invoice_journal`.
+  - Endpoint baru `POST /api/admin/cleanup-pymhd-orphans`.
+
+## Backlog (unchanged from iter 15)
+- Sprint 2 PPN Reconciliation (P0)
+- Sprint 3 Purchase Invoice (P1)
+- PPh 21 TER (P2)
+- Tanggal Terima Checklists (P2)
+- Aging PYMHD breakdown (P2)
+- Badge PYMHD di /orders (P3)
+

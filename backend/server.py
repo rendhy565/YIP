@@ -3876,22 +3876,18 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
             status = awb.get("status", "Open")
             has_cost = await db.awb_costs.count_documents({"awb_id": awb_id}) > 0
             invoice_doc = await db.invoices.find_one({"awb_id": awb_id})
-            has_invoice = bool(invoice_doc) or status in ("Invoiced", "Paid")
-            # Strict PSAK 72: revenue recognized only when performance obligation is
-            # fulfilled (proxy: vendor cost incurred OR invoice already issued).
-            needs_recognition = has_cost or has_invoice
-            # ─── Status normalization (per user rule) ───
+            # ─── STRICT PSAK 72 + user rule ─────────────────────────────────
+            # Revenue recognized ONLY if has_cost (performance obligation fulfilled).
+            # Invoice journal posted ONLY if has_cost AND has_invoice doc.
+            # AWB tanpa cost → status forced Open, NO recognition, NO invoice journal,
+            # NO piutang. Hanya PYMHD `DR 1290 / CR 2390` saja.
+            needs_recognition = has_cost
+            should_post_invoice_journal = has_cost and bool(invoice_doc)
             # AWB tanpa cost → status WAJIB "Open", apapun mapping Excel-nya.
-            # Bahkan kalau ada nomor invoice eksternal — biarkan invoice doc tetap
-            # ada (data legacy) tapi AWB status = Open sampai cost ditambahkan.
-            # Saat cost masuk + reconcile, status akan otomatis dipromosikan ke
-            # "Invoiced" jika invoice doc sudah ada (handled by reconcile endpoint).
             if not has_cost:
                 if status != "Open":
                     await db.awb_orders.update_one({"_id": awb_id}, {"$set": {"status": "Open"}})
                     status = "Open"
-                # Recognition is gated by has_cost too — kalau no cost tapi has_invoice
-                # tetap recognize (legacy billing-only), tapi status tetap Open.
             try:
                 # 1. PYMHD posting
                 await post_journal(
@@ -3929,7 +3925,7 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                     pass
             else:
                 await db.awb_orders.update_one({"_id": awb_id}, {"$set": {"revenue_recognized": False}})
-            if has_invoice:
+            if should_post_invoice_journal:
                 inv_lines = [
                     {"account_code": "1201", "debit": gross, "credit": 0, "memo": awb["awb_number"]},
                     {"account_code": "1290", "debit": 0, "credit": dpp, "memo": f"Clear PYMHD {awb['awb_number']}"},
@@ -4264,6 +4260,75 @@ async def analytics_awbs_detail(
 from fastapi.responses import StreamingResponse
 
 # ── DELETE AWB (Admin only) — cascade delete costs, invoices, journals ────
+@app.post("/api/admin/cleanup-pymhd-orphans")
+async def cleanup_pymhd_orphans(dry_run: bool = True, user: dict = Depends(require_role("administrator"))):
+    """Cleanup AWBs that have revenue recognition / invoice journals posted but
+    NO COST exists. Per the updated PSAK 72 rule (post-iter 15), recognition &
+    invoice clearance require has_cost.
+
+    Actions per orphan AWB:
+      1. Delete `awb_revenue_recognition` journal entries
+      2. Delete `invoice` journal entries (the clearance DR1201/CR1290/CR2210)
+      3. Force `awb_orders.revenue_recognized = False`, status = "Open"
+      4. Delete `awb_order` legacy journals (from pre-PYMHD era)
+      5. Delete legacy `payment` journals when no piutang remains
+
+    PYMHD journal (DR1290/CR2390) and the invoice doc itself are PRESERVED.
+    """
+    # Get AWBs where revenue_recognized=True but no cost
+    awbs = await db.awb_orders.find({"revenue_recognized": True}).to_list(50000)
+    plan = []
+    affected_revenue = 0.0
+    for awb in awbs:
+        has_cost = await db.awb_costs.count_documents({"awb_id": awb["_id"]}) > 0
+        if has_cost:
+            continue
+        # Count what we will delete
+        recog_jes = await db.journal_entries.find({"reference_type": "awb_revenue_recognition", "reference_id": str(awb["_id"])}).to_list(20)
+        # Invoice journal — look up via invoice doc
+        inv_docs = await db.invoices.find({"awb_id": awb["_id"]}).to_list(10)
+        inv_ids = [str(d["_id"]) for d in inv_docs]
+        inv_jes = await db.journal_entries.find({"reference_type": "invoice", "reference_id": {"$in": inv_ids}}).to_list(20) if inv_ids else []
+        # Legacy awb_order journal
+        legacy_jes = await db.journal_entries.find({"reference_type": "awb_order", "reference_id": str(awb["_id"])}).to_list(20)
+        # Legacy payment journal — only if no piutang remains (and no cost ever — they're orphans)
+        pay_jes = await db.journal_entries.find({"reference_type": "payment", "reference_id": str(awb["_id"])}).to_list(20)
+        rec_amount = sum(ln["credit"] for j in recog_jes for ln in j["lines"] if ln["account_code"] == "4101")
+        legacy_amount = sum(ln["credit"] for j in legacy_jes for ln in j["lines"] if ln["account_code"] == "4101")
+        amount = rec_amount + legacy_amount
+        affected_revenue += amount
+        item = {
+            "awb": awb["awb_number"],
+            "amount": amount,
+            "recognition_journals": [j["entry_no"] for j in recog_jes],
+            "invoice_journals": [j["entry_no"] for j in inv_jes],
+            "legacy_journals": [j["entry_no"] for j in legacy_jes],
+            "payment_journals": [j["entry_no"] for j in pay_jes],
+        }
+        plan.append(item)
+        if dry_run:
+            continue
+        # Execute: delete all the orphan journals and reset flag
+        await db.journal_entries.delete_many({"reference_type": "awb_revenue_recognition", "reference_id": str(awb["_id"])})
+        if inv_ids:
+            await db.journal_entries.delete_many({"reference_type": "invoice", "reference_id": {"$in": inv_ids}})
+        await db.journal_entries.delete_many({"reference_type": "awb_order", "reference_id": str(awb["_id"])})
+        await db.journal_entries.delete_many({"reference_type": "payment", "reference_id": str(awb["_id"])})
+        await db.awb_orders.update_one(
+            {"_id": awb["_id"]},
+            {
+                "$set": {"revenue_recognized": False, "status": "Open"},
+                "$unset": {"revenue_recognized_at": "", "invoiced_at": "", "reconciled_at": "", "paid_at": ""},
+            },
+        )
+    summary = {
+        "dry_run": dry_run,
+        "total_orphans": len(plan),
+        "total_amount_reverted": round(affected_revenue, 2),
+        "sample": plan[:10],
+    }
+    return summary
+
 @app.post("/api/admin/migrate-pymhd")
 async def migrate_pymhd(dry_run: bool = True, user: dict = Depends(require_role("administrator"))):
     """Migrate historical AWBs from old jurnal model (DR 1201 / CR 4101 at order
