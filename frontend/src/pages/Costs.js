@@ -120,7 +120,7 @@ export default function Costs() {
                 </Td>
                 <Td className="text-right">
                   {((isOp && c.cost_category === "Vendor") || isAdmin || (!isOp && !isAdmin)) && (
-                    <button onClick={() => del(c.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
+                    <button data-testid={`delete-cost-${c.id}`} onClick={() => del(c.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
                   )}
                 </Td>
               </tr>

@@ -703,3 +703,40 @@ User memilih: **terapkan PSAK 72** dengan model PYMHD (Pendapatan Yang Masih Har
 - **"Tanggal Terima" Checklists** (P2).
 - **Reverse cost deletion**: kalau cost terakhir dihapus dari AWB, reverse recognition jurnal agar PYMHD balance kembali (saat ini cost delete tidak men-reverse).
 
+
+## Iteration 13 — PYMHD Dashboard Panel + Reverse Cost Deletion (2026-02-16)
+
+### Two enhancements per user request after iteration 12
+
+**1. Dashboard PYMHD Pipeline panel**
+- Endpoint baru `GET /api/dashboard/pymhd-pipeline`: total saldo PYMHD, breakdown recognized vs unrecognized, status (Open/Reconciled), top customer.
+- Frontend `Dashboard.js`: panel baru `data-testid='pymhd-pipeline-panel'` di antara KPI cards dan Pintasan. Top 5 customer table dengan kolom AWB / Total / Belum Ada Cost.
+
+**2. Reverse Cost Deletion dengan warning gate + audit flag**
+- `DELETE /api/costs/{cid}` sekarang accept query param `?confirm=true`:
+  - Tanpa confirm + ini cost terakhir di AWB + revenue sudah recognized → return `{ok:false, needs_confirmation:true, warning, awb_number, reversal_amount}` (cost belum dihapus).
+  - Dengan confirm → cost dihapus + (kalau AWB belum invoiced) post jurnal `DR 4101 / CR 2390` dengan flag `is_reversal=true`, reset `awb.revenue_recognized=false`.
+  - AWB yg sudah Invoiced: reversal=null (PYMHD sudah ter-clear ke Piutang).
+- `post_journal` extended dengan parameter `extra_fields` agar bisa inject `is_reversal=true` ke journal entry doc.
+- Frontend `Costs.js` `del()`: 2-step confirm (browser confirm + warning text) + `toast.warning` saat reversal sukses.
+
+### Testing (iteration_13.json — 100% pass, 7/7 backend pytest + all frontend)
+- Pipeline endpoint untuk admin/finance/operation
+- Warning gate tanpa confirm
+- Confirmed delete + 4101/2390 reversal journal dengan is_reversal=true
+- Non-last cost no-warning
+- Invoiced AWB no-reversal
+- Frontend PYMHD panel + cost delete 2-step dialog flow
+
+### Files touched
+- Backend: `server.py` — `post_journal` extra_fields support, DELETE /api/costs/{cid} dengan warning gate + reversal, GET /api/dashboard/pymhd-pipeline.
+- Frontend: `pages/Dashboard.js` (PYMHD panel), `pages/Costs.js` (warning dialog + reversal toast + data-testid).
+- Tests (NEW): `backend/tests/test_iteration13_pymhd_reversal.py`.
+
+## Backlog / Next
+- **Sprint 2 PPN (P0):** Rekonsiliasi PPN otomatis di Tutup Buku.
+- **Sprint 3 FULL Purchase Invoice (P1).**
+- **PPh 21 progressive/TER (P2).**
+- **"Tanggal Terima" Checklists** (P2).
+- **UX:** ganti `window.confirm()` di delete cost dengan shadcn AlertDialog modal non-blocking (P3, kosmetik).
+
