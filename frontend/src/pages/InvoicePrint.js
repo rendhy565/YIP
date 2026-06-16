@@ -27,16 +27,25 @@ function terbilangId(n) {
   return terbilangId(Math.floor(n / 1_000_000_000)) + " Miliar" + (n % 1_000_000_000 === 0 ? "" : " " + terbilangId(n % 1_000_000_000));
 }
 
-export default function InvoicePrint() {
-  const { id } = useParams();
-  const [data, setData] = useState(null);
+// Shared print styles. Inject once per page (root component).
+export const InvoicePrintStyles = () => (
+  <style>{`
+    @media print {
+      .no-print { display: none !important; }
+      @page { size: A4; margin: 10mm; }
+      .print-page { box-shadow: none !important; border: none !important; page-break-after: always; }
+      .print-page:last-child { page-break-after: auto; }
+    }
+    .invoice-page { font-family: Calibri, 'Segoe UI', Arial, sans-serif; }
+    .grey-band { background: #7F7F7F; color: #fff; }
+    .dark-band { background: #595959; color: #fff; }
+    .light-grey { background: #F2F2F2; }
+  `}</style>
+);
 
-  useEffect(() => {
-    api.get(`/invoices/${id}/full`).then((r) => setData(r.data));
-  }, [id]);
-
-  if (!data) return <div className="p-10 text-center text-slate-500">Memuat...</div>;
-
+// Reusable body that renders both the invoice page and the lampiran page.
+// Used by both single-invoice (InvoicePrint) and bulk-invoice (InvoicePrintBulk).
+export function InvoicePrintBody({ data }) {
   const { invoice, awb, customer, company } = data;
 
   const invDate = new Date(invoice.created_at);
@@ -50,34 +59,14 @@ export default function InvoicePrint() {
   const polis = awb.received_polis_amount || 0;
   const spsi = awb.spsi_enabled ? (awb.spsi_amount || 0) : 0;
   const forklift = awb.sewa_forklift_enabled ? (awb.sewa_forklift_amount || 0) : 0;
-  const adm = 0;
-  const materai = 0;
-  const grandTotal = subAfterTax + asuransi + polis + spsi + forklift + adm + materai;
+  const grandTotal = subAfterTax + asuransi + polis + spsi + forklift;
 
   const logoSrc = company.logo_b64
     ? (company.logo_b64.startsWith("data:") ? company.logo_b64 : `data:image/png;base64,${company.logo_b64}`)
     : null;
 
   return (
-    <div className="min-h-screen bg-slate-100 py-6 print:bg-white print:py-0">
-      <style>{`
-        @media print {
-          .no-print { display: none !important; }
-          @page { size: A4; margin: 10mm; }
-          .print-page { box-shadow: none !important; border: none !important; page-break-after: always; }
-          .print-page:last-child { page-break-after: auto; }
-        }
-        .invoice-page { font-family: Calibri, 'Segoe UI', Arial, sans-serif; }
-        .grey-band { background: #7F7F7F; color: #fff; }
-        .dark-band { background: #595959; color: #fff; }
-        .light-grey { background: #F2F2F2; }
-      `}</style>
-
-      <div className="max-w-[210mm] mx-auto px-4 mb-4 flex items-center gap-2 no-print">
-        <Button variant="secondary" onClick={() => window.close()}><ArrowLeft size={14}/> Tutup</Button>
-        <Button data-testid="print-now-btn" onClick={() => window.print()} className="ml-auto"><Printer size={14}/> Cetak Invoice + Lampiran</Button>
-      </div>
-
+    <>
       {/* PAGE 1: INVOICE (AR Cargo template) */}
       <div className="print-page invoice-page max-w-[210mm] mx-auto bg-white shadow border border-slate-200 p-8 mb-6">
         {/* Logo row */}
@@ -211,7 +200,7 @@ export default function InvoicePrint() {
       </div>
 
       {/* PAGE 2: LAMPIRAN */}
-      <div className="print-page invoice-page max-w-[210mm] mx-auto bg-white shadow border border-slate-200 p-8">
+      <div className="print-page invoice-page max-w-[210mm] mx-auto bg-white shadow border border-slate-200 p-8 mb-6">
         <h2 className="font-heading font-black text-2xl tracking-tight uppercase text-center mb-6">Lampiran Invoice</h2>
         <table className="w-full text-xs border border-slate-300">
           <thead>
@@ -245,6 +234,28 @@ export default function InvoicePrint() {
         </table>
         <p className="text-xs text-slate-500 mt-3">Lampiran ini merupakan bagian yang tidak terpisahkan dari Invoice No. {invoice.invoice_number}.</p>
       </div>
+    </>
+  );
+}
+
+export default function InvoicePrint() {
+  const { id } = useParams();
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    api.get(`/invoices/${id}/full`).then((r) => setData(r.data));
+  }, [id]);
+
+  if (!data) return <div className="p-10 text-center text-slate-500">Memuat...</div>;
+
+  return (
+    <div className="min-h-screen bg-slate-100 py-6 print:bg-white print:py-0">
+      <InvoicePrintStyles />
+      <div className="max-w-[210mm] mx-auto px-4 mb-4 flex items-center gap-2 no-print">
+        <Button variant="secondary" onClick={() => window.close()}><ArrowLeft size={14}/> Tutup</Button>
+        <Button data-testid="print-now-btn" onClick={() => window.print()} className="ml-auto"><Printer size={14}/> Cetak Invoice + Lampiran</Button>
+      </div>
+      <InvoicePrintBody data={data} />
     </div>
   );
 }

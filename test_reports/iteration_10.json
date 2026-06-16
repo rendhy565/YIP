@@ -1,0 +1,41 @@
+{
+  "summary": "Frontend regression + Bulk Print to PDF verification on /invoices/created (Finance login). Bulk Print feature is FULLY WORKING end-to-end. Regression tests on Pagination, AND/OR filter, single-row Print, Reclass UI, and SearchableSelect all pass — EXCEPT /recap which is MISSING the Pagination component (no <Pagination> import in Recap.js).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Recap.js", "issue": "Pagination component is NOT mounted on /recap page. grep on /app/frontend/src/pages/Recap.js shows no import of Pagination or usePagination. DOM query for [data-testid^='pagination'] on /recap returned []. /orders, /accrue, /invoices/created all have correct pagination testids.", "selector": "[data-testid^='pagination-recap']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_features": [
+    "Bulk Print button visible on /invoices/created with dynamic count: 'Print to PDF (38)' when nothing selected (filtered=38), 'Print to PDF (2)' after selecting 2 rows.",
+    "Clicking bulk-print-pdf-btn opens ONE new tab at /arc/invoices/print-bulk?ids=<id1>,<id2>,...  containing all selected invoices stacked. Toast 'N invoice dibuka dalam 1 tab. Tekan Ctrl+P → Save as PDF.' is shown on opener page.",
+    "In bulk-print tab: data-testid='print-now-bulk-btn' renders with label 'Cetak Semua (N)' (verified 'Cetak Semua (2)' and 'Cetak Semua (1)'). innerText length 2285 chars; 'INVOICE' banner appears 2 times for 2 invoices; 4 stacked print sections (invoice + lampiran × 2).",
+    "When NO invoices are selected, bulk print correctly uses the filtered list — verified by applying search '0113' (1 row), clicking Print to PDF (1), new tab URL contained exactly 1 id, Cetak Semua (1) shown.",
+    "Per-row Print button (data-testid='print-invoice-<id>') still works — opens single-invoice URL /arc/invoices/{id}/print (NOT /print-bulk).",
+    "AND/OR filter toggle on /invoices/created works correctly. With customer + company filters set: OR mode → 38 invoices (union), AND mode → 15 invoices (intersection). Match expected superset/intersection semantics.",
+    "Pagination present on /invoices/created (testid='pagination-invoices'), /orders (pagination-orders + first/prev/next/last/size), /accrue (pagination-accrue + pagination-paid).",
+    "Reclass UI on /accrue (finance login): switching to 'Paid' tab reveals 25+ buttons with data-testid='reclass-btn-<id>'. Clicking shows the proper validation toast 'Hanya biaya kategori Vendor yang bisa di-reclass ke Hutang' for non-vendor rows, confirming wiring + client-side validation are in place. POST /api/accrue/reclass endpoint exists per iteration_9 verification.",
+    "SearchableSelect / Plotting / Panjar Kerja entry points present on /orders (buttons 'Plotting Biaya', 'Panjar Kerja' detected)."
+  ],
+  "test_report_links": [],
+  "action_items": [
+    "Add <Pagination/> + usePagination to Recap.js so /recap is consistent with /orders, /accrue, /invoices/created (the original review_request explicitly lists /recap as needing pagination)."
+  ],
+  "critical_code_review_comments": [
+    "InvoicesCreated.bulkPrint (L91-98) correctly falls back to filtered list when selection is empty via targetIds() helper — verified empirically.",
+    "InvoicePrintBulk.js fetches all invoices in parallel via Promise.all on /api/invoices/:id/full and filters out null/failed responses — sound. Empty state and loading state both handled.",
+    "App.js L81 registers '/invoices/print-bulk' route under <Protected> — routing works behind /arc basename.",
+    "Recap.js missing pagination — would be a one-liner fix mirroring InvoicesCreated.js L43 + L196.",
+    "Reclass button click on non-Vendor category triggers ONLY a client-side toast and does NOT call /api/accrue/reclass. This is intentional validation but the test couldn't trigger a successful POST during this session — recommend main agent re-verify with a freshly settled Vendor accrue row if regression is critical."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped (frontend-only request)", "frontend": "~92% (11/12 verified items; /recap pagination missing)"},
+  "test_credentials": "finance/finance123 used throughout — login OK",
+  "seed_data_creation": "None — used existing 38 invoices, 35+ paid accruals from prior iterations.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Bulk Print to PDF feature is production-ready: button label updates with selection count, new-tab capture pattern (page.context.expect_page) works reliably, URL pattern /arc/invoices/print-bulk?ids=id1,id2,... renders all invoices stacked with single Cetak Semua (N) print button. ONLY remaining gap: /recap page does not render the global Pagination component (verified via grep — no Pagination import). Use Playwright pattern: `async with page.context.expect_page() as info: await page.click(...)` to capture window.open new tabs reliably.",
+  "rca_of_the_issue": "/recap pagination gap RCA: Recap.js was apparently overlooked when the global Pagination component was rolled out to /invoices/created, /orders, /accrue. No import of Pagination/usePagination exists in /app/frontend/src/pages/Recap.js. Fix is mechanical: import {default as Pagination, usePagination} from '../components/Pagination', create pag = usePagination(filteredRows), iterate over pag.paged in tbody, and add <Pagination {...pag} testid='pagination-recap'/> below the table."
+}

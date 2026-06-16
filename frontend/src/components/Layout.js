@@ -93,29 +93,52 @@ export default function Layout({ children }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto py-3 px-2 text-sm">
-        {NAV.map((item, i) => {
-          if (item.type === "section") {
+        {(() => {
+          // First pass: determine which items would be visible
+          const visible = NAV.map((item) => {
+            if (item.type === "section") {
+              if (item.adminOnly && user?.role !== "administrator") return null;
+              if (item.feature && !flags[item.feature]) return null;
+              return item;
+            }
             if (item.adminOnly && user?.role !== "administrator") return null;
             if (item.feature && !flags[item.feature]) return null;
-            return (
-              <div key={i} className="mt-4 mb-1 px-3 text-[10px] uppercase tracking-[0.18em] text-slate-500 font-bold">
-                {item.label}
-              </div>
-            );
+            if (!hasPerm(user, item.perm)) return null;
+            return item;
+          });
+          // Second pass: prune section headers without any child after them
+          const pruned = [];
+          for (let i = 0; i < visible.length; i++) {
+            const it = visible[i];
+            if (!it) continue;
+            if (it.type === "section") {
+              // Find next section index or end
+              const nextSecIdx = visible.findIndex((x, idx) => idx > i && x && x.type === "section");
+              const end = nextSecIdx === -1 ? visible.length : nextSecIdx;
+              const childCount = visible.slice(i + 1, end).filter(Boolean).length;
+              if (childCount === 0) continue;
+            }
+            pruned.push(it);
           }
-          if (item.adminOnly && user?.role !== "administrator") return null;
-          if (item.feature && !flags[item.feature]) return null;
-          if (!hasPerm(user, item.perm)) return null;
-          const Icon = item.icon;
-          const active = loc.pathname === item.to;
-          return (
-            <Link key={item.to} to={item.to} data-testid={`nav-${item.to.replace(/\//g, "-")}`}
-              className={`flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors ${active ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
-              <Icon size={16} />
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
+          return pruned.map((item, i) => {
+            if (item.type === "section") {
+              return (
+                <div key={`s-${i}`} className="mt-4 mb-1 px-3 text-[10px] uppercase tracking-[0.18em] text-slate-500 font-bold">
+                  {item.label}
+                </div>
+              );
+            }
+            const Icon = item.icon;
+            const active = loc.pathname === item.to;
+            return (
+              <Link key={item.to} to={item.to} data-testid={`nav-${item.to.replace(/\//g, "-")}`}
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors ${active ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
+                <Icon size={16} />
+                <span>{item.label}</span>
+              </Link>
+            );
+          });
+        })()}
       </nav>
 
       <div className="border-t border-slate-800 p-3">

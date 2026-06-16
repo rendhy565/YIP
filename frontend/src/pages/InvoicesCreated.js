@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
+import Pagination, { usePagination } from "../components/Pagination";
 
 export default function InvoicesCreated() {
   const [invoices, setInvoices] = useState([]);
@@ -38,6 +39,8 @@ export default function InvoicesCreated() {
     if (activeFilters.length === 0) return invoices;
     return invoices.filter((i) => filterMode === "AND" ? activeFilters.every((fn) => fn(i)) : activeFilters.some((fn) => fn(i)));
   }, [invoices, q, customerId, company, filterMode]);
+
+  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${company}|${filterMode}` });
 
   const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
   const toggleAll = () => {
@@ -88,8 +91,10 @@ export default function InvoicesCreated() {
   const bulkPrint = () => {
     const ids = targetIds();
     if (ids.length === 0) { toast.error("Tidak ada invoice"); return; }
-    ids.forEach((id) => window.open(`/arc/invoices/${id}/print`, "_blank"));
-    toast.success(`${ids.length} invoice dibuka di tab baru. Ctrl+P → Save as PDF.`);
+    // Open one combined tab containing every selected invoice. User presses
+    // Ctrl+P once and gets a single merged PDF for all selections.
+    window.open(`/arc/invoices/print-bulk?ids=${ids.join(",")}`, "_blank");
+    toast.success(`${ids.length} invoice dibuka dalam 1 tab. Tekan Ctrl+P → Save as PDF.`);
   };
 
   return (
@@ -148,11 +153,8 @@ export default function InvoicesCreated() {
             <Button data-testid="export-report-ar-from-invoices-btn" variant="secondary" onClick={exportReportAr}>
               <FileSpreadsheet size={14}/> Export REPORT AR (filter)
             </Button>
-            <Button data-testid="export-invoice-excel-btn" variant="secondary" onClick={exportInvoiceExcel}>
-              <Download size={14}/> Export Invoice Excel
-            </Button>
             <Button data-testid="bulk-print-pdf-btn" variant="secondary" onClick={bulkPrint}>
-              <Printer size={14}/> Print to PDF
+              <Printer size={14}/> Print to PDF ({selected.size || filtered.length})
             </Button>
           </div>
         </div>
@@ -167,7 +169,7 @@ export default function InvoicesCreated() {
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
-            {filtered.map((i) => (
+            {pag.paged.map((i) => (
               <tr key={i.id} data-testid={`invoice-row-${i.id}`}>
                 <Td>
                   <button data-testid={`invoice-toggle-${i.id}`} onClick={() => toggle(i.id)}>
@@ -191,6 +193,7 @@ export default function InvoicesCreated() {
             {filtered.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">Tidak ada invoice untuk filter ini.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-invoices"/>
       </Card>
     </div>
   );

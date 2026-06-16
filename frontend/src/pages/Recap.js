@@ -232,9 +232,38 @@ export default function Recap() {
           activeCount={[month, customerId].filter(Boolean).length}
         />
         <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[180px]">
-            <Label>Bulan</Label>
-            <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+          <div className="min-w-[260px]">
+            <Label>Bulan (YYYY-MM)</Label>
+            <div className="flex gap-1">
+              <select
+                data-testid="recap-month-year"
+                value={month ? month.split("-")[0] : ""}
+                onChange={(e) => {
+                  const y = e.target.value;
+                  const m = month ? month.split("-")[1] : "01";
+                  setMonth(y ? `${y}-${m}` : "");
+                }}
+                className="h-10 rounded border border-slate-300 px-2 text-sm bg-white"
+              >
+                <option value="">Thn</option>
+                {Array.from({ length: 6 }, (_, i) => new Date().getFullYear() - 3 + i).map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <select
+                data-testid="recap-month-month"
+                value={month ? month.split("-")[1] : ""}
+                onChange={(e) => {
+                  const m = e.target.value;
+                  const y = month ? month.split("-")[0] : String(new Date().getFullYear());
+                  setMonth(m ? `${y}-${m}` : "");
+                }}
+                className="h-10 rounded border border-slate-300 px-2 text-sm bg-white flex-1"
+              >
+                <option value="">Semua Bulan</option>
+                {["01","02","03","04","05","06","07","08","09","10","11","12"].map((m, i) => (
+                  <option key={m} value={m}>{["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"][i]}</option>
+                ))}
+              </select>
+            </div>
           </div>
           <div className="min-w-[220px]">
             <Label>Customer</Label>

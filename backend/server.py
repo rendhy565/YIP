@@ -4753,3 +4753,41 @@ async def upload_invoice_logo(data: LogoUploadIn, user: dict = Depends(require_r
         upsert=True,
     )
     return {"ok": True, "size_bytes": len(decoded)}
+
+# --- Reclass Paid vendor cost back to Accrue (revisi salah post) -----------
+@app.post("/api/costs/{cid}/reclass-to-accrue")
+async def reclass_cost_to_accrue(cid: str, user: dict = Depends(require_role("finance"))):
+    cost = await db.awb_costs.find_one({"_id": _oid(cid)})
+    if not cost:
+        raise HTTPException(404, "Biaya tidak ditemukan")
+    if cost.get("payment_type") != "Cash":
+        raise HTTPException(400, "Hanya biaya yang berstatus Paid yang bisa di-reclass")
+    if cost.get("cost_category") != "Vendor":
+        raise HTTPException(400, "Hanya biaya kategori Vendor yang bisa di-reclass ke Hutang")
+    prev_cash_acc = cost.get("cash_account_code") or "1101"
+    now = datetime.now(timezone.utc)
+    await db.awb_costs.update_one(
+        {"_id": _oid(cid)},
+        {"$set": {
+            "payment_type": "Accrue",
+            "is_settled": False,
+            "reclassed_at": now,
+            "reclassed_by": user["id"],
+        }, "$unset": {"settled_at": "", "cash_account_code": ""}},
+    )
+    # Reverse journal: DR Cash / CR Hutang Usaha
+    try:
+        awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
+        awb_no = awb["awb_number"] if awb else ""
+        await post_journal(
+            date=now,
+            description=f"Reclass paid vendor {cost.get('vendor_name') or ''} ({awb_no}) → Hutang",
+            lines=[
+                {"account_code": prev_cash_acc, "debit": cost["amount"], "credit": 0, "memo": f"Reclass {awb_no}"},
+                {"account_code": "2101", "debit": 0, "credit": cost["amount"], "memo": cost.get("vendor_name") or ""},
+            ],
+            reference_type="cost_reclass", reference_id=cid, posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
+    return {"ok": True}

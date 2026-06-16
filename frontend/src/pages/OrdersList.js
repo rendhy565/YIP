@@ -6,6 +6,7 @@ import { Trash2, MinusCircle, PackageCheck, X, Search } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { toast } from "sonner";
 import FilterPresets from "../components/FilterPresets";
+import Pagination, { usePagination } from "../components/Pagination";
 
 function todayStr() {
   const d = new Date();
@@ -61,6 +62,8 @@ export default function OrdersList() {
     if (fns.length === 0) return rows;
     return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
   }, [rows, q, status, customerId, filterMode]);
+
+  const pag = usePagination(filteredRows, { resetKey: `${q}|${status}|${customerId}|${filterMode}` });
 
   const dropOrder = async (r) => {
     if (!window.confirm(`Tandai AWB ${r.awb_number} sebagai DROP?`)) return;
@@ -168,7 +171,7 @@ export default function OrdersList() {
             <Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {filteredRows.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`order-row-${r.id}`}>
                 <Td><span className="font-mono font-semibold">{r.awb_number}</span></Td>
                 <Td className="text-slate-600 text-xs">{fmtDate(r.created_at)}</Td>
@@ -211,6 +214,7 @@ export default function OrdersList() {
             {filteredRows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">{rows.length === 0 ? "Tidak ada order." : "Tidak ada hasil cocok dengan filter."}</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-orders"/>
       </Card>
 
       {/* ========== RECEIVE (Tanggal Terima) MODAL ========== */}

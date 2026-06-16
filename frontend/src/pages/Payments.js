@@ -1,9 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { BadgeDollarSign, CheckCircle2, CheckSquare, Square, X } from "lucide-react";
+import { BadgeDollarSign, CheckCircle2, CheckSquare, Square, X, Search } from "lucide-react";
+import FilterPresets from "../components/FilterPresets";
+import Pagination, { usePagination } from "../components/Pagination";
 
 function todayStr() {
   const d = new Date();
@@ -17,11 +19,31 @@ export default function Payments() {
   const [targetRow, setTargetRow] = useState(null);
   const [form, setForm] = useState({ payment_invoice_number: "", paid_date: todayStr() });
   const [saving, setSaving] = useState(false);
+  // Filters
+  const [q, setQ] = useState("");
+  const [customerId, setCustomerId] = useState("");
+  const [customers, setCustomers] = useState([]);
+  const [filterMode, setFilterMode] = useState("AND");
 
-  const load = () => api.get("/orders", { params: { status_v: "Invoiced" } })
-    .then((r) => { setRows(r.data); setSelected(new Set()); });
+  const load = () => {
+    Promise.all([
+      api.get("/orders", { params: { status_v: "Invoiced" } }),
+      api.get("/customers"),
+    ]).then(([r, c]) => { setRows(r.data); setCustomers(c.data); setSelected(new Set()); });
+  };
 
   useEffect(() => { load(); }, []);
+
+  const filtered = useMemo(() => {
+    const qStr = q.trim().toLowerCase();
+    const fns = [];
+    if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.customer_name || ""} ${r.origin || ""} ${r.destination || ""}`.toLowerCase().includes(qStr));
+    if (customerId) fns.push((r) => r.customer_id === customerId);
+    if (fns.length === 0) return rows;
+    return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
+  }, [rows, q, customerId, filterMode]);
+
+  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${filterMode}` });
 
   const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
   const toggleAll = () => {
@@ -99,6 +121,34 @@ export default function Payments() {
         </div>
       </Card>
 
+      <Card className="p-4 mb-5">
+        <FilterPresets
+          storageKey="payments"
+          mode={filterMode}
+          setMode={setFilterMode}
+          currentFilters={{ q, customerId }}
+          onLoadPreset={(f) => { setQ(f.q || ""); setCustomerId(f.customerId || ""); }}
+          activeCount={[q.trim(), customerId].filter(Boolean).length}
+        />
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex-1 min-w-[260px]">
+            <Label>Cari (AWB / Customer / Rute)</Label>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+              <Input data-testid="payments-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contoh: AWB-..." className="pl-9"/>
+            </div>
+          </div>
+          <div className="min-w-[220px]">
+            <Label>Customer</Label>
+            <select data-testid="payments-customer-filter" value={customerId} onChange={(e) => setCustomerId(e.target.value)} className="h-10 rounded border border-slate-300 px-3 text-sm bg-white w-full">
+              <option value="">Semua Customer</option>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="ml-auto text-xs text-slate-500">{filtered.length} dari {rows.length} invoice</div>
+        </div>
+      </Card>
+
       <Card>
         <Table>
           <thead><tr>
@@ -111,7 +161,7 @@ export default function Payments() {
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`payment-row-${r.id}`}>
                 <Td>
                   <button onClick={() => toggle(r.id)}>
@@ -134,6 +184,7 @@ export default function Payments() {
             {rows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10">Tidak ada invoice menunggu pembayaran.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-payments"/>
       </Card>
 
       {showModal && (

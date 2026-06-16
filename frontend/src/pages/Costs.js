@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td } from "../components/ui";
+import SearchableSelect from "../components/SearchableSelect";
 import { errMsg, fmtIDR, fmtDate } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
@@ -116,10 +117,15 @@ export default function Costs() {
             <form onSubmit={submit} className="space-y-3">
               <div>
                 <Label>AWB *</Label>
-                <Select data-testid="cost-awb-select" value={form.awb_id} onChange={(e) => setForm({ ...form, awb_id: e.target.value })} required>
-                  <option value="">— Pilih AWB —</option>
-                  {orders.map((o) => <option key={o.id} value={o.id}>{o.awb_number} · {o.customer_name}</option>)}
-                </Select>
+                <SearchableSelect
+                  testid="cost-awb-select"
+                  value={form.awb_id}
+                  onChange={(v) => setForm({ ...form, awb_id: v })}
+                  options={orders.map((o) => ({ value: o.id, label: o.awb_number, sub: `${o.status} · ${o.customer_name} · ${o.origin}→${o.destination}` }))}
+                  placeholder="— Pilih AWB —"
+                  emptyText="AWB tidak ditemukan"
+                  required
+                />
               </div>
               <div>
                 <Label>Kategori Biaya *</Label>

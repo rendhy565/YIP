@@ -549,3 +549,43 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 ### Files touched
 - New: `/app/frontend/src/components/FilterPresets.js`
 - Updated: `OrdersList.js` (client-side filter, FilterPresets import), `Recap.js` (passGlobal helper, reconciledGlobal memo), `InvoicesCreated.js` (FilterPresets dgn storageKey="invoices"), `server.py` (list_orders adds customer_id).
+
+---
+
+## Iteration 15 — Searchable Selects, Recap Month Dropdown, Pagination Everywhere, Accrue Reclass, Hide Empty Sidebar Sections (2026-06-16)
+
+### Komponen baru
+- `/components/SearchableSelect.js` — combobox dengan type-to-filter, support clear, sub-label, datatest-id terstruktur.
+- `/components/Pagination.js` — pagination + `usePagination` hook. Size selector 25 / 50 / 100 / Semua, dengan **warning modal** saat pilih "Semua" untuk dataset besar.
+
+### Applied SearchableSelect
+- **OrderInput** — dropdown Customer.
+- **Costs (Plotting Biaya)** — dropdown AWB di modal Tambah Biaya.
+- **PanjarKerja** — dropdown AWB di setiap breakdown row settle.
+
+### Filter + Search + Pagination
+- **Invoices (Pembuatan Invoice)** — search AWB/Customer/Rute + filter Customer + FilterPresets OR/AND + pagination.
+- **Payments (Pembayaran Closing)** — search + filter Customer + FilterPresets + pagination.
+- **AccrueSettlement (Settle Hutang Vendor)** — search + filter Vendor + FilterPresets + pagination + **Paid Vendor list dengan search & pagination terpisah**.
+- **OrdersList** — pagination ditambahkan.
+- **InvoicesCreated** — pagination + Export Invoice Excel button **dihapus** (sudah ada Export REPORT AR). Print to PDF tetap di toolbar (sudah multi-checkmark).
+
+### Accrue (Settle Hutang Vendor) — perubahan
+- Tombol **"Tandai Cash"** diganti jadi **"Paid"** (dengan icon CheckCircle2 hijau).
+- **List Paid Vendor** baru di bawah list Hutang, dengan tombol **Reclass** per row untuk balik ke Hutang Vendor (Accrue).
+- Backend endpoint baru: `POST /api/costs/{cid}/reclass-to-accrue` (finance only). Reverse journal: DR Cash / CR Hutang 2101.
+- Total Paid Vendor tampil di header bar (emerald, kanan).
+
+### Recap — Bulan Dropdown
+- `<Input type="month">` native diganti dengan **2 select terpisah**: Tahun (6 tahun range) + Bulan (Jan–Des bahasa Indonesia). Sinkron otomatis ke format YYYY-MM untuk filter.
+
+### Sidebar — hide empty section labels
+- Layout.js 2-pass logic: pertama filter item visible per role/perm, lalu prune section header yang tidak punya child setelahnya.
+- Hasil: untuk role **Finance**, label "Sistem" tidak muncul lagi (verifikasi via screenshot — hanya Order to Cash / Biaya / Master & Laporan / Akunting (PSAK) yang tampak).
+
+### Backend
+- `/app/backend/server.py`: tambah endpoint `POST /api/costs/{cid}/reclass-to-accrue`.
+
+### Files touched
+- New: `SearchableSelect.js`, `Pagination.js`
+- Updated: `OrderInput.js`, `Costs.js`, `PanjarKerja.js`, `Recap.js`, `Invoices.js`, `Payments.js`, `AccrueSettlement.js`, `OrdersList.js`, `InvoicesCreated.js`, `Layout.js`, `server.py`

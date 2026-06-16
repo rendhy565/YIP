@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from "../components/ui";
+import SearchableSelect from "../components/SearchableSelect";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, X, Wallet, CheckCircle2, Trash2 } from "lucide-react";
@@ -215,12 +216,14 @@ export default function PanjarKerja() {
                   {breakdown.map((b, i) => (
                     <div key={i} className="grid grid-cols-12 gap-2 items-center" data-testid={`breakdown-row-${i}`}>
                       <div className="col-span-5">
-                        <Select data-testid={`breakdown-awb-${i}`} value={b.awb_id} onChange={(e) => updateRow(i, "awb_id", e.target.value)}>
-                          <option value="">— Pilih AWB —</option>
-                          {allOrders.map((o) => (
-                            <option key={o.id} value={o.id}>{o.awb_number} · {o.status} · {o.customer_name} · {o.origin}→{o.destination}</option>
-                          ))}
-                        </Select>
+                        <SearchableSelect
+                          testid={`breakdown-awb-${i}`}
+                          value={b.awb_id}
+                          onChange={(v) => updateRow(i, "awb_id", v)}
+                          options={allOrders.map((o) => ({ value: o.id, label: o.awb_number, sub: `${o.status} · ${o.customer_name} · ${o.origin}→${o.destination}` }))}
+                          placeholder="— Pilih AWB —"
+                          emptyText="AWB tidak ditemukan"
+                        />
                       </div>
                       <div className="col-span-3">
                         <Input data-testid={`breakdown-amount-${i}`} type="number" step="0.01" placeholder="Nominal (IDR)" value={b.amount} onChange={(e) => updateRow(i, "amount", e.target.value)}/>

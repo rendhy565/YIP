@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label } from "../components/ui";
+import SearchableSelect from "../components/SearchableSelect";
 import { errMsg, fmtIDR } from "../lib/utils";
 import { toast } from "sonner";
 import { Calculator, Save, FileLock2, UserPlus, X, ShieldCheck } from "lucide-react";
@@ -209,10 +210,19 @@ export default function OrderInput() {
                   <UserPlus size={12}/> Customer Baru
                 </button>
               </div>
-              <Select data-testid="order-customer-select" value={form.customer_id} onChange={(e) => setForm({ ...form, customer_id: e.target.value })} required>
+              <Select data-testid="order-customer-select-legacy" value={form.customer_id} onChange={(e) => setForm({ ...form, customer_id: e.target.value })} required className="hidden">
                 <option value="">— Pilih Customer —</option>
                 {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Select>
+              <SearchableSelect
+                testid="order-customer-select"
+                value={form.customer_id}
+                onChange={(v) => setForm({ ...form, customer_id: v })}
+                options={customers.map((c) => ({ value: c.id, label: c.name, sub: c.npwp ? `NPWP ${c.npwp}` : null }))}
+                placeholder="— Pilih Customer —"
+                emptyText="Customer tidak ditemukan"
+                required
+              />
             </div>
             <div>
               <Label>Consignee (Penerima)</Label>
