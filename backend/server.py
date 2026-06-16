@@ -1338,18 +1338,68 @@ async def reconcile_orders(data: ReconcileIn, user: dict = Depends(require_role(
     skipped = len(ids) - len(valid_ids)
     if not valid_ids:
         raise HTTPException(400, "Tidak ada AWB yang siap direkonsiliasi (semua belum punya biaya/cost)")
-    res = await db.awb_orders.update_many(
-        {"_id": {"$in": valid_ids}, "status": "Open"},
-        {"$set": {"status": "Reconciled", "reconciled_at": datetime.now(timezone.utc)}},
-    )
-    # PSAK 72 trigger: defensive recognition (cost trigger above should have already
-    # fired, but reconcile is also a valid signal — idempotent helper makes this safe).
-    for oid in valid_ids:
+
+    # PSAK 72 + Excel-import flow: AWB yang sudah punya invoice doc (dari Excel)
+    # langsung dipromote ke "Invoiced", BUKAN "Reconciled". Otomatis post invoice
+    # clearance journal: DR 1201 / CR 1290 / CR 2210. User tidak perlu lagi klik
+    # "Create Invoice" untuk AWB tsb.
+    now = datetime.now(timezone.utc)
+    awbs = await db.awb_orders.find({"_id": {"$in": valid_ids}, "status": "Open"}).to_list(20000)
+    promoted_to_invoiced = 0
+    promoted_to_reconciled = 0
+    for awb in awbs:
+        awb_id = awb["_id"]
+        invoice_doc = await db.invoices.find_one({"awb_id": awb_id})
+        # Defensive recognition first
         try:
-            await recognize_revenue_for_awb(oid, user["id"])
+            await recognize_revenue_for_awb(awb_id, user["id"])
         except Exception:
             pass
-    return {"updated": res.modified_count, "skipped_no_cost": skipped}
+        if invoice_doc:
+            # Already has invoice doc → fast-track to Invoiced + post invoice journal
+            await db.awb_orders.update_one(
+                {"_id": awb_id},
+                {"$set": {"status": "Invoiced", "reconciled_at": now, "invoiced_at": now}},
+            )
+            # Post invoice clearance journal (DR 1201 / CR 1290 / CR 2210) — only if
+            # not yet posted (idempotent via reference_type check).
+            already_posted = await db.journal_entries.find_one({
+                "reference_type": "invoice", "reference_id": str(invoice_doc["_id"])
+            })
+            if not already_posted:
+                try:
+                    dpp = float(awb.get("total_tariff") or 0)
+                    tax = float(awb.get("tax_amount") or 0)
+                    gross = round(dpp + tax, 2)
+                    inv_lines = [
+                        {"account_code": "1201", "debit": gross, "credit": 0, "memo": invoice_doc.get("invoice_number") or awb["awb_number"]},
+                        {"account_code": "1290", "debit": 0, "credit": dpp, "memo": f"Clear PYMHD {awb['awb_number']}"},
+                    ]
+                    if tax > 0:
+                        inv_lines.append({"account_code": "2210", "debit": 0, "credit": tax, "memo": f"PPN — {awb['awb_number']}"})
+                    await post_journal(
+                        date=now,
+                        description=f"Invoice {invoice_doc.get('invoice_number') or awb['awb_number']} - {awb['awb_number']}",
+                        lines=inv_lines,
+                        reference_type="invoice",
+                        reference_id=str(invoice_doc["_id"]),
+                        posted_by=user["id"],
+                    )
+                except HTTPException:
+                    pass
+            promoted_to_invoiced += 1
+        else:
+            await db.awb_orders.update_one(
+                {"_id": awb_id},
+                {"$set": {"status": "Reconciled", "reconciled_at": now}},
+            )
+            promoted_to_reconciled += 1
+    return {
+        "updated": promoted_to_invoiced + promoted_to_reconciled,
+        "skipped_no_cost": skipped,
+        "promoted_to_invoiced": promoted_to_invoiced,
+        "promoted_to_reconciled": promoted_to_reconciled,
+    }
 
 @app.post("/api/orders/{oid}/revert-to-open")
 async def revert_to_open(oid: str, user: dict = Depends(require_role("operation"))):
@@ -3825,12 +3875,23 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                 continue
             status = awb.get("status", "Open")
             has_cost = await db.awb_costs.count_documents({"awb_id": awb_id}) > 0
-            has_invoice = bool(await db.invoices.find_one({"awb_id": awb_id})) or status in ("Invoiced", "Paid")
+            invoice_doc = await db.invoices.find_one({"awb_id": awb_id})
+            has_invoice = bool(invoice_doc) or status in ("Invoiced", "Paid")
             # Strict PSAK 72: revenue recognized only when performance obligation is
             # fulfilled (proxy: vendor cost incurred OR invoice already issued).
-            # Status alone (e.g. "Reconciled" mapped from Excel "Belum Inv") is NOT
-            # a recognition trigger — this keeps /pnl and /income-statement aligned.
             needs_recognition = has_cost or has_invoice
+            # ─── Status normalization (per user rule) ───
+            # AWB tanpa cost → status WAJIB "Open", apapun mapping Excel-nya.
+            # Bahkan kalau ada nomor invoice eksternal — biarkan invoice doc tetap
+            # ada (data legacy) tapi AWB status = Open sampai cost ditambahkan.
+            # Saat cost masuk + reconcile, status akan otomatis dipromosikan ke
+            # "Invoiced" jika invoice doc sudah ada (handled by reconcile endpoint).
+            if not has_cost:
+                if status != "Open":
+                    await db.awb_orders.update_one({"_id": awb_id}, {"$set": {"status": "Open"}})
+                    status = "Open"
+                # Recognition is gated by has_cost too — kalau no cost tapi has_invoice
+                # tetap recognize (legacy billing-only), tapi status tetap Open.
             try:
                 # 1. PYMHD posting
                 await post_journal(

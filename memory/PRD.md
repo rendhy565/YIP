@@ -776,3 +776,41 @@ PYMHD pipeline Rp 12.147.000 (95 AWB), unrecognized Rp 7.102.000 — termasuk AW
 ## Backlog
 (unchanged dari iterasi 13)
 
+
+## Iteration 15 — Status Discipline (Open vs Reconciled vs Invoiced) (2026-02-16)
+
+### User's rule (verbatim)
+"Saat import apabila ada nomor invoice tp belum ada cost, tetap statusnya open. Tp saat dimasukkan cost, dan reconcile, status invoicenya langsung sudah invoiced. Tidak lagi bisa klik tombol create invoice untuk AWB tersebut."
+
+### Implementation
+**1. Excel import status normalization** (`_parse_excel` post-import sweep):
+- `if not has_cost: status = "Open"` (force, regardless of Excel mapping).
+- Berlaku JUGA untuk AWB yang punya external invoice number tapi belum ada cost — invoice doc tetap dibuat, tapi awb.status = Open.
+
+**2. Reconcile auto-promote** (`POST /api/orders/reconcile`):
+- Untuk setiap AWB yang di-reconcile: cek apakah punya `invoice` doc.
+- Kalau **YA** → status = **"Invoiced"** (bukan "Reconciled"), post invoice clearance journal (`DR 1201 / CR 1290 / CR 2210`) IF belum di-post (idempotent via reference_type+id check).
+- Kalau **TIDAK** → status = "Reconciled" (alur normal — user nanti klik "Buat Invoice").
+- Response sekarang return `promoted_to_invoiced` + `promoted_to_reconciled`.
+
+**3. Frontend efek samping (otomatis tanpa code change)**:
+- `/invoices` (Pembuatan Invoice) query `status_v=Reconciled` → AWB yang sudah auto-promote ke Invoiced TIDAK muncul → tombol "Buat Invoice" otomatis tidak ada.
+- `/invoices/created` (Invoice Tercetak) tetap menampilkan invoice yang sudah ada.
+
+### Verifikasi live (test /tmp/test_invoice_open_flow.py)
+| Tahap | Status | Hasil |
+|---|---|---|
+| Import Excel: invoice ada, no cost | **Open** | ✅ Sesuai rule user (forced) |
+| User input cost 200rb | Open | ✅ Cost & journal posted |
+| User klik Reconcile | **Invoiced** | ✅ Auto-promote (bukan Reconciled) |
+
+Curl verify: `GET /api/orders?status_v=Reconciled` → AWB-IT14D **tidak ada** → tombol "Buat Invoice" otomatis hilang dari UI ✅.
+
+### Files touched
+- `backend/server.py`:
+  - `_parse_excel` post-import sweep — status normalization (force "Open" jika no cost).
+  - `POST /api/orders/reconcile` — auto-promote ke Invoiced + idempotent invoice journal.
+
+## Backlog (unchanged)
+- Sprint 2 PPN Reconciliation (P0), Sprint 3 Purchase Invoice (P1), PPh21 TER (P2), Tanggal Terima Checklists (P2), Aging PYMHD breakdown (P2).
+
