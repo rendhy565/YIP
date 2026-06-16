@@ -3566,6 +3566,10 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
             continue  # not a data sheet
         sheet_info = {"sheet": sheet_name, "rows_read": 0, "awbs": 0, "items": 0, "costs": 0}
 
+        # Track AWBs created/touched in THIS import — used for post-import PYMHD migration.
+        if "_imported_awb_ids" not in summary:
+            summary["_imported_awb_ids"] = []
+
         for row_idx in range(header_row + 1, ws.max_row + 1):
             row = [c.value for c in ws[row_idx]]
             def col(key):
@@ -3681,10 +3685,13 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                     else:
                         r = await db.awb_orders.insert_one(awb_doc)
                         awb_id = r.inserted_id
+                        summary["_imported_awb_ids"].append(awb_id)
                     summary["awbs_created"] += 1
                     sheet_info["awbs"] += 1
                 else:
                     awb_id = existing_awb["_id"]
+                    if not dry_run and awb_id not in summary["_imported_awb_ids"]:
+                        summary["_imported_awb_ids"].append(awb_id)
 
                 # Item / line append
                 item_line = {
@@ -3774,23 +3781,8 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                 await add_cost("Operational", biaya_ops, None, None)
                 await add_cost("Lintas", uang_jalan, None, None)
 
-                # Sales journal (Dr Piutang/Cr Pendapatan + PPN) — once per AWB line
-                if not dry_run and awb_id is not None:
-                    try:
-                        lines = [
-                            {"account_code": "1201", "debit": inv_ppn, "credit": 0, "memo": awb_no},
-                            {"account_code": "4101", "debit": 0, "credit": selling, "memo": awb_no},
-                        ]
-                        if ppn > 0:
-                            lines.append({"account_code": "2210", "debit": 0, "credit": ppn, "memo": "PPN"})
-                        await post_journal(
-                            date=pickup_date, description=f"[Import] Penjualan {awb_no} - {item_desc}",
-                            lines=lines, reference_type="awb_order", reference_id=str(awb_id),
-                            posted_by=posted_by, auto=True,
-                        )
-                        summary["journals_posted"] += 1
-                    except HTTPException as he:
-                        summary["errors"].append(f"Sheet '{sheet_name}' row {row_idx} AWB {awb_no}: jurnal sales gagal — {he.detail[:100]}")
+                # Sales journal will be POSTPONED to post-import sweep (PYMHD model).
+                # See post-import block at the bottom of _parse_excel.
 
                 # Invoice record (only once per AWB)
                 if ext_inv and existing_awb is None and not dry_run and awb_id is not None:
@@ -3803,22 +3795,7 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                         })
                         summary["invoices_created"] += 1
 
-                # Payment journal if status=Paid
-                if not dry_run and awb_id is not None and _map_status(billing_status, payment_status) == "Paid" and inv_ppn > 0:
-                    try:
-                        await post_journal(
-                            date=paid_at or pickup_date,
-                            description=f"[Import] Pelunasan {awb_no}",
-                            lines=[
-                                {"account_code": "1101", "debit": inv_ppn, "credit": 0, "memo": awb_no},
-                                {"account_code": "1201", "debit": 0, "credit": inv_ppn, "memo": awb_no},
-                            ],
-                            reference_type="payment", reference_id=str(awb_id),
-                            posted_by=posted_by, auto=True,
-                        )
-                        summary["journals_posted"] += 1
-                    except HTTPException:
-                        pass
+                # Payment journal also POSTPONED to post-import sweep.
 
             except Exception as e:
                 summary["skipped_rows"] += 1
@@ -3826,6 +3803,113 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                 continue
 
         summary["sheets_processed"].append(sheet_info)
+
+    # ─── POST-IMPORT PYMHD SWEEP (PSAK 72) ───────────────────────────────
+    # All imported AWBs are processed here to:
+    #   1. Post PYMHD jurnal:  DR 1290 / CR 2390  (sebesar total_tariff)
+    #   2. If has cost OR status non-Open → recognize revenue: DR 2390 / CR 4101
+    #   3. If status Invoiced/Paid OR external_invoice_number ada → post invoice
+    #      clearance: DR 1201 / CR 1290 / CR 2210
+    #   4. If status Paid → post payment: DR 1101 / CR 1201
+    if not dry_run and summary.get("_imported_awb_ids"):
+        pymhd_count = recog_count = inv_count = pay_count = 0
+        for awb_id in summary["_imported_awb_ids"]:
+            awb = await db.awb_orders.find_one({"_id": awb_id})
+            if not awb:
+                continue
+            dpp = float(awb.get("total_tariff") or 0)
+            tax = float(awb.get("tax_amount") or 0)
+            gross = round(dpp + tax, 2)
+            if dpp <= 0:
+                await db.awb_orders.update_one({"_id": awb_id}, {"$set": {"revenue_recognized": True}})
+                continue
+            status = awb.get("status", "Open")
+            has_cost = await db.awb_costs.count_documents({"awb_id": awb_id}) > 0
+            has_invoice = bool(await db.invoices.find_one({"awb_id": awb_id})) or status in ("Invoiced", "Paid")
+            # Strict PSAK 72: revenue recognized only when performance obligation is
+            # fulfilled (proxy: vendor cost incurred OR invoice already issued).
+            # Status alone (e.g. "Reconciled" mapped from Excel "Belum Inv") is NOT
+            # a recognition trigger — this keeps /pnl and /income-statement aligned.
+            needs_recognition = has_cost or has_invoice
+            try:
+                # 1. PYMHD posting
+                await post_journal(
+                    date=awb["created_at"],
+                    description=f"[Import PYMHD] {awb['awb_number']}",
+                    lines=[
+                        {"account_code": "1290", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+                        {"account_code": "2390", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+                    ],
+                    reference_type="awb_order_pymhd", reference_id=str(awb_id),
+                    posted_by=posted_by, auto=True,
+                )
+                pymhd_count += 1
+            except HTTPException as he:
+                summary["errors"].append(f"PYMHD AWB {awb.get('awb_number')}: {str(he.detail)[:100]}")
+                continue
+            if needs_recognition:
+                try:
+                    await post_journal(
+                        date=awb["created_at"],
+                        description=f"[Import] Pengakuan revenue {awb['awb_number']}",
+                        lines=[
+                            {"account_code": "2390", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+                            {"account_code": "4101", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+                        ],
+                        reference_type="awb_revenue_recognition", reference_id=str(awb_id),
+                        posted_by=posted_by, auto=True,
+                    )
+                    await db.awb_orders.update_one(
+                        {"_id": awb_id},
+                        {"$set": {"revenue_recognized": True, "revenue_recognized_at": awb["created_at"]}},
+                    )
+                    recog_count += 1
+                except HTTPException:
+                    pass
+            else:
+                await db.awb_orders.update_one({"_id": awb_id}, {"$set": {"revenue_recognized": False}})
+            if has_invoice:
+                inv_lines = [
+                    {"account_code": "1201", "debit": gross, "credit": 0, "memo": awb["awb_number"]},
+                    {"account_code": "1290", "debit": 0, "credit": dpp, "memo": f"Clear PYMHD {awb['awb_number']}"},
+                ]
+                if tax > 0:
+                    inv_lines.append({"account_code": "2210", "debit": 0, "credit": tax, "memo": f"PPN — {awb['awb_number']}"})
+                try:
+                    inv_doc = await db.invoices.find_one({"awb_id": awb_id})
+                    await post_journal(
+                        date=awb["created_at"],
+                        description=f"[Import] Invoice {awb['awb_number']}",
+                        lines=inv_lines,
+                        reference_type="invoice",
+                        reference_id=str(inv_doc["_id"]) if inv_doc else str(awb_id),
+                        posted_by=posted_by, auto=True,
+                    )
+                    inv_count += 1
+                except HTTPException:
+                    pass
+            if status == "Paid" and gross > 0:
+                try:
+                    await post_journal(
+                        date=awb.get("paid_at") or awb["created_at"],
+                        description=f"[Import] Pelunasan {awb['awb_number']}",
+                        lines=[
+                            {"account_code": "1101", "debit": gross, "credit": 0, "memo": awb["awb_number"]},
+                            {"account_code": "1201", "debit": 0, "credit": gross, "memo": awb["awb_number"]},
+                        ],
+                        reference_type="payment", reference_id=str(awb_id),
+                        posted_by=posted_by, auto=True,
+                    )
+                    pay_count += 1
+                except HTTPException:
+                    pass
+        summary["pymhd_posted"] = pymhd_count
+        summary["recognitions_posted"] = recog_count
+        summary["invoice_journals_posted"] = inv_count
+        summary["payment_journals_posted"] = pay_count
+        summary["journals_posted"] += (pymhd_count + recog_count + inv_count + pay_count)
+        # Don't leak internal tracking IDs to response
+        summary.pop("_imported_awb_ids", None)
 
     return summary
 

@@ -740,3 +740,39 @@ User memilih: **terapkan PSAK 72** dengan model PYMHD (Pendapatan Yang Masih Har
 - **"Tanggal Terima" Checklists** (P2).
 - **UX:** ganti `window.confirm()` di delete cost dengan shadcn AlertDialog modal non-blocking (P3, kosmetik).
 
+
+## Iteration 14 — Excel Import PYMHD Alignment (2026-02-16)
+
+### Background
+User UAT bertanya: apakah fitur **Import Excel** sudah memasukkan revenue belum-ada-cost sebagai PYMHD? Sebelum modifikasi PSAK 72, nilai tersebut tidak di-includekan / langsung di-recognize sebagai 4101.
+
+Audit `_parse_excel` (`server.py` L3560+): per-row import post jurnal LAMA `DR 1201 / CR 4101 / CR 2210` (`reference_type='awb_order'`) tanpa PYMHD. AWB tanpa cost tetap tampil di /income-statement tapi tidak di /pnl → divergen lagi.
+
+### Fix
+- **Hapus per-row sales journal** lama dari Excel importer (line 3778-3793) dan per-row payment journal (line 3807-3821).
+- **Track imported AWB IDs** di summary (`_imported_awb_ids` internal).
+- **Post-import PYMHD sweep** di akhir `_parse_excel`: per AWB,
+  1. Post jurnal PYMHD `DR 1290 / CR 2390` sebesar DPP.
+  2. Kalau `has_cost OR has_invoice` → post recognition `DR 2390 / CR 4101` dan set `revenue_recognized=True`.
+  3. Kalau invoice eksternal ada → post `DR 1201 / CR 1290 / CR 2210` (clearance + PPN).
+  4. Kalau status Paid → post `DR 1101 / CR 1201` (payment).
+- **STRICT recognition trigger**: hanya `has_cost OR has_invoice` (drop status="Reconciled" trigger karena status di Excel kadang ambigu — "Belum Inv" → "Reconciled" tapi belum ada cost).
+- Summary baru: `pymhd_posted`, `recognitions_posted`, `invoice_journals_posted`, `payment_journals_posted`.
+
+### Verifikasi Live (test /tmp/test_import_pymhd.py, bulan 2026-02)
+| AWB | Cost | Invoice | Jurnal Posted | revenue_recognized |
+|---|:---:|:---:|---|:---:|
+| AWB-IT14A | ❌ | ❌ | PYMHD only | False (murni PYMHD) |
+| AWB-IT14B | ✅ Rp 600rb | ❌ | PYMHD + Recognition | True |
+| AWB-IT14C | ✅ Rp 900rb | ✅ INV-IT14-001 | PYMHD + Recognition + Invoice clearance | True |
+
+`/pnl total_revenue` = `/income-statement total_revenue` = **Rp 5.000.000** ✅ (sinkron)
+PYMHD pipeline Rp 12.147.000 (95 AWB), unrecognized Rp 7.102.000 — termasuk AWB-IT14A yang tanpa cost.
+
+### Files touched
+- `backend/server.py`: `_parse_excel` — track imported AWB IDs, hapus per-row sales/payment journals, tambah post-import PYMHD sweep.
+- Test (manual): `/tmp/test_import_pymhd.py`.
+
+## Backlog
+(unchanged dari iterasi 13)
+
