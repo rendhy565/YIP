@@ -43,8 +43,31 @@ export default function Costs() {
 
   const del = async (id) => {
     if (!window.confirm("Hapus biaya?")) return;
-    try { await api.delete(`/costs/${id}`); toast.success("Dihapus"); load(); }
-    catch (e2) { toast.error(errMsg(e2)); }
+    try {
+      const r = await api.delete(`/costs/${id}`);
+      // Server returns ok=false + needs_confirmation when this is the LAST cost
+      // on the AWB and revenue recognition would be reversed.
+      if (r.data && r.data.needs_confirmation) {
+        const ok = window.confirm(
+          `⚠️ PERINGATAN PSAK 72\n\n${r.data.warning}\n\nApakah Anda yakin ingin melanjutkan?`
+        );
+        if (!ok) return;
+        const r2 = await api.delete(`/costs/${id}?confirm=true`);
+        if (r2.data && r2.data.reversal && r2.data.reversal.reversed) {
+          toast.warning(r2.data.reversal.message, { duration: 6000 });
+        } else {
+          toast.success("Dihapus");
+        }
+        load();
+        return;
+      }
+      if (r.data && r.data.reversal && r.data.reversal.reversed) {
+        toast.warning(r.data.reversal.message, { duration: 6000 });
+      } else {
+        toast.success("Dihapus");
+      }
+      load();
+    } catch (e2) { toast.error(errMsg(e2)); }
   };
 
   return (

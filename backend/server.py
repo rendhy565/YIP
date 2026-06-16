@@ -377,6 +377,7 @@ async def post_journal(
     reference_id: Optional[str] = None,
     posted_by: Optional[str] = None,
     auto: bool = True,
+    extra_fields: Optional[dict] = None,
 ) -> dict:
     """Post a balanced journal entry. lines = [{account_code, debit, credit, memo?}, ...]"""
     period = date.strftime("%Y-%m")
@@ -427,6 +428,8 @@ async def post_journal(
         "is_locked": False,
         "created_at": datetime.now(timezone.utc),
     }
+    if extra_fields:
+        doc.update(extra_fields)
     r = await db.journal_entries.insert_one(doc)
     new = await db.journal_entries.find_one({"_id": r.inserted_id})
     return serialize(new)
@@ -1243,7 +1246,7 @@ async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depend
     return {"ok": True, "pph_type": pph_type_label, "pph_rate": pph_rate, "pph_amount": pph_amount, "net_paid": net_paid, "gross": gross}
 
 @app.delete("/api/costs/{cid}")
-async def delete_cost(cid: str, user: dict = Depends(get_current_user)):
+async def delete_cost(cid: str, confirm: bool = False, user: dict = Depends(get_current_user)):
     cost = await db.awb_costs.find_one({"_id": _oid(cid)})
     if not cost:
         raise HTTPException(404, "Biaya tidak ditemukan")
@@ -1252,8 +1255,69 @@ async def delete_cost(cid: str, user: dict = Depends(get_current_user)):
         pass
     elif user["role"] == "operation" and cost["cost_category"] != "Vendor":
         raise HTTPException(403, "Tidak diizinkan")
+    awb_id = cost["awb_id"]
+    awb = await db.awb_orders.find_one({"_id": awb_id})
+    # Is this the LAST cost of the AWB? If yes, deletion will reverse revenue recognition.
+    other_costs = await db.awb_costs.count_documents({"_id": {"$ne": _oid(cid)}, "awb_id": awb_id})
+    is_last = (other_costs == 0)
+
+    # Warning gate: require explicit confirm=true when last cost AND revenue already recognized.
+    if is_last and awb and awb.get("revenue_recognized") and not confirm:
+        return {
+            "ok": False,
+            "needs_confirmation": True,
+            "warning": (
+                f"Cost ini adalah COST TERAKHIR pada AWB {awb['awb_number']}. "
+                f"Menghapusnya akan MEMBALIK pengakuan pendapatan (revenue recognition) "
+                f"sebesar Rp {int(awb.get('total_tariff') or 0):,} kembali ke status PYMHD. "
+                f"Lanjutkan dengan mengirim ulang DELETE menambahkan parameter ?confirm=true."
+            ).replace(",", "."),
+            "awb_number": awb["awb_number"],
+            "reversal_amount": float(awb.get("total_tariff") or 0),
+        }
+
+    # Delete the cost document
     await db.awb_costs.delete_one({"_id": _oid(cid)})
-    return {"ok": True}
+    # Delete cost's own journal entries (cascade)
+    await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": cid})
+
+    reversal_info = None
+    # If last cost AND AWB has been recognized AND NOT yet invoiced → reverse recognition.
+    if is_last and awb and awb.get("revenue_recognized"):
+        already_invoiced = await db.invoices.find_one({"awb_id": awb_id})
+        if not already_invoiced:
+            now = datetime.now(timezone.utc)
+            dpp = float(awb.get("total_tariff") or 0)
+            # Post REVERSAL journal with explicit is_reversal flag for audit trail.
+            try:
+                await post_journal(
+                    date=now,
+                    description=f"REVERSAL — Pembatalan pengakuan revenue {awb['awb_number']} (cost terakhir dihapus)",
+                    lines=[
+                        {"account_code": "4101", "debit": dpp, "credit": 0, "memo": f"Reversal {awb['awb_number']}"},
+                        {"account_code": "2390", "debit": 0, "credit": dpp, "memo": f"Reversal {awb['awb_number']}"},
+                    ],
+                    reference_type="awb_revenue_reversal",
+                    reference_id=str(awb_id),
+                    posted_by=user["id"],
+                    extra_fields={"is_reversal": True, "reversed_awb": awb["awb_number"]},
+                )
+                await db.awb_orders.update_one(
+                    {"_id": awb_id},
+                    {
+                        "$set": {"revenue_recognized": False},
+                        "$unset": {"revenue_recognized_at": ""},
+                    },
+                )
+                reversal_info = {
+                    "reversed": True,
+                    "amount": dpp,
+                    "awb_number": awb["awb_number"],
+                    "message": f"Revenue recognition Rp {int(dpp):,} dibalik kembali ke PYMHD untuk {awb['awb_number']}.".replace(",", "."),
+                }
+            except HTTPException as e:
+                reversal_info = {"reversed": False, "error": str(e.detail)}
+    return {"ok": True, "reversal": reversal_info}
 
 # ---------------------------------------------------------------------------
 # Recap & Reconciliation (Module 3 & 4)
@@ -1818,6 +1882,59 @@ async def profit_loss(
 # ---------------------------------------------------------------------------
 # Dashboard KPIs
 # ---------------------------------------------------------------------------
+@app.get("/api/dashboard/pymhd-pipeline")
+async def pymhd_pipeline(user: dict = Depends(get_current_user)):
+    """Return outstanding PYMHD balance: AWBs that have a PYMHD journal posted but
+    have NOT been invoiced yet (i.e., still in pipeline). Grouped by customer and
+    by status (Open / Reconciled).
+    """
+    # Get all AWBs that aren't invoiced and have total_tariff > 0
+    awbs = await db.awb_orders.find({
+        "status": {"$in": ["Open", "Reconciled"]},
+    }).to_list(20000)
+
+    cust_ids = list({a.get("customer_id") for a in awbs if a.get("customer_id")})
+    cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": cust_ids}}).to_list(2000)}
+
+    by_customer = {}
+    by_status = {"Open": {"count": 0, "amount": 0.0}, "Reconciled": {"count": 0, "amount": 0.0}}
+    total_amount = 0.0
+    total_count = 0
+    recognized_amount = 0.0   # already in revenue but waiting for invoice
+    unrecognized_amount = 0.0 # still pure PYMHD (no cost yet)
+
+    for a in awbs:
+        amt = float(a.get("total_tariff") or 0)
+        if amt <= 0:
+            continue
+        total_amount += amt
+        total_count += 1
+        status = a.get("status", "Open")
+        if status in by_status:
+            by_status[status]["count"] += 1
+            by_status[status]["amount"] += amt
+        if a.get("revenue_recognized"):
+            recognized_amount += amt
+        else:
+            unrecognized_amount += amt
+        c = cmap.get(a.get("customer_id"))
+        cname = c["name"] if c else "(tanpa customer)"
+        cust = by_customer.setdefault(cname, {"customer": cname, "count": 0, "amount": 0.0, "unrecognized": 0.0})
+        cust["count"] += 1
+        cust["amount"] += amt
+        if not a.get("revenue_recognized"):
+            cust["unrecognized"] += amt
+
+    rows = sorted(by_customer.values(), key=lambda r: r["amount"], reverse=True)
+    return {
+        "total_count": total_count,
+        "total_amount": round(total_amount, 2),
+        "recognized_amount": round(recognized_amount, 2),       # has cost, waiting invoice
+        "unrecognized_amount": round(unrecognized_amount, 2),   # no cost yet — pure PYMHD
+        "by_status": by_status,
+        "by_customer": rows,
+    }
+
 @app.get("/api/dashboard/kpis")
 async def kpis(user: dict = Depends(get_current_user)):
     statuses = ["Open", "Reconciled", "Invoiced", "Paid"]
