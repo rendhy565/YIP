@@ -12,6 +12,7 @@ export default function InvoicesCreated() {
   const [q, setQ] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [company, setCompany] = useState("");
+  const [filterMode, setFilterMode] = useState("OR"); // "OR" | "AND"
   const [selected, setSelected] = useState(new Set());
 
   const COMPANY_OPTIONS = ["PT. Abirama Mitra Pradana", "PT. Abirama Mitra Pratama"];
@@ -23,21 +24,19 @@ export default function InvoicesCreated() {
   };
   useEffect(() => { load(); }, []);
 
-  // Client-side filter — OR logic between search, customer, & company filters.
-  // A row passes if it matches ANY active filter. When no filter active, show all.
+  // Client-side filter — mode toggle OR / AND between search, customer, & company.
+  // OR  : row passes if it matches ANY active filter (default).
+  // AND : row passes only if it matches ALL active filters.
+  // "Active" = filter has a non-empty value. When no filter active, show all.
   const filtered = useMemo(() => {
     const qStr = q.trim().toLowerCase();
-    const hasQ = !!qStr;
-    const hasCustomer = !!customerId;
-    const hasCompany = !!company;
-    if (!hasQ && !hasCustomer && !hasCompany) return invoices;
-    return invoices.filter((i) => {
-      const matchQ = hasQ && `${i.invoice_number || ""} ${i.awb_number || ""} ${i.customer_name || ""} ${i.company_name || ""}`.toLowerCase().includes(qStr);
-      const matchCust = hasCustomer && i.customer_id === customerId;
-      const matchCompany = hasCompany && i.company_name === company;
-      return matchQ || matchCust || matchCompany;
-    });
-  }, [invoices, q, customerId, company]);
+    const activeFilters = [];
+    if (qStr) activeFilters.push((i) => `${i.invoice_number || ""} ${i.awb_number || ""} ${i.customer_name || ""} ${i.company_name || ""}`.toLowerCase().includes(qStr));
+    if (customerId) activeFilters.push((i) => i.customer_id === customerId);
+    if (company) activeFilters.push((i) => i.company_name === company);
+    if (activeFilters.length === 0) return invoices;
+    return invoices.filter((i) => filterMode === "AND" ? activeFilters.every((fn) => fn(i)) : activeFilters.some((fn) => fn(i)));
+  }, [invoices, q, customerId, company, filterMode]);
 
   const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
   const toggleAll = () => {
@@ -105,23 +104,45 @@ export default function InvoicesCreated() {
       />
 
       <Card className="p-4 mb-5">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <span className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500">Mode Filter:</span>
+          <div className="inline-flex rounded border border-slate-300 overflow-hidden" data-testid="filter-mode-toggle">
+            <button
+              type="button"
+              data-testid="filter-mode-or"
+              onClick={() => setFilterMode("OR")}
+              className={`px-3 py-1 text-xs font-bold uppercase ${filterMode === "OR" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >OR (cocok salah satu)</button>
+            <button
+              type="button"
+              data-testid="filter-mode-and"
+              onClick={() => setFilterMode("AND")}
+              className={`px-3 py-1 text-xs font-bold uppercase border-l border-slate-300 ${filterMode === "AND" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
+            >AND (harus cocok semua)</button>
+          </div>
+          <span className="text-[11px] text-slate-500 ml-auto">
+            {[q.trim() && "Cari", customerId && "Customer", company && "Company"].filter(Boolean).length > 0
+              ? `${[q.trim() && "Cari", customerId && "Customer", company && "Company"].filter(Boolean).length} filter aktif`
+              : "Tidak ada filter aktif"}
+          </span>
+        </div>
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[260px]">
-            <Label>Cari (OR — No. Invoice / AWB / Customer)</Label>
+            <Label>Cari (No. Invoice / AWB / Customer / Company)</Label>
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
               <Input data-testid="invoice-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contoh: INV-202606-0001 atau AWB-..." className="pl-9"/>
             </div>
           </div>
           <div className="min-w-[220px]">
-            <Label>Filter Customer (OR)</Label>
+            <Label>Filter Customer</Label>
             <Select data-testid="invoice-customer-filter" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               <option value="">Semua Customer</option>
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </div>
           <div className="min-w-[240px]">
-            <Label>Filter Company (OR)</Label>
+            <Label>Filter Company</Label>
             <Select data-testid="invoice-company-filter" value={company} onChange={(e) => setCompany(e.target.value)}>
               <option value="">Semua Company</option>
               {COMPANY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}

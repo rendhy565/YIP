@@ -505,3 +505,17 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 - Backend `GET /api/invoices` extend: tiap row sekarang punya `company_name` & `customer_id`.
 - Tabel daftar invoice tambah kolom **Company**.
 - Verified live: filter Company=Pradana → 23/38; + search "ZZZNONEXIST" → tetap 23 (membuktikan OR).
+
+---
+
+## Iteration 13 — Toggle AND/OR Mode Filter Invoice (2026-06-16)
+
+### Filter mode toggle
+- Tombol toggle **OR / AND** di atas filter row (default OR).
+- `OR (cocok salah satu)` — row tampil jika match minimal 1 filter aktif.
+- `AND (harus cocok semua)` — row tampil hanya kalau match SEMUA filter aktif.
+- Counter "X filter aktif" muncul di kanan untuk transparansi.
+- Verified live:
+  - OR + Company=Pradana + search "ZZZNONEXIST" → **23/38** rows.
+  - AND + Company=Pradana + search "ZZZNONEXIST" → **0** rows.
+  - AND + Company=Pradana + no search → **23** rows.
