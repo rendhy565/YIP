@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBa
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet } from "lucide-react";
+import FilterPresets from "../components/FilterPresets";
 
 export default function InvoicesCreated() {
   const [invoices, setInvoices] = useState([]);
@@ -104,28 +105,14 @@ export default function InvoicesCreated() {
       />
 
       <Card className="p-4 mb-5">
-        <div className="flex items-center gap-2 mb-3 flex-wrap">
-          <span className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500">Mode Filter:</span>
-          <div className="inline-flex rounded border border-slate-300 overflow-hidden" data-testid="filter-mode-toggle">
-            <button
-              type="button"
-              data-testid="filter-mode-or"
-              onClick={() => setFilterMode("OR")}
-              className={`px-3 py-1 text-xs font-bold uppercase ${filterMode === "OR" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-            >OR (cocok salah satu)</button>
-            <button
-              type="button"
-              data-testid="filter-mode-and"
-              onClick={() => setFilterMode("AND")}
-              className={`px-3 py-1 text-xs font-bold uppercase border-l border-slate-300 ${filterMode === "AND" ? "bg-blue-700 text-white" : "bg-white text-slate-600 hover:bg-slate-50"}`}
-            >AND (harus cocok semua)</button>
-          </div>
-          <span className="text-[11px] text-slate-500 ml-auto">
-            {[q.trim() && "Cari", customerId && "Customer", company && "Company"].filter(Boolean).length > 0
-              ? `${[q.trim() && "Cari", customerId && "Customer", company && "Company"].filter(Boolean).length} filter aktif`
-              : "Tidak ada filter aktif"}
-          </span>
-        </div>
+        <FilterPresets
+          storageKey="invoices"
+          mode={filterMode}
+          setMode={setFilterMode}
+          currentFilters={{ q, customerId, company }}
+          onLoadPreset={(f) => { setQ(f.q || ""); setCustomerId(f.customerId || ""); setCompany(f.company || ""); }}
+          activeCount={[q.trim(), customerId, company].filter(Boolean).length}
+        />
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[260px]">
             <Label>Cari (No. Invoice / AWB / Customer / Company)</Label>

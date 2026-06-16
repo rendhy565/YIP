@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td, StatusBa
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircle, Edit3, Save, X, FileSpreadsheet } from "lucide-react";
+import FilterPresets from "../components/FilterPresets";
 
 function todayStr() {
   const d = new Date();
@@ -18,6 +19,7 @@ export default function Recap() {
   const [customers, setCustomers] = useState([]);
   const [month, setMonth] = useState(""); // empty = semua bulan
   const [customerId, setCustomerId] = useState("");
+  const [filterMode, setFilterMode] = useState("AND"); // mode toggle for global filters
   const [selected, setSelected] = useState(new Set());
   const [selectedReconciled, setSelectedReconciled] = useState(new Set());
 
@@ -44,19 +46,15 @@ export default function Recap() {
   const [savingCost, setSavingCost] = useState(false);
 
   const load = async () => {
-    const params = {};
-    if (month) params.month = month;
-    if (customerId) params.customer_id = customerId;
+    // Always fetch ALL — client-side AND/OR filter
     const [op, rc, costs] = await Promise.all([
-      api.get("/orders", { params: { ...params, status_v: "Open" } }),
-      api.get("/orders", { params: { ...params, status_v: "Reconciled" } }),
+      api.get("/orders", { params: { status_v: "Open" } }),
+      api.get("/orders", { params: { status_v: "Reconciled" } }),
       api.get("/costs"),
     ]);
-    // Sort openRows by date desc
     const sortByDate = (a, b) => new Date(b.created_at) - new Date(a.created_at);
     setOpenRows([...op.data].sort(sortByDate));
     setReconciledRows([...rc.data].sort(sortByDate));
-    // Build cost map
     const cmap = {};
     for (const c of costs.data) {
       if (!c.awb_id) continue;
@@ -68,24 +66,47 @@ export default function Recap() {
   };
 
   useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); }, []);
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [month, customerId]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  // Apply global filters (month + customer) with AND/OR mode
+  const passGlobal = (r) => {
+    const fns = [];
+    if (month) {
+      fns.push((x) => {
+        if (!x.created_at) return false;
+        const d = new Date(x.created_at);
+        const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        return ym === month;
+      });
+    }
+    if (customerId) fns.push((x) => x.customer_id === customerId);
+    if (fns.length === 0) return true;
+    return filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r));
+  };
 
   // Split open rows: those WITH cost (ready to reconcile) and WITHOUT cost (need plotting)
   const { readyRows, noCostRows } = useMemo(() => {
     const ready = [];
     const noCost = [];
     for (const r of openRows) {
+      if (!passGlobal(r)) continue;
       const c = costMap[r.id] || 0;
       const enriched = { ...r, _total_cost: c, _margin: (r.grand_total || 0) - c };
       if (c > 0) ready.push(enriched); else noCost.push(enriched);
     }
     return { readyRows: ready, noCostRows: noCost };
-  }, [openRows, costMap]);
+  // eslint-disable-next-line
+  }, [openRows, costMap, month, customerId, filterMode]);
+
+  // Reconciled rows after global filter
+  const reconciledGlobal = useMemo(() => reconciledRows.filter(passGlobal),
+    // eslint-disable-next-line
+    [reconciledRows, month, customerId, filterMode]);
 
   // Filtered views (selection preserved on un-filtered sets)
   const noCostFiltered = useMemo(() => noCostRows.filter((r) => matchQ(r, qNoCost)), [noCostRows, qNoCost]);
   const readyFiltered = useMemo(() => readyRows.filter((r) => matchQ(r, qReady)), [readyRows, qReady]);
-  const reconciledFiltered = useMemo(() => reconciledRows.filter((r) => matchQ(r, qReconciled)), [reconciledRows, qReconciled]);
+  const reconciledFiltered = useMemo(() => reconciledGlobal.filter((r) => matchQ(r, qReconciled)), [reconciledGlobal, qReconciled]);
 
   const toggle = (id) => {
     const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n);
@@ -202,6 +223,14 @@ export default function Recap() {
       />
 
       <Card className="p-4 mb-5">
+        <FilterPresets
+          storageKey="recap"
+          mode={filterMode}
+          setMode={setFilterMode}
+          currentFilters={{ month, customerId }}
+          onLoadPreset={(f) => { setMonth(f.month || ""); setCustomerId(f.customerId || ""); }}
+          activeCount={[month, customerId].filter(Boolean).length}
+        />
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-[180px]">
             <Label>Bulan</Label>

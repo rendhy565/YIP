@@ -519,3 +519,33 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
   - OR + Company=Pradana + search "ZZZNONEXIST" → **23/38** rows.
   - AND + Company=Pradana + search "ZZZNONEXIST" → **0** rows.
   - AND + Company=Pradana + no search → **23** rows.
+
+---
+
+## Iteration 14 — Reusable Filter Toolbar (OR/AND + Presets) (2026-06-16)
+
+### Komponen baru
+- `/app/frontend/src/components/FilterPresets.js` — reusable filter toolbar:
+  - **Mode Filter toggle** OR / AND
+  - **Preset Save/Load/Manage** (localStorage per page+browser, key `filterPresets:{storageKey}`)
+  - Modal "Simpan Preset" dengan field nama
+  - Dropdown "Muat preset"
+  - Hover menu "Kelola" untuk hapus preset
+  - Counter "X filter aktif" otomatis
+
+### Diterapkan di 3 halaman
+- **`/invoices/created`** (storageKey: `invoices`) — OR/AND + presets untuk Search + Customer + Company
+- **`/orders`** (storageKey: `orders`) — search bar baru (AWB/Customer/Consignee/Reff/Rute) + Status + Customer dengan OR/AND + presets. Server-side fetch sekarang ALL, filter client-side.
+- **`/recap`** (storageKey: `recap`) — Bulan + Customer (global filter) dengan OR/AND + presets. Per-table search bar tetap independent untuk granular per-card filter.
+
+### Backend tweak
+- `GET /api/orders` response setiap row sekarang punya `customer_id` (string) explicit. Sebelumnya hanya `customer_name`. Diperlukan untuk client-side filtering.
+
+### Verifikasi live
+- /orders: Save preset "Open AWB Search" (search=AWB, status=Open) → clear filter → load preset → kedua field ter-restore (search='AWB', status='Open'). Counter "2 filter aktif · 74 dari 124 baris" tampil. Toast hijau "Preset … dimuat".
+- /recap: Toolbar tampil di atas Bulan/Customer filter. Mode AND default.
+- /invoices/created: Filter Company + Customer + Search dengan toggle OR/AND tetap berfungsi (regression iter-13 dipertahankan).
+
+### Files touched
+- New: `/app/frontend/src/components/FilterPresets.js`
+- Updated: `OrdersList.js` (client-side filter, FilterPresets import), `Recap.js` (passGlobal helper, reconciledGlobal memo), `InvoicesCreated.js` (FilterPresets dgn storageKey="invoices"), `server.py` (list_orders adds customer_id).

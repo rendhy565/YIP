@@ -2,9 +2,10 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Select, Input, Table, Th, Td, StatusBadge, Label, Button } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
-import { Trash2, MinusCircle, PackageCheck, X } from "lucide-react";
+import { Trash2, MinusCircle, PackageCheck, X, Search } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { toast } from "sonner";
+import FilterPresets from "../components/FilterPresets";
 
 function todayStr() {
   const d = new Date();
@@ -22,6 +23,8 @@ export default function OrdersList() {
   const [status, setStatus] = useState("");
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
+  const [q, setQ] = useState("");
+  const [filterMode, setFilterMode] = useState("AND"); // AND default for /orders (current behavior)
 
   // Receive modal
   const [recvFor, setRecvFor] = useState(null);
@@ -42,14 +45,22 @@ export default function OrdersList() {
   const [saving, setSaving] = useState(false);
 
   const load = () => {
-    const params = {};
-    if (status) params.status_v = status;
-    if (customerId) params.customer_id = customerId;
-    api.get("/orders", { params }).then((r) => setRows(r.data));
+    api.get("/orders").then((r) => setRows(r.data));
   };
 
   useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); }, []);
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [status, customerId]);
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  // Client-side filter with OR/AND mode (matches InvoicesCreated pattern)
+  const filteredRows = React.useMemo(() => {
+    const qStr = q.trim().toLowerCase();
+    const fns = [];
+    if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.customer_name || ""} ${r.consignee || ""} ${r.reff_no || ""} ${r.origin || ""} ${r.destination || ""}`.toLowerCase().includes(qStr));
+    if (status) fns.push((r) => r.status === status);
+    if (customerId) fns.push((r) => r.customer_id === customerId);
+    if (fns.length === 0) return rows;
+    return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
+  }, [rows, q, status, customerId, filterMode]);
 
   const dropOrder = async (r) => {
     if (!window.confirm(`Tandai AWB ${r.awb_number} sebagai DROP?`)) return;
@@ -111,7 +122,22 @@ export default function OrdersList() {
       <PageHeader title="Daftar AWB" subtitle="Semua order. Tombol 'Terima Barang' untuk catat tanggal terima + biaya tambahan." />
 
       <Card className="p-4 mb-5">
+        <FilterPresets
+          storageKey="orders"
+          mode={filterMode}
+          setMode={setFilterMode}
+          currentFilters={{ q, status, customerId }}
+          onLoadPreset={(f) => { setQ(f.q || ""); setStatus(f.status || ""); setCustomerId(f.customerId || ""); }}
+          activeCount={[q.trim(), status, customerId].filter(Boolean).length}
+        />
         <div className="flex flex-wrap items-end gap-3">
+          <div className="flex-1 min-w-[260px]">
+            <Label>Cari (AWB / Customer / Consignee / Reff / Rute)</Label>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+              <Input data-testid="orders-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contoh: AWB-202606-0001 / JKT / Pak Andi..." className="pl-9"/>
+            </div>
+          </div>
           <div className="min-w-[180px]">
             <Label>Status</Label>
             <Select data-testid="filter-status-select" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -130,7 +156,7 @@ export default function OrdersList() {
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
           </div>
-          <div className="text-xs text-slate-500 ml-auto">{rows.length} baris</div>
+          <div className="text-xs text-slate-500 ml-auto">{filteredRows.length} dari {rows.length} baris</div>
         </div>
       </Card>
 
@@ -142,7 +168,7 @@ export default function OrdersList() {
             <Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {filteredRows.map((r) => (
               <tr key={r.id} data-testid={`order-row-${r.id}`}>
                 <Td><span className="font-mono font-semibold">{r.awb_number}</span></Td>
                 <Td className="text-slate-600 text-xs">{fmtDate(r.created_at)}</Td>
@@ -182,7 +208,7 @@ export default function OrdersList() {
                 </Td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">Tidak ada order untuk filter ini.</Td></tr>}
+            {filteredRows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">{rows.length === 0 ? "Tidak ada order." : "Tidak ada hasil cocok dengan filter."}</Td></tr>}
           </tbody>
         </Table>
       </Card>

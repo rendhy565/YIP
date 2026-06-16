@@ -891,6 +891,7 @@ async def list_orders(
         s = serialize(d)
         c = cmap.get(d.get("customer_id"))
         s["customer_name"] = c["name"] if c else None
+        s["customer_id"] = str(d["customer_id"]) if d.get("customer_id") else None
         out.append(s)
     return out
 
