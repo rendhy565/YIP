@@ -612,3 +612,46 @@ User memutuskan fokus deployment localhost dulu, repo dibersihkan dari semua fil
 - **"Tanggal Terima" Checklists** in the Receive popup (BAST, Surat Jalan, Faktur, etc.) mapping to DB booleans (deferred by user "Nanti dulu").
 - `server.py` refactor (~4800 lines) into routes/models/services modules — pending user approval.
 
+
+## Iteration 11 — Finance Tax Automation Sprint 1 + 3-lite (2026-02-16)
+
+### Background — UAT Audit Findings
+User memberikan 4 skenario UAT pajak. Audit menyimpulkan:
+- PPN Keluaran sudah OK (auto-jurnal ke 2210)
+- PPN Masukan TIDAK ada (akun 1401 belum ter-seed, tidak ada modul pembelian)
+- PPh 23 TIDAK auto-dipotong saat bayar vendor (vendor.pph_type ada tapi tidak dipakai)
+- Tutup buku TIDAK ada penjurnalan rekonsiliasi PPN
+
+User memilih: Sprint 1 (PPh 23 auto-deduct) + Sprint 3 lite (popup manual PPN Masukan) + permission per-user untuk feature modules.
+
+### Backend changes (`server.py`)
+- **COA seed extended** (L298-310): tambah akun pajak baru — 1401 PPN Masukan, 1402 PPN Lebih Bayar/Kompensasi, 2221 Hutang PPh 21, 2223 Hutang PPh 23, 2230 Hutang PPN Kurang Bayar (idempotent).
+- **MODULES list extended** (L101-126): 5 feature modules (accounting, hr, tax, asset, bank_recon) ditandai `is_feature=True` dan masuk ke daftar MODULES → otomatis muncul di User Management permission grid.
+- **`require_feature(key)` (L2370-2385)** sekarang DUAL CHECK: (1) feature flag global ON + (2) user.permissions contains key (admin bypass). Menutup celah "modul ON = semua user dapat akses".
+- **Helper baru** (`pph_info_for_vendor`, `fmt_idr`, `PPH_RATES` map): mapping pph_type → (rate, COA, label). PPh23 2% → 2223, PPh15 2% → 2223, PP23UMKM 0.5% → 2223.
+- **`settle_cost` (L1089-1165)** dimodifikasi: lookup vendor by name → kalau pph_type set, otomatis hitung pph_amount + post journal 3-baris (DR 2101 gross / CR Cash net / CR 2223 pph) + insert ke `db.pph_records` dengan flag `auto_generated=True`.
+- **Endpoint baru `/api/tax/ppn-masukan`** (L2540-2620) — POST/GET/DELETE manual PPN Masukan input. Auto-post journal DR Beban + DR 1401 PPN Masukan / CR Kas. Hapus juga menghapus journal terkait (kecuali period locked).
+
+### Frontend changes
+- **`TaxModule.js`** (full rewrite): tambah modal popup "Input PPN Masukan" dengan live preview DPP/PPN/Total, dropdown akun beban (filter type=expense/cogs) dan akun kas. PPh tab tampilkan badge "AUTO" untuk record yg auto-generated, sembunyikan delete button untuk row auto.
+- **`Settings.js`**: banner peringatan kuning di section Aktivasi Modul yang link ke User Management — memberi tahu admin bahwa permission per-user tetap perlu di-grant.
+- **`Users.js`**: tidak perlu diubah — sudah render `MODULES.map(...)` jadi 5 feature keys otomatis muncul (jadi total 18 checkbox).
+
+### Testing
+- `iteration_11.json`: 100% pass (11/11 backend pytest + semua frontend flows). 
+- Backend test file: `/app/backend/tests/test_iteration11_tax.py` (idempotent).
+
+### Files touched
+- Backend: `server.py` (COA seed, MODULES, require_feature, settle_cost, PPN masukan endpoints, helpers)
+- Frontend: `TaxModule.js` (rewrite), `Settings.js` (banner)
+- Tests: `backend/tests/test_iteration11_tax.py` (NEW, by testing agent)
+
+## Backlog / P1-P2 (Updated)
+- **Sprint 2 PROPOSAL** (P0): Rekonsiliasi PPN otomatis di Tutup Buku — `close_period` harus auto-post jurnal:
+  - Jika PPN Keluaran > Masukan → DR 2210 / DR 1401 / CR 2230 (Hutang PPN Kurang Bayar)
+  - Jika PPN Masukan > Keluaran → DR 1402 (PPN Kompensasi) / CR 1401 untuk selisih
+- **Sprint 3 FULL** (P1): Modul Purchase Invoice lengkap dengan UI list + faktur pajak validation.
+- **PPh 21 rate** (P2): payroll masih hardcoded 5% — buat tabel TER/progressive.
+- **"Tanggal Terima" Checklists** di modal Penerimaan AWB (P2).
+- Refactor `server.py` ~4900 baris (P3).
+
