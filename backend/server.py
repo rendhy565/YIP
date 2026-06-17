@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
@@ -1932,6 +1932,24 @@ async def profit_loss(
 # ---------------------------------------------------------------------------
 # Dashboard KPIs
 # ---------------------------------------------------------------------------
+@app.get("/api/tutorials/{role}")
+async def download_tutorial(role: str, user: dict = Depends(get_current_user)):
+    """Download tutorial PDF for a given role (operation/finance/administrator)."""
+    role = role.lower()
+    role_map = {
+        "operation": "tutorial_operation.pdf",
+        "finance": "tutorial_finance.pdf",
+        "administrator": "tutorial_administrator.pdf",
+        "admin": "tutorial_administrator.pdf",
+    }
+    fname = role_map.get(role)
+    if not fname:
+        raise HTTPException(404, f"Tutorial untuk role '{role}' tidak tersedia. Tersedia: operation, finance, administrator.")
+    path = f"/app/static/tutorials/{fname}"
+    if not os.path.exists(path):
+        raise HTTPException(404, f"File tutorial belum tersedia. Hubungi administrator.")
+    return FileResponse(path, media_type="application/pdf", filename=fname)
+
 @app.get("/api/dashboard/pymhd-pipeline")
 async def pymhd_pipeline(user: dict = Depends(get_current_user)):
     """Return outstanding PYMHD balance: AWBs that have a PYMHD journal posted but

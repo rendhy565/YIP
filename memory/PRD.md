@@ -850,3 +850,43 @@ Di iterasi 14 rule recognition di-set `has_cost OR has_invoice` — AWB legacy d
 - Aging PYMHD breakdown (P2)
 - Badge PYMHD di /orders (P3)
 
+
+## Iteration 17 — Tutorial PDF (3 PDF per role) (2026-02-17)
+
+### User request
+"Bisa buatin presentasi untuk tutorial step by step untuk user gk? Detail tp lengkap dengan gambarnya"
+- Format: PDF
+- 3 file terpisah per role (Operation / Finance / Administrator)
+- Cakupan: SEMUA modul
+- Screenshot dari live app
+- Bahasa Indonesia
+
+### Implementation
+- **Screenshot capture**: 29 screenshot dari live app (login, dashboard, semua menu utama, modal-modal penting) → `/tmp/tutorial_shots/*.jpg`.
+- **PDF generator** (`/tmp/build_tutorial_pdfs.py`) menggunakan `reportlab`:
+  - Cover page per role dengan warna brand berbeda (blue Op, emerald Fin, navy Admin).
+  - Header band navy + footer dengan page number + versi.
+  - Style: H1/H2/Body/Step/Tip box dengan typography Helvetica + spacing generous.
+  - Per slide: judul, step list (numbered), screenshot terembedded (auto-scale 15 cm), caption, optional tip box kuning.
+  - 3 file output: `tutorial_operation.pdf` (1.5 MB, ~14 slides), `tutorial_finance.pdf` (1.5 MB, ~14 slides), `tutorial_administrator.pdf` (1 MB, ~10 slides).
+- **Backend endpoint** baru `GET /api/tutorials/{role}` → FileResponse PDF (auth required, role: operation/finance/administrator).
+- **Frontend** `Settings.js` (admin): 3 card download di bagian bawah halaman dengan tombol unduh otomatis via blob.
+
+### Files touched
+- New: `/app/static/tutorials/tutorial_operation.pdf`, `tutorial_finance.pdf`, `tutorial_administrator.pdf`
+- Backend: `server.py` — import `FileResponse`, endpoint `GET /api/tutorials/{role}`.
+- Frontend: `pages/Settings.js` — section "Tutorial Pengguna" dengan 3 download card.
+- Generator script: `/tmp/build_tutorial_pdfs.py` (bisa dijalankan ulang kapan saja untuk regenerate dengan screenshot terbaru).
+- Dependency: `reportlab 4.5.1` (installed).
+
+### How to regenerate (admin reference)
+```bash
+# 1. Capture screenshot terbaru (jalankan mcp_screenshot_tool dengan script tutorial)
+# 2. Regenerate PDF
+python /tmp/build_tutorial_pdfs.py
+# 3. PDF auto-replace di /app/static/tutorials/
+```
+
+## Backlog (unchanged)
+- Sprint 2 PPN Reconciliation (P0), Sprint 3 Purchase Invoice (P1), PPh21 TER (P2), Tanggal Terima Checklists (P2), Aging PYMHD breakdown (P2), Badge PYMHD /orders (P3), UI/UX redesign (skipped, dapat diaktifkan kapan saja).
+

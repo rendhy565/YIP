@@ -181,6 +181,40 @@ export default function Settings() {
           </tbody>
         </Table>
       </Card>
+
+      {/* ─── Tutorial PDF download ─── */}
+      <Card className="mt-5">
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
+          <h3 className="font-bold inline-flex items-center gap-2">📘 Tutorial Pengguna</h3>
+          <span className="text-[11px] text-slate-500">Panduan lengkap step-by-step dengan screenshot</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-4">
+          {[
+            { role: "operation", label: "Operation", color: "bg-blue-50 text-blue-800 border-blue-200" },
+            { role: "finance", label: "Finance", color: "bg-emerald-50 text-emerald-800 border-emerald-200" },
+            { role: "administrator", label: "Administrator", color: "bg-slate-50 text-slate-800 border-slate-200" },
+          ].map((r) => (
+            <button
+              key={r.role}
+              data-testid={`tutorial-dl-${r.role}`}
+              onClick={async () => {
+                try {
+                  const resp = await api.get(`/tutorials/${r.role}`, { responseType: "blob" });
+                  const url = URL.createObjectURL(new Blob([resp.data], { type: "application/pdf" }));
+                  const a = document.createElement("a");
+                  a.href = url; a.download = `tutorial_${r.role}.pdf`; a.click();
+                  URL.revokeObjectURL(url);
+                } catch (e) { console.error(e); }
+              }}
+              className={`border rounded-lg p-4 text-left transition hover:shadow-md ${r.color}`}
+            >
+              <div className="text-xs uppercase font-bold tracking-wider opacity-70">PDF Tutorial</div>
+              <div className="font-heading font-black text-lg mt-1">{r.label}</div>
+              <div className="text-xs opacity-70 mt-1">Klik untuk unduh →</div>
+            </button>
+          ))}
+        </div>
+      </Card>
     </div>
   );
 }
