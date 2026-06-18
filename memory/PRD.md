@@ -890,3 +890,28 @@ python /tmp/build_tutorial_pdfs.py
 ## Backlog (unchanged)
 - Sprint 2 PPN Reconciliation (P0), Sprint 3 Purchase Invoice (P1), PPh21 TER (P2), Tanggal Terima Checklists (P2), Aging PYMHD breakdown (P2), Badge PYMHD /orders (P3), UI/UX redesign (skipped, dapat diaktifkan kapan saja).
 
+---
+
+## 🎯 STATUS: PRODUCTION-READY (per 2026-02-17)
+
+**Pernyataan client (verbatim):** *"Delete semua pending task. Saat ini semua berjalan sesuai kebutuhan dari client"*
+
+Semua backlog di-clear. Sistem dianggap **selesai dan memenuhi kebutuhan operasional klien** sebagaimana di-deliver hingga Iterasi 17b.
+
+### Ringkasan fitur ter-deliver
+- ✅ **Order to Cash** lengkap (Input AWB, Penerimaan Barang, Plotting Biaya, Recap/Rekonsiliasi, Invoice, Bulk Print PDF)
+- ✅ **Finance** (Payment, Settle Hutang Vendor, Panjar Kerja, PPh 23 auto-deduct, Biaya Tetap)
+- ✅ **Perpajakan** (PPN Keluaran otomatis, PPN Masukan manual input, PPh tracking)
+- ✅ **Akunting PSAK** (Jurnal Umum, Bagan Akun, Neraca, Laporan Laba Rugi, Period Closing)
+- ✅ **PSAK 72 PYMHD Revenue Recognition** dengan full lifecycle (Order → Cost → Recognize → Invoice → Pay)
+- ✅ **Excel Import** dengan post-sweep PYMHD otomatis dan strict recognition trigger
+- ✅ **Master Data** (Customer, Vendor dengan PPh type, Contracts/Rate Card)
+- ✅ **Admin Tools** (User Management dengan permission per-modul, Feature Flags, Settings, Migration, Cleanup orphans)
+- ✅ **Dashboard** dengan KPI + Pipeline PYMHD panel
+- ✅ **Tutorial PDF** 3 file per role (Operation/Finance/Administrator) dengan screenshot dari sesi login yang akurat
+- ✅ **/pnl Order == /Laporan Laba Rugi == Neraca** (3 laporan sinkron)
+
+### Pending tasks: **NIHIL** ✨
+
+Jika di masa depan ada kebutuhan baru, akan ditambahkan sebagai iterasi baru di bawah section ini.
+
