@@ -201,13 +201,28 @@ export default function Settings() {
               onClick={async () => {
                 try {
                   const resp = await api.get(`/tutorials/${r.role}`, { responseType: "blob" });
-                  const url = URL.createObjectURL(new Blob([resp.data]));
+                  const filename = r.role === "sales-pitch" ? "arc_sales_presentation.pptx" : `tutorial_${r.role}.pdf`;
+                  const blob = new Blob([resp.data], {
+                    type: r.ext === "pptx"
+                      ? "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                      : "application/pdf",
+                  });
+                  const url = URL.createObjectURL(blob);
                   const a = document.createElement("a");
                   a.href = url;
-                  a.download = r.role === "sales-pitch" ? "arc_sales_presentation.pptx" : `tutorial_${r.role}.pdf`;
+                  a.download = filename;
+                  a.rel = "noopener";
+                  document.body.appendChild(a);
                   a.click();
-                  URL.revokeObjectURL(url);
-                } catch (e) { console.error(e); }
+                  // Cleanup after browser starts the download
+                  setTimeout(() => {
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }, 1500);
+                } catch (e) {
+                  console.error("download error", e);
+                  alert("Gagal unduh: " + (e?.response?.data?.detail || e.message));
+                }
               }}
               className={`border rounded-lg p-4 text-left transition hover:shadow-md ${r.color}`}
             >
