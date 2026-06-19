@@ -1934,21 +1934,23 @@ async def profit_loss(
 # ---------------------------------------------------------------------------
 @app.get("/api/tutorials/{role}")
 async def download_tutorial(role: str, user: dict = Depends(get_current_user)):
-    """Download tutorial PDF for a given role (operation/finance/administrator)."""
+    """Download tutorial PDF for a given role (operation/finance/administrator)
+    or sales presentation (sales-pitch)."""
     role = role.lower()
     role_map = {
-        "operation": "tutorial_operation.pdf",
-        "finance": "tutorial_finance.pdf",
-        "administrator": "tutorial_administrator.pdf",
-        "admin": "tutorial_administrator.pdf",
+        "operation": ("tutorial_operation.pdf", "application/pdf"),
+        "finance": ("tutorial_finance.pdf", "application/pdf"),
+        "administrator": ("tutorial_administrator.pdf", "application/pdf"),
+        "admin": ("tutorial_administrator.pdf", "application/pdf"),
+        "sales-pitch": ("arc_sales_presentation.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
     }
-    fname = role_map.get(role)
-    if not fname:
-        raise HTTPException(404, f"Tutorial untuk role '{role}' tidak tersedia. Tersedia: operation, finance, administrator.")
+    if role not in role_map:
+        raise HTTPException(404, f"Tutorial untuk '{role}' tidak tersedia.")
+    fname, mime = role_map[role]
     path = f"/app/static/tutorials/{fname}"
     if not os.path.exists(path):
-        raise HTTPException(404, f"File tutorial belum tersedia. Hubungi administrator.")
-    return FileResponse(path, media_type="application/pdf", filename=fname)
+        raise HTTPException(404, f"File '{fname}' belum tersedia. Hubungi administrator.")
+    return FileResponse(path, media_type=mime, filename=fname)
 
 @app.get("/api/dashboard/pymhd-pipeline")
 async def pymhd_pipeline(user: dict = Depends(get_current_user)):

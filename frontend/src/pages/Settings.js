@@ -190,9 +190,10 @@ export default function Settings() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-4">
           {[
-            { role: "operation", label: "Operation", color: "bg-blue-50 text-blue-800 border-blue-200" },
-            { role: "finance", label: "Finance", color: "bg-emerald-50 text-emerald-800 border-emerald-200" },
-            { role: "administrator", label: "Administrator", color: "bg-slate-50 text-slate-800 border-slate-200" },
+            { role: "operation", label: "Operation", color: "bg-blue-50 text-blue-800 border-blue-200", ext: "pdf" },
+            { role: "finance", label: "Finance", color: "bg-emerald-50 text-emerald-800 border-emerald-200", ext: "pdf" },
+            { role: "administrator", label: "Administrator", color: "bg-slate-50 text-slate-800 border-slate-200", ext: "pdf" },
+            { role: "sales-pitch", label: "Sales Presentation", color: "bg-amber-50 text-amber-800 border-amber-200", ext: "pptx" },
           ].map((r) => (
             <button
               key={r.role}
@@ -200,15 +201,19 @@ export default function Settings() {
               onClick={async () => {
                 try {
                   const resp = await api.get(`/tutorials/${r.role}`, { responseType: "blob" });
-                  const url = URL.createObjectURL(new Blob([resp.data], { type: "application/pdf" }));
+                  const url = URL.createObjectURL(new Blob([resp.data]));
                   const a = document.createElement("a");
-                  a.href = url; a.download = `tutorial_${r.role}.pdf`; a.click();
+                  a.href = url;
+                  a.download = r.role === "sales-pitch" ? "arc_sales_presentation.pptx" : `tutorial_${r.role}.pdf`;
+                  a.click();
                   URL.revokeObjectURL(url);
                 } catch (e) { console.error(e); }
               }}
               className={`border rounded-lg p-4 text-left transition hover:shadow-md ${r.color}`}
             >
-              <div className="text-xs uppercase font-bold tracking-wider opacity-70">PDF Tutorial</div>
+              <div className="text-xs uppercase font-bold tracking-wider opacity-70">
+                {r.ext.toUpperCase()} {r.role === "sales-pitch" ? "Sales Deck" : "Tutorial"}
+              </div>
               <div className="font-heading font-black text-lg mt-1">{r.label}</div>
               <div className="text-xs opacity-70 mt-1">Klik untuk unduh →</div>
             </button>
