@@ -1947,8 +1947,14 @@ async def download_tutorial(role: str, user: dict = Depends(get_current_user)):
     if role not in role_map:
         raise HTTPException(404, f"Tutorial untuk '{role}' tidak tersedia.")
     fname, mime = role_map[role]
-    path = f"/app/static/tutorials/{fname}"
-    if not os.path.exists(path):
+    # Try backend-bundled path first (production), fallback to root /app/static (preview/local)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "static", "tutorials", fname),
+        f"/app/static/tutorials/{fname}",
+    ]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if not path:
         raise HTTPException(404, f"File '{fname}' belum tersedia. Hubungi administrator.")
     return FileResponse(path, media_type=mime, filename=fname)
 

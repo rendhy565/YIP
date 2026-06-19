@@ -915,3 +915,23 @@ Semua backlog di-clear. Sistem dianggap **selesai dan memenuhi kebutuhan operasi
 
 Jika di masa depan ada kebutuhan baru, akan ditambahkan sebagai iterasi baru di bawah section ini.
 
+
+
+---
+
+## Iteration 18 — Fix tutorial/PPTX download 404 di production (2026-02-19)
+
+**Bug report:** User klik tombol download di Settings (admin login, production deployment) → `Gagal unduh: Request failed with status code 404` untuk semua 4 tombol (Operation, Finance, Administrator, Sales Presentation).
+
+**Akar masalah:** File tutorial disimpan di `/app/static/tutorials/`. Folder ini di luar `backend/` & `frontend/build/` → kemungkinan tidak ikut ter-bundle saat build container production. Di preview pod tetap ada karena file generate di disk lokal.
+
+**Fix:**
+1. Copy semua tutorial PDF/PPTX ke `/app/backend/static/tutorials/` (pasti ikut deployment artifact backend).
+2. Update endpoint `/api/tutorials/{role}` di `server.py` (~line 1935): cek backend-bundled path dulu via `os.path.dirname(__file__) + /static/tutorials/`, fallback ke `/app/static/tutorials/` (untuk legacy).
+3. Verified preview: 4 endpoint → 200 OK (operation=1.4MB, finance=1.5MB, administrator=1MB, sales-pitch=48KB).
+
+**Files diubah:**
+- `/app/backend/server.py` (endpoint `download_tutorial`)
+- Tambah `/app/backend/static/tutorials/*.pdf` + `arc_sales_presentation.pptx`
+
+**Action user:** Re-deploy production agar file ikut ter-bundle ke container.
