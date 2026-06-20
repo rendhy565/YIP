@@ -172,13 +172,15 @@ export default function Users() {
 
       {/* Create / Edit modal */}
       {(openCreate || openEdit) && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <Card className="w-full max-w-2xl my-8 p-6">
-            <div className="flex items-start justify-between mb-4">
-              <h3 className="font-heading font-bold text-xl">{openCreate ? "Tambah User Baru" : `Edit User: ${openEdit?.username}`}</h3>
-              <button onClick={() => { setOpenCreate(false); setOpenEdit(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
-            </div>
-            <form onSubmit={openCreate ? submitCreate : submitEdit} className="space-y-4">
+        <div className="fixed inset-0 bg-slate-900/60 z-50 overflow-y-auto">
+          <div className="min-h-full flex items-start justify-center p-4 py-8">
+            <Card className="w-full max-w-2xl flex flex-col max-h-[calc(100vh-4rem)]">
+              <div className="flex items-start justify-between p-6 pb-3 border-b border-slate-200 shrink-0">
+                <h3 className="font-heading font-bold text-xl">{openCreate ? "Tambah User Baru" : `Edit User: ${openEdit?.username}`}</h3>
+                <button onClick={() => { setOpenCreate(false); setOpenEdit(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+              </div>
+              <form onSubmit={openCreate ? submitCreate : submitEdit} className="flex flex-col flex-1 min-h-0">
+                <div className="space-y-4 p-6 overflow-y-auto flex-1">
               {openCreate && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
@@ -232,13 +234,15 @@ export default function Users() {
                 </div>
                 <div className="text-[11px] text-slate-500 mt-2">{form.permissions.length} dari {modules.length} modul aktif</div>
               </div>
+              </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+              <div className="flex justify-end gap-2 p-4 border-t border-slate-200 shrink-0 bg-white rounded-b-lg">
                 <Button variant="secondary" type="button" onClick={() => { setOpenCreate(false); setOpenEdit(null); }}>Batal</Button>
                 <Button data-testid="save-user-btn" type="submit">{openCreate ? "Buat User" : "Simpan"}</Button>
               </div>
             </form>
           </Card>
+          </div>
         </div>
       )}
 

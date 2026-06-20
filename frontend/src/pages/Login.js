@@ -30,11 +30,6 @@ export default function Login() {
     }
   };
 
-  const applyDemo = (u, p) => {
-    setUsername(u);
-    setPassword(p);
-  };
-
   return (
     <div className="min-h-screen login-bg flex items-center justify-center p-6">
       <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-2 bg-white rounded-lg overflow-hidden shadow-2xl border border-slate-800">
@@ -120,36 +115,6 @@ export default function Login() {
               {busy ? "Memproses..." : "Masuk"}
             </button>
           </form>
-
-          <div className="mt-8 pt-6 border-t border-slate-200">
-            <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-400 mb-3">Akun Demo</div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <button
-                data-testid="demo-admin-btn"
-                onClick={() => applyDemo("admin", "admin123")}
-                className="text-left p-3 rounded border border-slate-200 hover:border-rose-500 hover:bg-rose-50 transition-colors"
-              >
-                <div className="text-xs font-bold text-slate-900">Administrator</div>
-                <div className="text-[11px] text-slate-500 font-mono">admin / admin123</div>
-              </button>
-              <button
-                data-testid="demo-operation-btn"
-                onClick={() => applyDemo("operation", "operation123")}
-                className="text-left p-3 rounded border border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors"
-              >
-                <div className="text-xs font-bold text-slate-900">Operation</div>
-                <div className="text-[11px] text-slate-500 font-mono">operation / operation123</div>
-              </button>
-              <button
-                data-testid="demo-finance-btn"
-                onClick={() => applyDemo("finance", "finance123")}
-                className="text-left p-3 rounded border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors"
-              >
-                <div className="text-xs font-bold text-slate-900">Finance</div>
-                <div className="text-[11px] text-slate-500 font-mono">finance / finance123</div>
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
