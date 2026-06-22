@@ -45,15 +45,35 @@ export default function OrdersList() {
   });
   const [saving, setSaving] = useState(false);
 
+  // POD modal — Tanda terima POD pada Penerimaan Barang AWB
+  const [podFor, setPodFor] = useState(null);
+  const [podForm, setPodForm] = useState({ pod_date: todayStr(), pod_notes: "", pod_signed_by: "" });
+  const [savingPod, setSavingPod] = useState(false);
+
+  // Cost popup — list & delete costs
+  const [costFor, setCostFor] = useState(null);
+  const [costList, setCostList] = useState([]);
+  const [loadingCosts, setLoadingCosts] = useState(false);
+
   const load = () => {
-    api.get("/orders").then((r) => {
+    Promise.all([
+      api.get("/orders"),
+      api.get("/costs"),
+    ]).then(([oRes, cRes]) => {
       // Sort by created_at down to millisecond — display only shows date
-      const sorted = [...r.data].sort((a, b) => {
+      const sorted = [...oRes.data].sort((a, b) => {
         const ta = new Date(a.created_at).getTime();
         const tb = new Date(b.created_at).getTime();
         return tb - ta;
       });
-      setRows(sorted);
+      // Build cost map per AWB
+      const cmap = {};
+      for (const c of cRes.data) {
+        if (!c.awb_id) continue;
+        cmap[c.awb_id] = (cmap[c.awb_id] || 0) + (c.amount || 0);
+      }
+      const decorated = sorted.map((r) => ({ ...r, _total_cost: cmap[r.id] || 0 }));
+      setRows(decorated);
     });
   };
 
@@ -128,6 +148,52 @@ export default function OrdersList() {
     finally { setSaving(false); }
   };
 
+  const openPod = (r) => {
+    setPodFor(r);
+    setPodForm({
+      pod_date: todayStr(),
+      pod_notes: r.pod_notes || "",
+      pod_signed_by: r.pod_signed_by || r.consignee || "",
+    });
+  };
+  const submitPod = async () => {
+    if (!podFor) return;
+    setSavingPod(true);
+    try {
+      await api.post(`/orders/${podFor.id}/receive-pod`, podForm);
+      toast.success(`POD untuk AWB ${podFor.awb_number} ditandai diterima`);
+      setPodFor(null);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setSavingPod(false); }
+  };
+
+  const openCostList = async (r) => {
+    setCostFor(r);
+    setLoadingCosts(true);
+    try {
+      const res = await api.get("/costs", { params: { awb_id: r.id } });
+      setCostList(res.data);
+    } catch (e) { toast.error(errMsg(e)); setCostList([]); }
+    finally { setLoadingCosts(false); }
+  };
+  const deleteCost = async (c, confirmFlag = false) => {
+    if (!confirmFlag && !window.confirm(`Hapus cost ${c.description || c.sub_label || ""} sebesar ${fmtIDR(c.amount)}?`)) return;
+    try {
+      const res = await api.delete(`/costs/${c.id}`, { params: confirmFlag ? { confirm: true } : {} });
+      if (res.data && res.data.needs_confirmation) {
+        if (window.confirm(`⚠ ${res.data.warning}\n\nLanjutkan hapus dengan reversal pengakuan pendapatan?`)) {
+          return deleteCost(c, true);
+        }
+        return;
+      }
+      toast.success("Cost dihapus" + (res.data?.reversal_info?.message ? ` — ${res.data.reversal_info.message}` : ""));
+      // Refresh
+      if (costFor) openCostList(costFor);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   return (
     <div data-testid="orders-list-page">
       <PageHeader title="Daftar AWB" subtitle="Semua order. Tombol 'Terima Barang' untuk catat tanggal terima + biaya tambahan." />
@@ -174,8 +240,8 @@ export default function OrdersList() {
       <Card>
         <Table>
           <thead><tr>
-            <Th>AWB</Th><Th>Tgl Pickup</Th><Th>Tgl Terima</Th><Th>Customer</Th><Th>Rute</Th>
-            <Th className="text-right">Qty (Kg)</Th><Th className="text-right">Grand Total</Th>
+            <Th>AWB</Th><Th>Tgl Pickup</Th><Th>Tgl Terima</Th><Th>Tgl POD</Th><Th>Customer</Th><Th>Rute</Th>
+            <Th className="text-right">Qty (Kg)</Th><Th className="text-right">Selling</Th><Th className="text-right">Cost</Th>
             <Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
@@ -190,10 +256,29 @@ export default function OrdersList() {
                     </span>
                   ) : <span className="text-slate-400">—</span>}
                 </Td>
+                <Td className="text-slate-600 text-xs">
+                  {r.pod_received_at ? (
+                    <span className="inline-flex items-center gap-1 text-blue-700 font-semibold">
+                      <PackageCheck size={11}/> {fmtDate(r.pod_received_at)}
+                    </span>
+                  ) : <span className="text-slate-400">—</span>}
+                </Td>
                 <Td>{r.customer_name || "-"}</Td>
                 <Td className="font-mono text-xs">{r.origin} → {r.destination}</Td>
                 <Td className="text-right">{r.qty_kg}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
+                <Td className="text-right">
+                  {r._total_cost > 0 ? (
+                    <button
+                      data-testid={`view-cost-${r.awb_number}`}
+                      onClick={() => openCostList(r)}
+                      title="Klik untuk lihat / hapus rincian cost"
+                      className="font-mono font-bold text-rose-700 hover:underline cursor-pointer"
+                    >
+                      {fmtIDR(r._total_cost)}
+                    </button>
+                  ) : <span className="text-slate-400">—</span>}
+                </Td>
                 <Td><StatusBadge status={r.status} /></Td>
                 <Td className="text-right">
                   <div className="flex gap-1 justify-end whitespace-nowrap">
@@ -204,6 +289,14 @@ export default function OrdersList() {
                         title="Tanda barang sudah diterima"
                         className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200 inline-flex items-center gap-1"
                       ><PackageCheck size={11}/> Terima</button>
+                    )}
+                    {r.received_at && r.status !== "Drop" && (
+                      <button
+                        data-testid={`pod-btn-${r.awb_number}`}
+                        onClick={() => openPod(r)}
+                        title={r.pod_received_at ? "POD sudah diterima — klik untuk update" : "Tanda POD diterima dari consignee"}
+                        className={`px-2 py-1 text-[10px] uppercase font-bold rounded inline-flex items-center gap-1 ${r.pod_received_at ? "bg-blue-50 text-blue-700 hover:bg-blue-100" : "bg-blue-100 text-blue-800 hover:bg-blue-200"}`}
+                      ><PackageCheck size={11}/> {r.pod_received_at ? "Update POD" : "Terima POD"}</button>
                     )}
                     {r.status !== "Drop" && (
                       <button data-testid={`drop-order-btn-${r.awb_number}`} onClick={() => dropOrder(r)} title="Drop AWB"
@@ -219,7 +312,7 @@ export default function OrdersList() {
                 </Td>
               </tr>
             ))}
-            {filteredRows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">{rows.length === 0 ? "Tidak ada order." : "Tidak ada hasil cocok dengan filter."}</Td></tr>}
+            {filteredRows.length === 0 && <tr><Td colSpan={11} className="text-center text-slate-500 py-10">{rows.length === 0 ? "Tidak ada order." : "Tidak ada hasil cocok dengan filter."}</Td></tr>}
           </tbody>
         </Table>
         <Pagination {...pag} testid="pagination-orders"/>
@@ -347,6 +440,103 @@ export default function OrdersList() {
               <Button data-testid="confirm-receive-btn" variant="success" onClick={submitReceive} disabled={saving || !recvForm.received_by_name}>
                 <PackageCheck size={14}/> {saving ? "Memproses..." : "Tandai Diterima"}
               </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ========== POD MODAL — Terima POD pada Penerimaan Barang ========== */}
+      {podFor && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="pod-modal">
+          <Card className="w-full max-w-md p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="font-heading font-bold text-xl">Terima POD</h3>
+                <p className="text-xs text-slate-500">AWB {podFor.awb_number} · {podFor.customer_name}</p>
+                {podFor.pod_received_at && (
+                  <p className="text-[11px] text-blue-700 mt-1">Sudah ada POD diterima pada {fmtDate(podFor.pod_received_at)} — update akan menimpa.</p>
+                )}
+              </div>
+              <button onClick={() => setPodFor(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="space-y-3">
+              <div><Label>Tanggal POD *</Label><Input data-testid="pod-date" type="date" value={podForm.pod_date} onChange={(e) => setPodForm({ ...podForm, pod_date: e.target.value })}/></div>
+              <div><Label>Tertanda (Nama Penanda Tangan POD)</Label><Input data-testid="pod-signed-by" value={podForm.pod_signed_by} onChange={(e) => setPodForm({ ...podForm, pod_signed_by: e.target.value })}/></div>
+              <div><Label>Catatan POD</Label><Input data-testid="pod-notes" value={podForm.pod_notes} onChange={(e) => setPodForm({ ...podForm, pod_notes: e.target.value })}/></div>
+            </div>
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => setPodFor(null)}>Batal</Button>
+              <Button data-testid="confirm-pod-btn" variant="success" onClick={submitPod} disabled={savingPod}>
+                <PackageCheck size={14}/> {savingPod ? "Memproses..." : "Tandai POD Diterima"}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ========== COST LIST POPUP — Rincian + Hapus Cost ========== */}
+      {costFor && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="cost-list-modal">
+          <Card className="w-full max-w-2xl p-6 max-h-[88vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="font-heading font-bold text-xl">Rincian Cost — AWB {costFor.awb_number}</h3>
+                <p className="text-xs text-slate-500 mt-1">Klik <strong>Hapus</strong> per baris. Jika ini cost terakhir, sistem akan minta konfirmasi reversal revenue.</p>
+              </div>
+              <button onClick={() => { setCostFor(null); setCostList([]); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            {loadingCosts ? (
+              <p className="text-center text-slate-500 py-6">Memuat...</p>
+            ) : (
+              <div className="border border-slate-200 rounded overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100 text-slate-700">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">Kategori</th>
+                      <th className="px-2 py-1.5 text-left">Deskripsi</th>
+                      <th className="px-2 py-1.5 text-left">Vendor</th>
+                      <th className="px-2 py-1.5 text-left">Status</th>
+                      <th className="px-2 py-1.5 text-right">Nominal</th>
+                      <th className="px-2 py-1.5 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {costList.map((c) => (
+                      <tr key={c.id} className="border-t border-slate-100" data-testid={`cost-row-${c.id}`}>
+                        <td className="px-2 py-1.5"><span className="text-[10px] uppercase font-bold bg-slate-100 text-slate-700 rounded px-1.5 py-0.5">{c.cost_category}{c.sub_label ? ` · ${c.sub_label}` : ""}</span></td>
+                        <td className="px-2 py-1.5 text-xs">{c.description || "-"}</td>
+                        <td className="px-2 py-1.5 text-xs">{c.vendor_name || "-"}</td>
+                        <td className="px-2 py-1.5">
+                          <span className={`text-[10px] uppercase font-bold rounded px-1.5 py-0.5 ${c.is_settled ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                            {c.is_settled ? c.payment_type || "Cash" : "Accrue"}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono font-semibold">{fmtIDR(c.amount)}</td>
+                        <td className="px-2 py-1.5 text-right">
+                          <button data-testid={`delete-cost-${c.id}`} onClick={() => deleteCost(c)} className="p-1.5 rounded hover:bg-red-50 text-red-600">
+                            <Trash2 size={12}/>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {costList.length === 0 && (
+                      <tr><td colSpan={6} className="px-2 py-4 text-center text-slate-400 text-xs">Tidak ada cost.</td></tr>
+                    )}
+                  </tbody>
+                  {costList.length > 0 && (
+                    <tfoot>
+                      <tr className="bg-slate-50 font-bold">
+                        <td colSpan={4} className="px-2 py-1.5 text-right">TOTAL</td>
+                        <td className="px-2 py-1.5 text-right font-mono">{fmtIDR(costList.reduce((s, c) => s + (c.amount || 0), 0))}</td>
+                        <td/>
+                      </tr>
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => { setCostFor(null); setCostList([]); }}>Tutup</Button>
             </div>
           </Card>
         </div>

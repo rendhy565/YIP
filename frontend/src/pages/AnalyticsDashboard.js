@@ -388,7 +388,7 @@ export default function AnalyticsDashboard() {
             </Select>
           </div>
           <div>
-            <Label>Cari (AWB / WO / Invoice / Tujuan)</Label>
+            <Label>Cari (AWB / Invoice / Tujuan)</Label>
             <Input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && apply()} placeholder="cth: 205771 atau JKT"/>
           </div>
         </div>
@@ -507,7 +507,6 @@ export default function AnalyticsDashboard() {
             <thead className="bg-slate-100 text-slate-700 sticky top-0">
               <tr>
                 <ColHead onClick={() => sortCol("awb_number")} sorted={sortBy === "awb_number" ? sortDir : null} sticky>AWB</ColHead>
-                <ColHead>WO</ColHead>
                 <ColHead onClick={() => sortCol("created_at")} sorted={sortBy === "created_at" ? sortDir : null}>Pickup</ColHead>
                 <ColHead>Customer</ColHead>
                 <ColHead>Wilayah</ColHead>
@@ -531,12 +530,11 @@ export default function AnalyticsDashboard() {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={21} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
+                <tr><td colSpan={20} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
               )}
               {rows.map((r, i) => (
                 <tr key={r.id} className="hover:bg-blue-50/40 border-b border-slate-100">
                   <td className="px-3 py-2 font-mono font-bold text-blue-700 sticky left-0 bg-white hover:bg-blue-50/40">{r.awb_number}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{r.wo_number || "-"}</td>
                   <td className="px-3 py-2 text-xs">{fmtDate(r.pickup_date)}</td>
                   <td className="px-3 py-2 max-w-[200px] truncate" title={r.customer_name}>{r.customer_name}</td>
                   <td className="px-3 py-2"><span className="text-[10px] uppercase tracking-wider bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded">{r.region || "-"}</span></td>

@@ -273,6 +273,12 @@ class ReceiveAwbIn(BaseModel):
     work_type: Literal["Kirim Barang", "Dismantle Barang", "Relokasi Barang"]
     mode: Literal["Air", "Trucking", "Konsul"]
 
+class AwbPodIn(BaseModel):
+    """Terima POD pada AWB (Proof of Delivery — penerimaan barang oleh consignee)."""
+    pod_date: Optional[str] = None
+    pod_notes: Optional[str] = None
+    pod_signed_by: Optional[str] = None
+
 # ---------------------------------------------------------------------------
 # AWB number generator
 # ---------------------------------------------------------------------------
@@ -1851,39 +1857,43 @@ async def receive_awb(oid: str, data: ReceiveAwbIn, user: dict = Depends(get_cur
         "received_by": user["id"],
     }
     await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
-    # Auto-create awb_costs for SPSI / Sewa Forklift (Operational/Cash) so they show in cost plotting
-    now = datetime.now(timezone.utc)
-    for name, amt in [("SPSI", upd["spsi_amount"]), ("Sewa Forklift", upd["sewa_forklift_amount"])]:
-        if amt > 0:
-            # Avoid duplicates: delete any prior auto-created receive cost of same name
-            await db.awb_costs.delete_many({"awb_id": _oid(oid), "source": "receive", "sub_label": name})
-            cost_doc = {
-                "awb_id": _oid(oid),
-                "cost_category": "Operational",
-                "amount": float(amt),
-                "description": f"{name} (otomatis dari penerimaan)",
-                "sub_label": name,
-                "vendor_name": None,
-                "payment_type": "Cash",
-                "is_settled": True,
-                "cash_account_code": "1101",
-                "source": "receive",
-                "created_by": user["id"],
-                "created_at": now,
-            }
-            cr = await db.awb_costs.insert_one(cost_doc)
-            try:
-                await post_journal(
-                    date=now,
-                    description=f"{name} AWB {o['awb_number']} (penerimaan)",
-                    lines=[
-                        {"account_code": "5102", "debit": amt, "credit": 0, "memo": o["awb_number"]},
-                        {"account_code": "1101", "debit": 0, "credit": amt, "memo": f"{name} {o['awb_number']}"},
-                    ],
-                    reference_type="awb_cost", reference_id=str(cr.inserted_id), posted_by=user["id"],
-                )
-            except HTTPException:
-                pass
+    # NOTE: SPSI / Sewa Forklift / Polis / Asuransi adalah penambah nilai INVOICE,
+    # bukan cost. Jadi mereka HANYA disimpan di field awb_orders (received_*, spsi_*, sewa_forklift_*)
+    # dan otomatis ditambahkan ke grand_total saat invoice di-cetak.
+    # (Hapus cost lama yang mungkin dibuat oleh versi sebelumnya untuk migrasi data lama)
+    await db.awb_costs.delete_many({"awb_id": _oid(oid), "source": "receive"})
+    await db.journal_entries.delete_many({
+        "reference_type": "awb_cost",
+        "description": {"$regex": f"AWB {re.escape(o['awb_number'])} \\(penerimaan\\)"}
+    })
+    return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
+
+@app.post("/api/orders/{oid}/receive-pod")
+async def receive_pod_awb(oid: str, data: AwbPodIn = AwbPodIn(), user: dict = Depends(get_current_user)):
+    """Terima POD pada AWB — Proof of Delivery dari consignee."""
+    o = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not o:
+        raise HTTPException(404, "Order tidak ditemukan")
+    if not o.get("received_at"):
+        raise HTTPException(400, "Barang belum diterima. Lakukan 'Terima Barang' dulu.")
+    if data.pod_date:
+        try:
+            y, m, d = [int(x) for x in data.pod_date.split("-")]
+            now = datetime.now(timezone.utc)
+            pod_dt = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "pod_date harus YYYY-MM-DD")
+    else:
+        pod_dt = datetime.now(timezone.utc)
+    await db.awb_orders.update_one(
+        {"_id": _oid(oid)},
+        {"$set": {
+            "pod_received_at": pod_dt,
+            "pod_notes": (data.pod_notes or "").strip() or None,
+            "pod_signed_by": (data.pod_signed_by or "").strip() or None,
+            "pod_received_by_user": user["id"],
+        }},
+    )
     return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
 
 @app.post("/api/payments/bulk-mark-paid")
@@ -5041,13 +5051,25 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                     "amount": float(it.amount),
                     "description": (it.description or "").strip() or None,
                 })
-        total_breakdown = sum(b["amount"] for b in breakdown)
-        actual = float(data.actual_amount if data.actual_amount is not None else total_breakdown)
-        if abs(total_breakdown - actual) > 0.01:
-            raise HTTPException(400, f"Total breakdown ({total_breakdown}) tidak sama dengan actual_amount ({actual})")
+        total_breakdown_this_round = sum(b["amount"] for b in breakdown)
+        actual = float(data.actual_amount if data.actual_amount is not None else total_breakdown_this_round)
+        if abs(total_breakdown_this_round - actual) > 0.01:
+            raise HTTPException(400, f"Total breakdown ({total_breakdown_this_round}) tidak sama dengan actual_amount ({actual})")
     else:
-        actual = float(data.actual_amount if data.actual_amount is not None else ca["amount"])
+        actual = float(data.actual_amount if data.actual_amount is not None else 0)
     refund = float(data.refund_amount or 0)
+    # ===== PARTIAL SETTLE: status tetap "Open" sampai total settled+refund == panjar amount =====
+    panjar_amt = float(ca.get("amount") or 0)
+    prev_settled = float(ca.get("settled_amount") or 0)
+    prev_refund = float(ca.get("refund_amount") or 0)
+    new_settled_total = round(prev_settled + actual, 2)
+    new_refund_total = round(prev_refund + refund, 2)
+    consumed = round(new_settled_total + new_refund_total, 2)
+    remaining = round(panjar_amt - consumed, 2)
+    if remaining < -0.01:
+        raise HTTPException(400, f"Total settle ({consumed}) melebihi nilai panjar ({panjar_amt}). Sisa: {remaining}")
+    is_full = abs(remaining) < 0.01
+    new_status = "Settled" if is_full else "Open"
     if data.settle_date:
         try:
             y, m, d = [int(x) for x in data.settle_date.split("-")]
@@ -5057,35 +5079,39 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
     else:
         sd = datetime.now(timezone.utc)
     cash_acc = data.cash_account_code or ca.get("cash_account_code") or "1101"
+
+    # Append to history (each partial settle event)
+    history_evt = {
+        "settle_date": sd,
+        "actual_amount": actual,
+        "refund_amount": refund,
+        "notes": (data.notes or "").strip() or None,
+        "settled_by": user["id"],
+        "breakdown": [{**b, "awb_id": str(b["awb_id"]) if b.get("awb_id") else None} for b in breakdown] if breakdown else [],
+    }
+
     await db.cash_advances.update_one(
         {"_id": _oid(cid)},
-        {"$set": {
-            "status": "Settled",
-            "actual_amount": actual,
-            "refund_amount": refund,
-            "settled_at": sd,
-            "settled_by": user["id"],
-            "settle_notes": (data.notes or "").strip() or None,
-            "awb_breakdown": [{**b, "awb_id": str(b["awb_id"]) if b.get("awb_id") else None} for b in breakdown] if breakdown else None,
-        }},
+        {
+            "$set": {
+                "status": new_status,
+                "settled_amount": new_settled_total,
+                "refund_amount": new_refund_total,
+                "actual_amount": new_settled_total,  # back-compat
+                "remaining_amount": max(0.0, remaining),
+                "settled_at": sd if is_full else ca.get("settled_at"),
+                "settled_by": user["id"] if is_full else ca.get("settled_by"),
+                "settle_notes": (data.notes or "").strip() or ca.get("settle_notes"),
+            },
+            "$push": {"settle_history": history_evt},
+        },
     )
-    # If breakdown given: create awb_costs for AWB targets / direct journals for Operation targets
+    # Create awb_costs for AWB targets / direct journal for Operation targets
     for b in breakdown:
         if b.get("target") == "operation":
-            # Direct cost (Operation, no AWB) — post journal DR 5102 / CR 1101 already covered globally below
-            # But to keep accounting simple, we don't create awb_costs row. We record a marker doc in petty_cash for visibility.
-            await db.petty_cash.insert_one({
-                "number": await next_petty_cash_number(),
-                "category": "Operational",
-                "amount": float(b["amount"]),
-                "description": (b["description"] or f"Settle Panjar {ca['number']} - {ca['recipient_name']}"),
-                "expense_date": sd,
-                "cash_account_code": cash_acc,
-                "source": "panjar_settle",
-                "source_ref": cid,
-                "created_by": user["id"],
-                "created_at": sd,
-            })
+            # Direct cost (Operation, no AWB) — journal posted to HPP 5102 from 1108 (panjar accrual).
+            # Tidak perlu petty_cash entry tambahan — settle journal sudah debit 5102.
+            pass
         else:
             cdoc = {
                 "awb_id": b["awb_id"],
@@ -5103,20 +5129,23 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                 "created_at": sd,
             }
             await db.awb_costs.insert_one(cdoc)
-    # Journal: DR 5105 actual + DR cash refund / CR 1108
-    # (When breakdown is used, the cost is logically 5102 per-AWB, but since panjar accrual sits on 1108,
-    #  we still credit 1108. For simplicity always post to 5105 to balance 1108 release.)
+    # Journal per partial event
     try:
-        lines = [{"account_code": "5105", "debit": actual, "credit": 0, "memo": f"Panjar {ca['number']} - {ca['recipient_name']}"}]
+        # Split actual: AWB-target → 5102 (per-AWB HPP) ; Operation-target → 5102 (HPP Operation direct)
+        # All go to 5102 anyway. Just credit 1108 for the consumed portion + cash for refund.
+        lines = []
+        if actual > 0:
+            lines.append({"account_code": "5102", "debit": actual, "credit": 0, "memo": f"Panjar {ca['number']} - {ca['recipient_name']}"})
         if refund > 0:
             lines.append({"account_code": cash_acc, "debit": refund, "credit": 0, "memo": f"Refund panjar {ca['number']}"})
-        lines.append({"account_code": "1108", "debit": 0, "credit": actual + refund, "memo": ca["number"]})
-        await post_journal(
-            date=sd,
-            description=f"Settle panjar kerja {ca['number']}",
-            lines=lines,
-            reference_type="cash_advance_settle", reference_id=cid, posted_by=user["id"],
-        )
+        if (actual + refund) > 0:
+            lines.append({"account_code": "1108", "debit": 0, "credit": actual + refund, "memo": ca["number"]})
+            await post_journal(
+                date=sd,
+                description=f"Settle panjar kerja {ca['number']}" + (" (partial)" if not is_full else " (final)"),
+                lines=lines,
+                reference_type="cash_advance_settle", reference_id=cid, posted_by=user["id"],
+            )
     except HTTPException:
         pass
     return serialize(await db.cash_advances.find_one({"_id": _oid(cid)}))
@@ -5928,25 +5957,8 @@ class POReceiveIn(BaseModel):
     pod_date: Optional[str] = None
     pod_notes: Optional[str] = None
 
-@app.post("/api/purchase-orders/{pid}/receive-pod")
-async def receive_pod(pid: str, data: POReceiveIn = POReceiveIn(), user: dict = Depends(get_current_user)):
-    po = await db.purchase_orders.find_one({"_id": _oid(pid)})
-    if not po:
-        raise HTTPException(404, "PO tidak ditemukan")
-    if data.pod_date:
-        try:
-            y, m, d = [int(x) for x in data.pod_date.split("-")]
-            now = datetime.now(timezone.utc)
-            pod_dt = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
-        except Exception:
-            raise HTTPException(400, "pod_date harus YYYY-MM-DD")
-    else:
-        pod_dt = datetime.now(timezone.utc)
-    await db.purchase_orders.update_one(
-        {"_id": _oid(pid)},
-        {"$set": {"status": "Received POD", "pod_date": pod_dt, "pod_notes": (data.pod_notes or "").strip() or None, "pod_received_by": user["id"]}}
-    )
-    return serialize(await db.purchase_orders.find_one({"_id": _oid(pid)}))
+# NOTE: POD receive endpoint dipindah ke modul AWB (POST /api/orders/{oid}/receive-pod)
+# karena POD adalah konfirmasi penerimaan barang oleh consignee, bukan vendor PO confirmation.
 
 @app.delete("/api/purchase-orders/{pid}")
 async def delete_purchase_order(pid: str, user: dict = Depends(require_role("administrator", "operation"))):
@@ -6219,3 +6231,60 @@ async def export_vendor_aging(as_of: Optional[str] = None, user: dict = Depends(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+# ===========================================================================
+# Migration: Reverse AR journal for invoices that haven't been printed yet.
+# Per PSAK: Piutang Usaha (1201) baru diakui saat faktur diterbitkan/dicetak.
+# Sebelum cetak → tetap di Pendapatan Yang Masih Harus Diterima (PYMHD / 1290).
+# ===========================================================================
+@app.post("/api/admin/migrate/reverse-unprinted-ar")
+async def migrate_reverse_unprinted_ar(user: dict = Depends(require_role("administrator"))):
+    """Untuk invoice yang sudah punya jurnal AR (1201) tapi belum dicetak (invoice_date=null),
+    balik jurnalnya supaya saldo kembali ke 1290 (PYMHD) sesuai PSAK."""
+    invoices_unprinted = await db.invoices.find({
+        "$or": [
+            {"invoice_date": None},
+            {"invoice_date": {"$exists": False}},
+        ]
+    }).to_list(20000)
+    reversed_count = 0
+    affected_invoices = []
+    for inv in invoices_unprinted:
+        # Find AR journal for this invoice (reference_type=invoice)
+        journals = await db.journal_entries.find({
+            "reference_type": "invoice",
+            "reference_id": str(inv["_id"]),
+        }).to_list(100)
+        if not journals:
+            continue
+        # Compute net DR 1201 in these journals (only reverse if there's an open AR)
+        net_dr_1201 = 0.0
+        for j in journals:
+            for line in (j.get("lines") or []):
+                if line.get("account_code") == "1201":
+                    net_dr_1201 += float(line.get("debit") or 0) - float(line.get("credit") or 0)
+        if abs(net_dr_1201) < 0.01:
+            continue
+        # Delete the original journals (clean reversal)
+        await db.journal_entries.delete_many({
+            "reference_type": "invoice",
+            "reference_id": str(inv["_id"]),
+        })
+        # Mark invoice as ar_recognized=false (re-creatable on print)
+        await db.invoices.update_one(
+            {"_id": inv["_id"]},
+            {"$set": {"ar_recognized": False, "invoice_date": None}}
+        )
+        reversed_count += 1
+        affected_invoices.append({
+            "invoice_number": inv.get("invoice_number"),
+            "amount": net_dr_1201,
+            "journals_deleted": len(journals),
+        })
+    return {
+        "ok": True,
+        "reversed_count": reversed_count,
+        "total_invoices_unprinted": len(invoices_unprinted),
+        "affected": affected_invoices,
+        "note": "Invoice belum dicetak → AR di-reverse. Saat dicetak, jurnal AR akan re-post.",
+    }

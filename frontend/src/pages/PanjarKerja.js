@@ -63,7 +63,12 @@ export default function PanjarKerja() {
   const refund = parseFloat(settleForm.refund_amount) || 0;
   const settleTotal = breakdownTotal + refund;
   const panjarAmt = settleFor?.amount || 0;
-  const isBalanced = Math.abs(settleTotal - panjarAmt) < 0.01;
+  const prevSettled = settleFor?.settled_amount || 0;
+  const prevRefund = settleFor?.refund_amount || 0;
+  const remainingBefore = panjarAmt - prevSettled - prevRefund;
+  const newRemaining = remainingBefore - settleTotal;
+  const isFullSettle = Math.abs(newRemaining) < 0.01;
+  const isOverSettle = newRemaining < -0.01;
 
   const doSettle = async () => {
     // Validate each row
@@ -75,9 +80,19 @@ export default function PanjarKerja() {
         toast.error("Untuk target AWB, pilih AWB-nya"); return;
       }
     }
-    if (!isBalanced) {
-      toast.error(`Total breakdown (${fmtIDR(breakdownTotal)}) + refund (${fmtIDR(refund)}) harus sama dengan panjar (${fmtIDR(panjarAmt)})`);
+    if (settleTotal <= 0) {
+      toast.error("Total settle harus > 0");
       return;
+    }
+    if (isOverSettle) {
+      toast.error(`Total settle (${fmtIDR(settleTotal)}) melebihi sisa panjar (${fmtIDR(remainingBefore)})`);
+      return;
+    }
+    if (!isFullSettle) {
+      if (!window.confirm(
+        `Settle PARTIAL: ${fmtIDR(settleTotal)} dari sisa ${fmtIDR(remainingBefore)}.\n` +
+        `Status tetap "Open" — sisa ${fmtIDR(newRemaining)} bisa disettle lagi nanti.\n\nLanjutkan?`
+      )) return;
     }
     setSettling(true);
     try {
@@ -93,7 +108,9 @@ export default function PanjarKerja() {
           description: b.description || null,
         })),
       });
-      toast.success(`Panjar ${settleFor.number} disettle ke ${breakdown.length} item`);
+      toast.success(isFullSettle
+        ? `Panjar ${settleFor.number} fully settled`
+        : `Partial settle (${fmtIDR(settleTotal)}) berhasil. Sisa: ${fmtIDR(newRemaining)} — status tetap Open`);
       setSettleFor(null);
       load();
     } catch (e) { toast.error(errMsg(e)); }
@@ -107,7 +124,10 @@ export default function PanjarKerja() {
   };
 
   const openCount = rows.filter((r) => r.status === "Open").length;
-  const openTotal = rows.filter((r) => r.status === "Open").reduce((s, r) => s + (r.amount || 0), 0);
+  const openTotal = rows.filter((r) => r.status === "Open").reduce((s, r) => {
+    const consumed = (r.settled_amount || 0) + (r.refund_amount || 0);
+    return s + Math.max(0, (r.amount || 0) - consumed);
+  }, 0);
 
   return (
     <div data-testid="panjar-page">
@@ -143,12 +163,17 @@ export default function PanjarKerja() {
                 <Td className="font-semibold">{r.recipient_name}</Td>
                 <Td className="text-xs">{r.purpose || "-"}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.amount)}</Td>
-                <Td className="text-right">{r.actual_amount != null ? fmtIDR(r.actual_amount) : "-"}</Td>
+                <Td className="text-right">{r.settled_amount != null ? fmtIDR(r.settled_amount) : (r.actual_amount != null ? fmtIDR(r.actual_amount) : "-")}</Td>
                 <Td className="text-right">{r.refund_amount != null ? fmtIDR(r.refund_amount) : "-"}</Td>
                 <Td>
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
                     r.status === "Settled" ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-amber-100 text-amber-800 border-amber-200"
                   }`}>{r.status}</span>
+                  {r.status === "Open" && r.settled_amount > 0 && (
+                    <div className="text-[9px] text-amber-700 mt-0.5">
+                      Sisa: {fmtIDR(r.amount - (r.settled_amount || 0) - (r.refund_amount || 0))}
+                    </div>
+                  )}
                 </Td>
                 <Td className="text-xs">
                   {r.awb_breakdown && r.awb_breakdown.length > 0 ? (
@@ -272,24 +297,41 @@ export default function PanjarKerja() {
               </div>
               <div><Label>Catatan</Label><Input value={settleForm.notes} onChange={(e) => setSettleForm({ ...settleForm, notes: e.target.value })}/></div>
 
-              <div className={`p-3 rounded border text-sm ${isBalanced ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-amber-50 border-amber-200 text-amber-800"}`}>
+              <div className={`p-3 rounded border text-sm ${isOverSettle ? "bg-rose-50 border-rose-200 text-rose-800" : (isFullSettle ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-blue-50 border-blue-200 text-blue-800")}`}>
                 <div className="flex items-center justify-between font-mono text-xs">
-                  <span>Breakdown:</span><span className="font-semibold">{fmtIDR(breakdownTotal)}</span>
+                  <span>Panjar Awal:</span><span className="font-semibold">{fmtIDR(panjarAmt)}</span>
+                </div>
+                {(prevSettled > 0 || prevRefund > 0) && (
+                  <>
+                    <div className="flex items-center justify-between font-mono text-xs">
+                      <span>Sudah Disettle Sebelumnya:</span><span>−{fmtIDR(prevSettled)}</span>
+                    </div>
+                    <div className="flex items-center justify-between font-mono text-xs">
+                      <span>Sudah Direfund Sebelumnya:</span><span>−{fmtIDR(prevRefund)}</span>
+                    </div>
+                    <div className="flex items-center justify-between font-mono text-xs border-t border-current/20 pt-1 mt-1">
+                      <span>Sisa Belum Settle:</span><span className="font-semibold">{fmtIDR(remainingBefore)}</span>
+                    </div>
+                  </>
+                )}
+                <div className="flex items-center justify-between font-mono text-xs mt-2 pt-2 border-t border-current/30">
+                  <span>Settle kali ini (breakdown):</span><span>{fmtIDR(breakdownTotal)}</span>
                 </div>
                 <div className="flex items-center justify-between font-mono text-xs">
-                  <span>Refund:</span><span className="font-semibold">{fmtIDR(refund)}</span>
+                  <span>Refund kali ini:</span><span>{fmtIDR(refund)}</span>
                 </div>
                 <div className="flex items-center justify-between mt-1 pt-1 border-t border-current/20 font-bold">
-                  <span>Total Settle:</span><span>{fmtIDR(settleTotal)} / {fmtIDR(panjarAmt)}</span>
+                  <span>{isFullSettle ? "Status setelah ini: SETTLED" : (isOverSettle ? "⚠ MELEBIHI" : "Sisa setelah ini")}:</span>
+                  <span>{isOverSettle ? `+${fmtIDR(Math.abs(newRemaining))}` : fmtIDR(Math.max(0, newRemaining))}</span>
                 </div>
-                {!isBalanced && <p className="text-[10px] mt-1">Belum balance — sesuaikan breakdown atau refund.</p>}
+                {!isFullSettle && !isOverSettle && settleTotal > 0 && <p className="text-[10px] mt-1">Partial settle — status tetap {`"Open"`}, bisa lanjut settle berikutnya.</p>}
               </div>
             </div>
 
             <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
               <Button variant="secondary" type="button" onClick={() => setSettleFor(null)}>Batal</Button>
-              <Button data-testid="confirm-settle-panjar" variant="success" onClick={doSettle} disabled={settling || !isBalanced}>
-                {settling ? "Memproses..." : "Settle"}
+              <Button data-testid="confirm-settle-panjar" variant="success" onClick={doSettle} disabled={settling || isOverSettle || settleTotal <= 0}>
+                {settling ? "Memproses..." : (isFullSettle ? "Settle (Final)" : "Settle (Partial)")}
               </Button>
             </div>
           </Card>

@@ -3,13 +3,16 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { CheckCircle2, Wallet, Search, Undo2 } from "lucide-react";
+import { CheckCircle2, Wallet, Search, Undo2, BarChart3, ChevronDown, ChevronRight, FileSpreadsheet } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
 export default function AccrueSettlement() {
   const [rows, setRows] = useState([]);
   const [paidRows, setPaidRows] = useState([]);
+  const [aging, setAging] = useState(null);
+  const [showAging, setShowAging] = useState(true);
+  const [agingExpanded, setAgingExpanded] = useState({});
   const [q, setQ] = useState("");
   const [vendor, setVendor] = useState("");
   const [filterMode, setFilterMode] = useState("AND");
@@ -20,10 +23,25 @@ export default function AccrueSettlement() {
     Promise.all([
       api.get("/costs", { params: { payment_type: "Accrue", is_settled: false } }),
       api.get("/costs", { params: { payment_type: "Cash", cost_category: "Vendor" } }),
-    ]).then(([a, p]) => {
+      api.get("/reports/vendor-aging"),
+    ]).then(([a, p, ag]) => {
       setRows(a.data);
       setPaidRows(p.data);
+      setAging(ag.data);
     });
+  };
+
+  const exportAging = async () => {
+    try {
+      const r = await api.get("/exports/vendor-aging", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement("a"); a.href = url;
+      const dstr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      a.download = `Vendor_Aging_${dstr}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Vendor Aging ter-export ke Excel");
+    } catch (e) { toast.error(errMsg(e)); }
   };
   useEffect(() => { load(); }, []);
 
@@ -79,6 +97,97 @@ export default function AccrueSettlement() {
           </div>
         </div>
       </Card>
+
+      {/* Vendor Aging — Embedded */}
+      {aging && (
+        <Card className="mb-5" data-testid="vendor-aging-section">
+          <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
+            <BarChart3 size={16} className="text-purple-700"/>
+            <h3 className="font-bold">Aging Hutang Vendor</h3>
+            <span className="text-xs text-slate-500 ml-2">{aging.count_vendors} vendor outstanding</span>
+            <div className="ml-auto flex gap-2">
+              <button data-testid="export-aging-btn" onClick={exportAging} className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-emerald-50">
+                <FileSpreadsheet size={12}/> Export Excel
+              </button>
+              <button onClick={() => setShowAging(!showAging)} className="text-[11px] font-bold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1">
+                {showAging ? "Sembunyikan" : "Tampilkan"}
+              </button>
+            </div>
+          </div>
+          {showAging && (
+            <div className="p-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+                <Card className="p-3 bg-blue-50 border-blue-200">
+                  <div className="text-[9px] uppercase tracking-[0.12em] font-bold text-blue-700">Total Outstanding</div>
+                  <div className="font-heading font-black text-lg text-blue-900">{fmtIDR(aging.totals.total)}</div>
+                </Card>
+                <Card className="p-3 bg-emerald-50 border-emerald-200">
+                  <div className="text-[9px] uppercase tracking-[0.12em] font-bold text-emerald-700">0-30 hari</div>
+                  <div className="font-heading font-black text-lg text-emerald-900">{fmtIDR(aging.totals["0-30"])}</div>
+                </Card>
+                <Card className="p-3 bg-yellow-50 border-yellow-200">
+                  <div className="text-[9px] uppercase tracking-[0.12em] font-bold text-yellow-700">31-60 hari</div>
+                  <div className="font-heading font-black text-lg text-yellow-900">{fmtIDR(aging.totals["31-60"])}</div>
+                </Card>
+                <Card className="p-3 bg-orange-50 border-orange-200">
+                  <div className="text-[9px] uppercase tracking-[0.12em] font-bold text-orange-700">61-90 hari</div>
+                  <div className="font-heading font-black text-lg text-orange-900">{fmtIDR(aging.totals["61-90"])}</div>
+                </Card>
+                <Card className="p-3 bg-rose-50 border-rose-200">
+                  <div className="text-[9px] uppercase tracking-[0.12em] font-bold text-rose-700">90+ hari (overdue)</div>
+                  <div className="font-heading font-black text-lg text-rose-900">{fmtIDR(aging.totals["90+"])}</div>
+                </Card>
+              </div>
+              <div className="border border-slate-200 rounded overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">Vendor</th>
+                      <th className="px-2 py-1.5 text-right">0-30</th>
+                      <th className="px-2 py-1.5 text-right">31-60</th>
+                      <th className="px-2 py-1.5 text-right">61-90</th>
+                      <th className="px-2 py-1.5 text-right">90+</th>
+                      <th className="px-2 py-1.5 text-right">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {aging.rows.map((r) => (
+                      <React.Fragment key={r.vendor}>
+                        <tr data-testid={`aging-row-${r.vendor}`} className="cursor-pointer hover:bg-slate-50 border-t border-slate-100" onClick={() => setAgingExpanded((s) => ({ ...s, [r.vendor]: !s[r.vendor] }))}>
+                          <td className="px-2 py-1.5 font-semibold">
+                            {agingExpanded[r.vendor] ? <ChevronDown size={11} className="inline mr-1"/> : <ChevronRight size={11} className="inline mr-1"/>}
+                            {r.vendor} <span className="text-[10px] text-slate-400">({r.items.length})</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-right font-mono">{fmtIDR(r["0-30"])}</td>
+                          <td className="px-2 py-1.5 text-right font-mono">{fmtIDR(r["31-60"])}</td>
+                          <td className="px-2 py-1.5 text-right font-mono">{fmtIDR(r["61-90"])}</td>
+                          <td className="px-2 py-1.5 text-right font-mono text-rose-700 font-bold">{fmtIDR(r["90+"])}</td>
+                          <td className="px-2 py-1.5 text-right font-bold">{fmtIDR(r.total)}</td>
+                        </tr>
+                        {agingExpanded[r.vendor] && r.items.map((it, idx) => (
+                          <tr key={`${r.vendor}-${idx}`} className="bg-slate-50 text-xs">
+                            <td colSpan={6} className="px-2 py-1">
+                              <div className="flex items-center gap-3 text-slate-600 pl-6">
+                                <span className="font-mono">{it.awb_number || "(no AWB)"}</span>
+                                <span>·</span>
+                                <span className="text-slate-500 truncate flex-1">{it.description}</span>
+                                <span className="font-mono">{fmtIDR(it.amount)} <span className="text-[10px] text-slate-400">({it.days}h · {it.bucket})</span></span>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                    {aging.rows.length === 0 && (
+                      <tr><td colSpan={6} className="px-2 py-4 text-center text-slate-400 text-xs">Tidak ada hutang vendor outstanding 🎉</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       <Card className="p-4 mb-5">
         <FilterPresets

@@ -1,0 +1,67 @@
+{
+  "summary": "Iteration 15 — 7 modifications (SPSI/Forklift/Polis/Asuransi become invoice addons, NOT cost; POD migrated from PO to AWB level; partial settle Panjar Kerja; cost-click popup on /orders; WO column removed from analytics; vendor-aging integrated into /accrue; petty-cash & standalone vendor-aging routes removed; migrate/reverse-unprinted-ar admin endpoint). Backend: 13/13 NEW iter15 tests PASS + 29/30 iter14 regression PASS (1 expected failure: test_receive_pod on PO endpoint that was intentionally removed). Frontend smoke: ALL 15 checks PASS — sidebar cleaned, /orders has new Tgl POD column + click-cost popup (Rincian Cost modal with delete icon per row) + Terima POD modal (4 fields: date/signed-by/notes/confirm), /purchase-orders POD removed, /analytics WO removed (20 cols), /accrue has integrated Aging Hutang Vendor widget with 5 buckets + Export Excel + per-vendor rows, /petty-cash & /reports/vendor-aging routes redirect away.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/admin/migrate/reverse-unprinted-ar", "issue": "Endpoint deletes journals on each call — if invoked twice on same data, idempotent because ar_recognized is also reset; but no audit-trail kept of deletion. Consider posting a REVERSAL journal instead of deleting (per PSAK best practice)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/orders Terima POD modal", "issues": ["Uses browser's default native HTML date input (input type=date) instead of shadcn Calendar component — per coding guideline this should use shadcn picker for consistency."]},
+      {"screen": "/orders Terima Barang modal", "issues": ["Same native date picker as above for received_date."]}
+    ]
+  },
+  "verified_features": [
+    "POST /api/orders/{oid}/receive with SPSI/Forklift/Polis/Asuransi → ONLY stored on awb_orders doc (received_polis_amount, received_asuransi_amount, spsi_amount, sewa_forklift_amount); NO awb_costs created (source=receive count=0); NO journal entries posted for these addons",
+    "POST /api/orders/{oid}/receive-pod → sets pod_received_at + pod_signed_by + pod_notes on awb_orders",
+    "POST /api/orders/{oid}/receive-pod without prior /receive → 400 'Barang belum diterima'",
+    "POST /api/purchase-orders/{pid}/receive-pod → 404 (endpoint removed as expected)",
+    "Partial settle Panjar 1jt: 1st 400k → status Open, settled=400k, remaining=600k; 2nd 600k → status Settled, settled=1jt, remaining=0; settle_history has 2 events",
+    "Partial settle over-amount (1.5jt vs panjar 1jt) → 400 'melebihi'",
+    "Operation target in panjar breakdown → NO new petty_cash entry created; journal DR 5102 / CR 1108 still posts correctly",
+    "POST /api/admin/migrate/reverse-unprinted-ar → admin-only (operation gets 403); returns {ok, reversed_count, total_invoices_unprinted, affected[]}",
+    "GET /api/reports/vendor-aging → returns {buckets, rows, totals}",
+    "GET /api/exports/vendor-aging → Excel file (proper content-type, non-empty)",
+    "Login admin/operation/finance still works",
+    "Frontend: /petty-cash route removed (redirects to /); /reports/vendor-aging route removed",
+    "Frontend: Sidebar no longer shows 'Petty Cash (Non-AWB)' or 'Aging Hutang Vendor'",
+    "Frontend: /orders has columns Tgl Pickup, Tgl Terima, Tgl POD; Terima POD button visible on received-but-no-POD rows; Update POD on already-POD rows",
+    "Frontend: Click cost amount on /orders row → 'Rincian Cost' modal opens with Kategori/Deskripsi/Vendor/Status/Nominal/Aksi columns + delete icon per row + TOTAL footer + Tutup button",
+    "Frontend: POD modal has 4 fields (pod_date, pod_signed_by, pod_notes, confirm button 'Tandai POD Diterima')",
+    "Frontend: /purchase-orders shows NO 'Terima POD' button and NO 'Received POD' status column",
+    "Frontend: /analytics table has exactly 20 columns and NO 'WO' header (verified column list: AWB, Pickup, Customer, Wilayah, Kota/Tujuan, Tipe Armada, Jenis Armada, Vendor Utama, Item Lines, Kg, Selling, PPN, Inv+PPN, PPh 2%, Total Biaya, Margin Rp, Margin %, Status, No Inv Eksternal, Tgl Bayar)",
+    "Frontend: /accrue (Settle Hutang Vendor) has embedded 'Aging Hutang Vendor' widget with 5 summary cards (Total / 0-30 / 31-60 / 61-90 / 90+) + per-vendor table + Export Excel button + Sembunyikan toggle"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration15_refactor.py",
+    "/app/backend/tests/test_iteration14_tms_refactor.py",
+    "/app/test_reports/pytest/iter15_results.xml"
+  ],
+  "action_items": [
+    "Update /app/backend/tests/test_iteration14_tms_refactor.py::TestPurchaseOrders::test_receive_pod to expect 404 instead of 200 (PO POD endpoint was intentionally removed in iter15). Alternatively, mark that test xfail/skip. Currently 29/30 pass — only this one fails as expected due to endpoint removal.",
+    "Consider replacing native HTML date inputs (Terima Barang & Terima POD modals) with shadcn Calendar component for visual consistency.",
+    "Optional: reverse-unprinted-ar admin endpoint deletes journal docs — consider posting a reversing journal for audit trail purposes (PSAK best practice)."
+  ],
+  "critical_code_review_comments": [
+    "server.py grown to 6291 lines (was 6046). Still exceeds 700-line guideline. Continue splitting into routers (e.g., panjar_kerja.py, pod.py, migrations.py).",
+    "Receive endpoint correctly DELETEs legacy receive-sourced awb_costs and journals (L1864-1868) — good migration safety for pre-existing data.",
+    "Partial settle logic (L5061-5108) computes consumed=settled+refund and validates <=panjar with epsilon 0.01 — correct. settle_history appended via $push is a clean audit trail.",
+    "Operation-target branch in settle (L5110-5114) now intentionally does nothing extra (no petty_cash entry) — comment clearly notes that journal DR 5102 already debits HPP. Good.",
+    "Migration endpoint reverse-unprinted-ar (L6240-6290) hard-deletes journals — irreversible. Consider soft-deletion or reverse-journal pattern. Also re-sets invoice_date=null which IS already null (no-op but safe).",
+    "POD endpoint receive_pod_awb (L1871-1897) correctly validates received_at exists before allowing POD — good business-rule guard.",
+    "OrdersList.js view-cost button (data-testid='view-cost-{awb_number}') and PrintBiaya modal works; cost rows have data-testid for per-row delete via cost-delete pattern — verified UI."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration15_refactor.py (NEW — 13 tests covering iter15 features)"
+  ],
+  "success_rate": {"backend": "100% (13/13 iter15) + 96.7% (29/30 iter14, 1 expected-removal)", "frontend": "100% (15/15 smoke checks)"},
+  "test_credentials": "admin/admin123, operation/operation123, finance/finance123 — all working",
+  "seed_data_creation": "Test creates TEST_IT15_* customers, AWBs, cash advances, POs. Existing TEST_IT14_* data from previous iterations still present and reused for some flows. Petty Cash count is captured before/after to assert no new entries on operation-target settle.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: python -m pytest backend/tests/test_iteration15_refactor.py -v + backend/tests/test_iteration14_tms_refactor.py -v. KNOWN: iter14::TestPurchaseOrders::test_receive_pod fails (expected) — PO POD endpoint was deliberately removed in iter15. POD now lives on AWB level only (/api/orders/{oid}/receive-pod). SPSI/Forklift/Polis/Asuransi are invoice addons stored on awb_orders.received_*/spsi_*/sewa_forklift_* fields — InvoicePrint.js already adds them to grand_total. Partial settle: panjar can be settled in multiple events; status remains 'Open' until settled_amount+refund == amount (epsilon 0.01). Cost popup on /orders triggered via button[data-testid='view-cost-{awb}'].",
+  "rca_of_the_issue": "N/A — no bugs to RCA. All iter15 modifications correctly implemented and verified by automated tests + UI smoke."
+}
