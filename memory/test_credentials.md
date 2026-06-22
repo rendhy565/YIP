@@ -1,17 +1,27 @@
-# Test Credentials — ARC Business Suite
+# Test Credentials — ARC TMS
 
-## Administrator (full access)
-- Username: `admin`
-- Password: `admin123`
+## Login URL
+`https://git-tweak-staging.preview.emergentagent.com/arc/login`
 
-## Operation
-- Username: `operation`
-- Password: `operation123`
+## Users (seeded automatically)
+| Username  | Password      | Role           | Permissions             |
+|-----------|---------------|----------------|-------------------------|
+| admin     | admin123      | administrator  | All (full access)       |
+| operation | operation123  | operation      | Default operation perms |
+| finance   | finance123    | finance        | Default finance perms   |
 
-## Finance
-- Username: `finance`
-- Password: `finance123`
+## Notes
+- Passwords come from environment vars `SEED_ADMIN_PASSWORD` etc. — currently default values.
+- Administrator bypass: all role checks granted automatically.
+- Sender suggestions endpoint currently has no permission gate (any authed user can delete) — future backlog item.
 
-## Demo data
-- Already seeded: 3 customers, 4 contracts, 5 AWBs (mixed status), costs, fixed costs, opening balance journal
-- Opening balance: Kas 50jt + Bank BCA 100jt + Bank Mandiri 50jt = Modal 200jt
+## Quick API test
+```bash
+# Login
+TOKEN=$(curl -s -X POST https://git-tweak-staging.preview.emergentagent.com/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"admin123"}' | python3 -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
+
+# Sample call
+curl -s https://git-tweak-staging.preview.emergentagent.com/api/petty-cash -H "Authorization: Bearer $TOKEN"
+```
