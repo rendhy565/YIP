@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Input, Label, Table, Th, Td, Button } from "../components/ui";
 import { fmtIDR, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { Calendar, RefreshCw } from "lucide-react";
+import { Calendar, RefreshCw, FileSpreadsheet } from "lucide-react";
 
 function todayStr() {
   const d = new Date();
@@ -42,6 +42,19 @@ export default function VendorAging() {
             <Input data-testid="aging-as-of" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)}/>
           </div>
           <Button data-testid="reload-aging-btn" onClick={load}><RefreshCw size={14}/> Reload</Button>
+          <Button data-testid="export-aging-btn" variant="secondary" onClick={async () => {
+            try {
+              const r = await api.get("/exports/vendor-aging", { params: { as_of: asOf }, responseType: "blob" });
+              const url = window.URL.createObjectURL(new Blob([r.data]));
+              const a = document.createElement("a"); a.href = url;
+              a.download = `Vendor_Aging_${asOf.replace(/-/g, "")}.xlsx`;
+              document.body.appendChild(a); a.click(); a.remove();
+              window.URL.revokeObjectURL(url);
+              toast.success("Vendor Aging ter-export ke Excel");
+            } catch (e) { toast.error(errMsg(e)); }
+          }}>
+            <FileSpreadsheet size={14}/> Export Excel
+          </Button>
           <div className="ml-auto text-sm text-slate-500">
             <Calendar size={12} className="inline mr-1"/> {data.count_vendors} vendor dengan outstanding
           </div>

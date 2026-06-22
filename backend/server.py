@@ -6045,3 +6045,177 @@ async def vendor_aging(as_of: Optional[str] = None, user: dict = Depends(get_cur
         "totals": totals,
         "count_vendors": len(rows),
     }
+
+# ===========================================================================
+# Excel Export — Vendor Aging report
+# ===========================================================================
+@app.get("/api/exports/vendor-aging")
+async def export_vendor_aging(as_of: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Export aging hutang vendor ke Excel."""
+    if as_of:
+        try:
+            y, m, d = [int(x) for x in as_of.split("-")]
+            ref_date = datetime(y, m, d, 23, 59, 59, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "as_of harus YYYY-MM-DD")
+    else:
+        ref_date = datetime.now(timezone.utc)
+
+    # Reuse aging computation
+    costs = await db.awb_costs.find({
+        "cost_category": "Vendor",
+        "payment_type": "Accrue",
+        "is_settled": {"$ne": True},
+    }).to_list(20000)
+    awb_ids = list({c["awb_id"] for c in costs if c.get("awb_id")})
+    amap = {a["_id"]: a for a in await db.awb_orders.find({"_id": {"$in": awb_ids}}).to_list(20000)}
+    buckets = ["0-30", "31-60", "61-90", "90+"]
+
+    by_vendor: dict = {}
+    for c in costs:
+        vendor = (c.get("vendor_name") or "(Tanpa nama vendor)").strip() or "(Tanpa nama vendor)"
+        cdate = c.get("created_at") or ref_date
+        days = max(0, (ref_date - cdate).days) if isinstance(cdate, datetime) else 0
+        bucket = "0-30" if days <= 30 else ("31-60" if days <= 60 else ("61-90" if days <= 90 else "90+"))
+        amt = float(c.get("amount") or 0)
+        if vendor not in by_vendor:
+            by_vendor[vendor] = {"vendor": vendor, "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0, "items": []}
+        by_vendor[vendor][bucket] += amt
+        by_vendor[vendor]["total"] += amt
+        awb_doc = amap.get(c.get("awb_id"))
+        by_vendor[vendor]["items"].append({
+            "awb_number": awb_doc["awb_number"] if awb_doc else "",
+            "amount": amt,
+            "created_at": cdate,
+            "days": days,
+            "bucket": bucket,
+            "description": c.get("description") or "",
+        })
+    rows = sorted(by_vendor.values(), key=lambda r: r["total"], reverse=True)
+    totals = {b: sum(r[b] for r in rows) for b in buckets}
+    totals["total"] = sum(r["total"] for r in rows)
+
+    # Build Excel
+    wb = openpyxl.Workbook()
+    ws_sum = wb.active
+    ws_sum.title = "Summary Aging"
+
+    bold = Font(bold=True)
+    bold_white = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    sub_fill = PatternFill("solid", fgColor="F1F5F9")
+    rose_fill = PatternFill("solid", fgColor="FEF2F2")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center")
+    right_align = Alignment(horizontal="right")
+
+    # Title
+    ws_sum.cell(1, 1, f"AGING HUTANG VENDOR — Per {ref_date.strftime('%d %B %Y')}").font = Font(bold=True, size=14)
+    ws_sum.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
+
+    # Header row 3
+    headers = ["Vendor", "0-30 Hari", "31-60 Hari", "61-90 Hari", "90+ Hari (Overdue)", "Total"]
+    for i, h in enumerate(headers, 1):
+        c = ws_sum.cell(3, i, h)
+        c.font = bold_white
+        c.fill = header_fill
+        c.alignment = center
+        c.border = border
+
+    # Data rows
+    row_idx = 4
+    for r in rows:
+        ws_sum.cell(row_idx, 1, r["vendor"]).border = border
+        for i, b in enumerate(buckets, start=2):
+            cell = ws_sum.cell(row_idx, i, r[b])
+            cell.number_format = "#,##0"
+            cell.alignment = right_align
+            cell.border = border
+            if b == "90+" and r[b] > 0:
+                cell.fill = rose_fill
+                cell.font = bold
+        tot = ws_sum.cell(row_idx, 6, r["total"])
+        tot.number_format = "#,##0"
+        tot.font = bold
+        tot.alignment = right_align
+        tot.border = border
+        row_idx += 1
+
+    # Total row
+    ws_sum.cell(row_idx, 1, "TOTAL").font = bold
+    ws_sum.cell(row_idx, 1).fill = sub_fill
+    ws_sum.cell(row_idx, 1).border = border
+    for i, b in enumerate(buckets, start=2):
+        cell = ws_sum.cell(row_idx, i, totals[b])
+        cell.number_format = "#,##0"
+        cell.font = bold
+        cell.fill = sub_fill
+        cell.alignment = right_align
+        cell.border = border
+    cell = ws_sum.cell(row_idx, 6, totals["total"])
+    cell.number_format = "#,##0"
+    cell.font = Font(bold=True, size=12)
+    cell.fill = sub_fill
+    cell.alignment = right_align
+    cell.border = border
+
+    # Column widths
+    ws_sum.column_dimensions["A"].width = 40
+    for col_letter in ["B", "C", "D", "E", "F"]:
+        ws_sum.column_dimensions[col_letter].width = 18
+
+    # Detail sheet
+    ws_det = wb.create_sheet(title="Detail per Item")
+    det_headers = ["Vendor", "AWB", "Tanggal", "Umur (Hari)", "Bucket", "Deskripsi", "Nominal"]
+    for i, h in enumerate(det_headers, 1):
+        c = ws_det.cell(1, i, h)
+        c.font = bold_white
+        c.fill = header_fill
+        c.alignment = center
+        c.border = border
+
+    rd = 2
+    for r in rows:
+        for it in r["items"]:
+            ws_det.cell(rd, 1, r["vendor"]).border = border
+            ws_det.cell(rd, 2, it["awb_number"] or "—").border = border
+            cdate = it["created_at"]
+            if isinstance(cdate, datetime):
+                date_cell = ws_det.cell(rd, 3, cdate.replace(tzinfo=None))
+                date_cell.number_format = "dd/mm/yyyy"
+            else:
+                ws_det.cell(rd, 3, "—")
+            ws_det.cell(rd, 3).border = border
+            ws_det.cell(rd, 4, it["days"]).alignment = right_align
+            ws_det.cell(rd, 4).border = border
+            bcell = ws_det.cell(rd, 5, it["bucket"])
+            bcell.alignment = center
+            bcell.border = border
+            if it["bucket"] == "90+":
+                bcell.fill = rose_fill
+                bcell.font = bold
+            ws_det.cell(rd, 6, it["description"]).border = border
+            amt = ws_det.cell(rd, 7, it["amount"])
+            amt.number_format = "#,##0"
+            amt.alignment = right_align
+            amt.border = border
+            rd += 1
+
+    ws_det.column_dimensions["A"].width = 30
+    ws_det.column_dimensions["B"].width = 20
+    ws_det.column_dimensions["C"].width = 14
+    ws_det.column_dimensions["D"].width = 12
+    ws_det.column_dimensions["E"].width = 12
+    ws_det.column_dimensions["F"].width = 40
+    ws_det.column_dimensions["G"].width = 18
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    fname = f"Vendor_Aging_{ref_date.strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
