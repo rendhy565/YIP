@@ -46,19 +46,23 @@ export const InvoicePrintStyles = () => (
 // Reusable body that renders both the invoice page and the lampiran page.
 // Used by both single-invoice (InvoicePrint) and bulk-invoice (InvoicePrintBulk).
 export function InvoicePrintBody({ data }) {
-  const { invoice, awb, customer, company } = data;
+  const { invoice, awb, awbs, customer, company } = data;
 
-  const invDate = new Date(invoice.created_at);
+  // Use invoice_date (set on first print) — fallback to created_at for back-compat
+  const invDate = new Date(invoice.invoice_date || invoice.first_printed_at || invoice.created_at);
   const dueDate = new Date(invDate.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-  const subTotal = awb.total_tariff || 0;
-  const ppnAmt = awb.tax_amount || 0;
-  const ppnPct = awb.tax_percentage || 0;
+  // Multi-AWB aware: aggregate totals across all AWBs
+  const awbList = (awbs && awbs.length > 0) ? awbs : [awb].filter(Boolean);
+  const subTotal = awbList.reduce((s, a) => s + (a.total_tariff || 0), 0);
+  const ppnAmt = awbList.reduce((s, a) => s + (a.tax_amount || 0), 0);
+  const ppnPct = awb?.tax_percentage || 0;
   const subAfterTax = subTotal + ppnAmt;
-  const asuransi = awb.received_asuransi_amount || 0;
-  const polis = awb.received_polis_amount || 0;
-  const spsi = awb.spsi_enabled ? (awb.spsi_amount || 0) : 0;
-  const forklift = awb.sewa_forklift_enabled ? (awb.sewa_forklift_amount || 0) : 0;
+  // For asuransi/polis use primary AWB (back-compat). When multi-AWB, sum across all.
+  const asuransi = awbList.reduce((s, a) => s + (a.received_asuransi_amount || 0), 0);
+  const polis = awbList.reduce((s, a) => s + (a.received_polis_amount || 0), 0);
+  const spsi = awbList.reduce((s, a) => s + (a.spsi_enabled ? (a.spsi_amount || 0) : 0), 0);
+  const forklift = awbList.reduce((s, a) => s + (a.sewa_forklift_enabled ? (a.sewa_forklift_amount || 0) : 0), 0);
   const grandTotal = subAfterTax + asuransi + polis + spsi + forklift;
 
   const logoSrc = company.logo_b64
@@ -243,7 +247,19 @@ export default function InvoicePrint() {
   const [data, setData] = useState(null);
 
   useEffect(() => {
-    api.get(`/invoices/${id}/full`).then((r) => setData(r.data));
+    api.get(`/invoices/${id}/full`).then(async (r) => {
+      setData(r.data);
+      // If not yet printed (print_count = 0 or no invoice_date), mark-printed
+      const inv = r.data.invoice;
+      if (!inv.invoice_date && (!inv.print_count || inv.print_count === 0)) {
+        try {
+          await api.post(`/invoices/${id}/mark-printed`, { use_old_date: false });
+          // Re-fetch to update invoice_date
+          const r2 = await api.get(`/invoices/${id}/full`);
+          setData(r2.data);
+        } catch (e) { /* ignore */ }
+      }
+    });
   }, [id]);
 
   if (!data) return <div className="p-10 text-center text-slate-500">Memuat...</div>;

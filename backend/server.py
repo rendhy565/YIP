@@ -67,6 +67,8 @@ def serialize(doc: dict) -> dict:
             doc[k] = str(v)
         elif isinstance(v, datetime):
             doc[k] = v.isoformat()
+        elif isinstance(v, list):
+            doc[k] = [str(x) if isinstance(x, ObjectId) else (x.isoformat() if isinstance(x, datetime) else x) for x in v]
     return doc
 
 # ----- PPh withholding helpers (sprint 1) ---------------------------------
@@ -193,6 +195,7 @@ class ContractIn(BaseModel):
     destination: str
     price_per_kg: float
     via: Optional[Literal["D", "L", "U"]] = None  # Darat / Laut / Udara
+    minimum_kg: Optional[float] = None  # minimum berat untuk perhitungan tarif
 
 class OrderIn(BaseModel):
     customer_id: str
@@ -210,7 +213,10 @@ class OrderIn(BaseModel):
     company_name: Optional[str] = None       # PT. Abirama Mitra Pradana / Pratama
     pickup_date: Optional[str] = None        # YYYY-MM-DD; if not given, today
     consignee: Optional[str] = None
-    service: Optional[Literal["LCL", "FCL", "LTL", "FTL", "AIR"]] = None
+    service: Optional[Literal["LCL", "FCL", "LTL", "FTL", "AIR", "Lumpsum"]] = None
+    is_charter: Optional[bool] = False  # FTL/FCL/Lumpsum = charter (single price tanpa berat pengali)
+    charter_amount: Optional[float] = None  # total rupiah jika is_charter
+    sender_name: Optional[str] = None  # Pengirim (freetext with memory)
     via: Optional[Literal["D", "L", "U"]] = None
     status_pengiriman: Optional[Literal["Reguler", "Project", ""]] = None
     koli_count: Optional[int] = None
@@ -452,6 +458,9 @@ async def seed_data():
     await db.journal_entries.create_index("period_month")
     await db.journal_entries.create_index("date")
     await db.period_closings.create_index("period", unique=True)
+    await db.petty_cash.create_index("number")
+    await db.purchase_orders.create_index("number")
+    await db.sender_memory.create_index([("customer_id", 1), ("name", 1)], unique=True)
 
     # Seed Chart of Accounts
     for a in DEFAULT_COA:
@@ -1002,28 +1011,48 @@ async def recognize_revenue_for_awb(awb_id, user_id: str, trigger_date: Optional
 
 @app.post("/api/orders")
 async def create_order(data: OrderIn, user: dict = Depends(require_role("operation"))):
-    total = round(data.tariff_per_kg * data.qty_kg, 2)
+    # Koli mandatory
+    if data.koli_count is None or int(data.koli_count) <= 0:
+        raise HTTPException(400, "Koli wajib diisi (lebih dari 0)")
+    # Charter handling: FTL/FCL/Lumpsum = single rupiah price tanpa berat pengali
+    is_charter = bool(data.is_charter) or (data.service in ("FTL", "FCL", "Lumpsum"))
+    if is_charter:
+        charter_amt = float(data.charter_amount or 0)
+        if charter_amt <= 0:
+            # fallback: use tariff_per_kg directly (treat as total amount)
+            charter_amt = float(data.tariff_per_kg or 0)
+        total = round(charter_amt, 2)
+        # qty_kg & tariff_per_kg meaning shifts: store 0/charter for clarity
+        qty_kg_val = 0.0
+        tariff_val = charter_amt
+    else:
+        total = round(data.tariff_per_kg * data.qty_kg, 2)
+        qty_kg_val = data.qty_kg
+        tariff_val = data.tariff_per_kg
     tax_amt = round(total * data.tax_percentage / 100, 2)
     # AWB number: manual takes precedence; check uniqueness
     awb_no = (data.awb_number or "").strip() or await next_awb_number()
     if data.awb_number:
         if await db.awb_orders.find_one({"awb_number": awb_no}):
             raise HTTPException(400, f"Nomor AWB '{awb_no}' sudah dipakai")
-    # Pickup / created date
+    # Pickup / created date — preserve millisecond ordering by appending current time
     if data.pickup_date:
         try:
             y, m, d = [int(x) for x in data.pickup_date.split("-")]
-            created_at = datetime(y, m, d, tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            created_at = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
         except Exception:
             raise HTTPException(400, "pickup_date harus YYYY-MM-DD")
     else:
         created_at = datetime.now(timezone.utc)
     status_p = (data.status_pengiriman or "").strip() or None
+    sender = (data.sender_name or "").strip() or None
     doc = {
         "awb_number": awb_no,
         "reff_no": (data.reff_no or "").strip() or None,
         "company_name": data.company_name,
         "consignee": (data.consignee or "").strip() or None,
+        "sender_name": sender,
         "customer_id": _oid(data.customer_id),
         "contract_id": _oid(data.contract_id) if data.contract_id else None,
         "item_description": data.item_description,
@@ -1033,13 +1062,15 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
         "service": data.service,
         "via": data.via,
         "status_pengiriman": status_p,
-        "tariff_per_kg": data.tariff_per_kg,
-        "qty_kg": data.qty_kg,
+        "is_charter": is_charter,
+        "charter_amount": float(data.charter_amount or 0) if is_charter else 0,
+        "tariff_per_kg": tariff_val,
+        "qty_kg": qty_kg_val,
         "total_tariff": total,
         "tax_percentage": data.tax_percentage,
         "tax_amount": tax_amt,
         "grand_total": round(total + tax_amt, 2),
-        "koli_count": data.koli_count,
+        "koli_count": int(data.koli_count),
         "koli_qty_per": (data.koli_qty_per or "").strip() or None,
         "armada": (data.armada or "").strip() or None,
         "driver_name": (data.driver_name or "").strip() or None,
@@ -1053,6 +1084,17 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
         "created_at": created_at,
     }
     r = await db.awb_orders.insert_one(doc)
+    # Save sender to memory (pengirim suggestions)
+    if sender and data.customer_id:
+        try:
+            await db.sender_memory.update_one(
+                {"customer_id": _oid(data.customer_id), "name": sender},
+                {"$set": {"customer_id": _oid(data.customer_id), "name": sender, "last_used": datetime.now(timezone.utc)},
+                 "$inc": {"use_count": 1}},
+                upsert=True,
+            )
+        except Exception:
+            pass
     new = await db.awb_orders.find_one({"_id": r.inserted_id})
     # Auto-post journal (PYMHD model — PSAK 72): order belum diakui revenue.
     # DR  1290 PYMHD (Pendapatan Yang Masih Harus Diterima)  = DPP
@@ -1334,6 +1376,11 @@ async def reconcile_orders(data: ReconcileIn, user: dict = Depends(require_role(
         {"$group": {"_id": "$awb_id"}},
     ]).to_list(10000)
     awb_with_cost = {d["_id"] for d in cost_doc}
+    # NEW: also enforce "barang sudah diterima" before reconcile
+    awbs_all = await db.awb_orders.find({"_id": {"$in": ids}}).to_list(20000)
+    not_received = [a["awb_number"] for a in awbs_all if not a.get("received_at")]
+    if not_received:
+        raise HTTPException(400, f"Barang belum diterima — tidak boleh direkonsiliasi: {', '.join(not_received[:5])}{'...' if len(not_received) > 5 else ''}")
     valid_ids = [i for i in ids if i in awb_with_cost]
     skipped = len(ids) - len(valid_ids)
     if not valid_ids:
@@ -1446,8 +1493,13 @@ async def create_invoice(data: InvoiceCreateIn, user: dict = Depends(require_rol
     now = datetime.now(timezone.utc)
     doc = {
         "awb_id": o["_id"],
+        "awb_ids": [o["_id"]],  # multi-AWB support
         "invoice_number": await next_invoice_number(),
-        "created_at": now,
+        "created_at": now,           # tanggal create (nomor invoice diterbitkan)
+        "invoice_date": None,        # tanggal cetak (diisi saat klik cetak pertama)
+        "first_printed_at": None,
+        "print_count": 0,
+        "ar_recognized": False,      # piutang baru tercatat saat klik cetak
         "created_by": user["id"],
     }
     r = await db.invoices.insert_one(doc)
@@ -1455,124 +1507,137 @@ async def create_invoice(data: InvoiceCreateIn, user: dict = Depends(require_rol
         {"_id": o["_id"]},
         {"$set": {"status": "Invoiced", "invoiced_at": now}},
     )
-    # Defensive: make sure revenue is recognized before invoice posting
+    # Defensive: make sure revenue is recognized before invoice creation
     try:
         await recognize_revenue_for_awb(o["_id"], user["id"])
     except Exception:
         pass
-    # Post invoice journal:
-    #   DR  1201 Piutang Usaha   = grand_total (DPP + PPN)
-    #       CR  1290 PYMHD       = total_tariff (DPP) — clear unbilled receivable
-    #       CR  2210 PPN Keluaran = tax_amount (only when invoice/faktur terbit)
-    try:
-        dpp = float(o.get("total_tariff") or 0)
-        tax = float(o.get("tax_amount") or 0)
-        gross = round(dpp + tax, 2)
-        lines = [
-            {"account_code": "1201", "debit": gross, "credit": 0, "memo": doc["invoice_number"]},
-            {"account_code": "1290", "debit": 0, "credit": dpp, "memo": f"Clear PYMHD {o['awb_number']}"},
-        ]
-        if tax > 0:
-            lines.append({"account_code": "2210", "debit": 0, "credit": tax, "memo": f"PPN {o.get('tax_percentage') or 0}% — {doc['invoice_number']}"})
-        await post_journal(
-            date=now,
-            description=f"Invoice {doc['invoice_number']} - {o['awb_number']}",
-            lines=lines,
-            reference_type="invoice",
-            reference_id=str(r.inserted_id),
-            posted_by=user["id"],
-        )
-    except HTTPException:
-        pass
+    # NOTE: AR journal (DR 1201 / CR 1290 / CR 2210) DIPINDAH ke saat PRINT pertama.
     new = await db.invoices.find_one({"_id": r.inserted_id})
     return serialize(new)
 
 class InvoiceBulkIn(BaseModel):
     awb_ids: List[str]
+    grouped: Optional[List[List[str]]] = None  # optional: list of lists, each list = 1 invoice (multi-AWB)
 
 @app.post("/api/invoices/bulk")
 async def create_invoice_bulk(data: InvoiceBulkIn, user: dict = Depends(require_role("operation"))):
     created = []
     skipped = []
     now = datetime.now(timezone.utc)
-    for sid in data.awb_ids:
-        try:
-            oid = _oid(sid)
-        except Exception:
-            skipped.append({"awb_id": sid, "reason": "invalid id"})
+
+    # If "grouped" provided: each group becomes 1 invoice (multi-AWB); rest individual.
+    groups: List[List[str]] = []
+    grouped_ids = set()
+    if data.grouped:
+        for g in data.grouped:
+            if g and len(g) > 0:
+                groups.append(g)
+                grouped_ids.update(g)
+    # Individual = AWBs not in any group
+    individuals = [sid for sid in data.awb_ids if sid not in grouped_ids]
+    for sid in individuals:
+        groups.append([sid])
+
+    for group_ids in groups:
+        # Validate each AWB in this group
+        valid_awbs = []
+        group_skipped = False
+        cust_id_check = None
+        for sid in group_ids:
+            try:
+                oid = _oid(sid)
+            except Exception:
+                skipped.append({"awb_id": sid, "reason": "invalid id"})
+                group_skipped = True
+                break
+            o = await db.awb_orders.find_one({"_id": oid})
+            if not o:
+                skipped.append({"awb_id": sid, "reason": "not found"})
+                group_skipped = True
+                break
+            existing = await db.invoices.find_one({"$or": [{"awb_id": o["_id"]}, {"awb_ids": o["_id"]}]})
+            if existing:
+                skipped.append({"awb_id": sid, "reason": "already invoiced", "invoice_number": existing["invoice_number"]})
+                group_skipped = True
+                break
+            if o["status"] != "Reconciled":
+                skipped.append({"awb_id": sid, "reason": f"status={o['status']}"})
+                group_skipped = True
+                break
+            # multi-AWB invoice → all AWBs must be same customer
+            if cust_id_check is None:
+                cust_id_check = o.get("customer_id")
+            elif cust_id_check != o.get("customer_id"):
+                skipped.append({"awb_id": sid, "reason": "customer berbeda — tidak bisa digabung dalam 1 invoice"})
+                group_skipped = True
+                break
+            valid_awbs.append(o)
+        if group_skipped or not valid_awbs:
             continue
-        o = await db.awb_orders.find_one({"_id": oid})
-        if not o:
-            skipped.append({"awb_id": sid, "reason": "not found"})
-            continue
-        existing = await db.invoices.find_one({"awb_id": o["_id"]})
-        if existing:
-            skipped.append({"awb_id": sid, "reason": "already invoiced", "invoice_number": existing["invoice_number"]})
-            continue
-        if o["status"] != "Reconciled":
-            skipped.append({"awb_id": sid, "reason": f"status={o['status']}"})
-            continue
+
+        invoice_no = await next_invoice_number()
         doc = {
-            "awb_id": o["_id"],
-            "invoice_number": await next_invoice_number(),
+            "awb_id": valid_awbs[0]["_id"],  # primary (back-compat)
+            "awb_ids": [a["_id"] for a in valid_awbs],
+            "invoice_number": invoice_no,
             "created_at": now,
+            "invoice_date": None,
+            "first_printed_at": None,
+            "print_count": 0,
+            "ar_recognized": False,
             "created_by": user["id"],
         }
         r = await db.invoices.insert_one(doc)
-        await db.awb_orders.update_one(
-            {"_id": o["_id"]},
-            {"$set": {"status": "Invoiced", "invoiced_at": now}},
-        )
-        # Defensive recognize
-        try:
-            await recognize_revenue_for_awb(o["_id"], user["id"])
-        except Exception:
-            pass
-        # Invoice journal: DR 1201 / CR 1290 / CR 2210
-        try:
-            dpp = float(o.get("total_tariff") or 0)
-            tax = float(o.get("tax_amount") or 0)
-            gross = round(dpp + tax, 2)
-            inv_lines = [
-                {"account_code": "1201", "debit": gross, "credit": 0, "memo": doc["invoice_number"]},
-                {"account_code": "1290", "debit": 0, "credit": dpp, "memo": f"Clear PYMHD {o['awb_number']}"},
-            ]
-            if tax > 0:
-                inv_lines.append({"account_code": "2210", "debit": 0, "credit": tax, "memo": f"PPN {o.get('tax_percentage') or 0}% — {doc['invoice_number']}"})
-            await post_journal(
-                date=now,
-                description=f"Invoice {doc['invoice_number']} - {o['awb_number']}",
-                lines=inv_lines,
-                reference_type="invoice",
-                reference_id=str(r.inserted_id),
-                posted_by=user["id"],
+        for a in valid_awbs:
+            await db.awb_orders.update_one(
+                {"_id": a["_id"]},
+                {"$set": {"status": "Invoiced", "invoiced_at": now}},
             )
-        except HTTPException:
-            pass
-        created.append({"awb_id": sid, "invoice_number": doc["invoice_number"], "id": str(r.inserted_id)})
+            try:
+                await recognize_revenue_for_awb(a["_id"], user["id"])
+            except Exception:
+                pass
+        # NOTE: AR journal moved to PRINT time
+        created.append({
+            "awb_ids": [str(a["_id"]) for a in valid_awbs],
+            "awb_numbers": [a["awb_number"] for a in valid_awbs],
+            "invoice_number": invoice_no,
+            "id": str(r.inserted_id),
+        })
     return {"created": created, "skipped": skipped, "created_count": len(created), "skipped_count": len(skipped)}
 
 @app.get("/api/invoices")
 async def list_invoices(user: dict = Depends(get_current_user)):
     docs = await db.invoices.find().sort("created_at", -1).to_list(2000)
-    awb_ids = [d["awb_id"] for d in docs]
-    amap = {a["_id"]: a for a in await db.awb_orders.find({"_id": {"$in": awb_ids}}).to_list(2000)}
+    # Gather all referenced awb_ids (multi-AWB safe)
+    all_awb_ids = set()
+    for d in docs:
+        if d.get("awb_id"):
+            all_awb_ids.add(d["awb_id"])
+        for x in d.get("awb_ids") or []:
+            all_awb_ids.add(x)
+    amap = {a["_id"]: a for a in await db.awb_orders.find({"_id": {"$in": list(all_awb_ids)}}).to_list(5000)}
     cust_ids = list({a.get("customer_id") for a in amap.values()})
     cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": cust_ids}}).to_list(2000)}
     out = []
     for d in docs:
         s = serialize(d)
-        a = amap.get(d["awb_id"])
-        if a:
-            s["awb_number"] = a["awb_number"]
-            s["awb_status"] = a["status"]
-            s["grand_total"] = a["grand_total"]
-            s["total_tariff"] = a["total_tariff"]
-            s["tax_amount"] = a["tax_amount"]
-            s["company_name"] = a.get("company_name")
-            s["customer_id"] = str(a.get("customer_id")) if a.get("customer_id") else None
-            c = cmap.get(a.get("customer_id"))
-            s["customer_name"] = c["name"] if c else None
+        # Multi-AWB aggregated
+        awb_ids_list = d.get("awb_ids") or ([d["awb_id"]] if d.get("awb_id") else [])
+        awbs_for_doc = [amap.get(x) for x in awb_ids_list if amap.get(x)]
+        primary = awbs_for_doc[0] if awbs_for_doc else None
+        s["awb_count"] = len(awbs_for_doc)
+        s["awb_numbers"] = [a["awb_number"] for a in awbs_for_doc]
+        s["awb_number"] = primary["awb_number"] if primary else None
+        s["awb_status"] = primary["status"] if primary else None
+        s["grand_total"] = sum(float(a.get("grand_total") or 0) for a in awbs_for_doc)
+        s["total_tariff"] = sum(float(a.get("total_tariff") or 0) for a in awbs_for_doc)
+        s["tax_amount"] = sum(float(a.get("tax_amount") or 0) for a in awbs_for_doc)
+        s["company_name"] = primary.get("company_name") if primary else None
+        s["customer_id"] = str(primary.get("customer_id")) if primary and primary.get("customer_id") else None
+        c = cmap.get(primary.get("customer_id")) if primary else None
+        s["customer_name"] = c["name"] if c else None
         out.append(s)
     return out
 
@@ -1581,13 +1646,18 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
     inv = await db.invoices.find_one({"_id": _oid(iid)})
     if not inv:
         raise HTTPException(404, "Invoice tidak ditemukan")
-    awb = await db.awb_orders.find_one({"_id": inv["awb_id"]})
-    cust = await db.customers.find_one({"_id": awb["customer_id"]}) if awb else None
+    # Support multi-AWB: gather all AWBs
+    awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+    awbs = await db.awb_orders.find({"_id": {"$in": awb_ids_list}}).to_list(100)
+    # Primary AWB (back-compat)
+    primary_awb = next((a for a in awbs if a["_id"] == inv.get("awb_id")), awbs[0] if awbs else None)
+    cust = await db.customers.find_one({"_id": primary_awb["customer_id"]}) if primary_awb else None
     settings = {s["key_name"]: s["key_value"] for s in await db.settings.find().to_list(1000)}
-    issuer = (awb or {}).get("company_name") or ""
+    issuer = (primary_awb or {}).get("company_name") or ""
     return {
         "invoice": serialize(inv),
-        "awb": serialize(awb),
+        "awb": serialize(primary_awb),
+        "awbs": [serialize(a) for a in awbs],
         "customer": serialize(cust),
         "company": {
             "name": issuer or settings.get("company_name", ""),
@@ -1599,6 +1669,107 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
             "bank_account": settings.get(f"bank_account_{issuer}", ""),
             "logo_b64": settings.get("invoice_logo_b64", ""),
         },
+    }
+
+class InvoicePrintIn(BaseModel):
+    use_old_date: Optional[bool] = False  # if True (and previously printed) → reuse first_printed_at
+    print_date: Optional[str] = None  # YYYY-MM-DD override
+
+@app.post("/api/invoices/{iid}/mark-printed")
+async def mark_invoice_printed(iid: str, data: InvoicePrintIn = InvoicePrintIn(), user: dict = Depends(get_current_user)):
+    """Tandai invoice telah dicetak. PADA CETAK PERTAMA: post AR journal + set invoice_date.
+    Pada cetak ulang: jika use_old_date=True → reuse tanggal lama. Jika False → update ke tanggal baru."""
+    inv = await db.invoices.find_one({"_id": _oid(iid)})
+    if not inv:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    now = datetime.now(timezone.utc)
+    if data.print_date:
+        try:
+            y, m, d = [int(x) for x in data.print_date.split("-")]
+            print_dt = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "print_date harus YYYY-MM-DD")
+    else:
+        print_dt = now
+
+    print_count = int(inv.get("print_count") or 0)
+    first_printed_at = inv.get("first_printed_at")
+    is_first = (print_count == 0 or not first_printed_at)
+
+    new_invoice_date = inv.get("invoice_date") or print_dt
+    if not is_first and data.use_old_date:
+        # reuse old invoice_date — do nothing
+        new_invoice_date = inv.get("invoice_date") or first_printed_at
+    elif not is_first and not data.use_old_date:
+        # update to new date
+        new_invoice_date = print_dt
+
+    upd = {
+        "last_printed_at": print_dt,
+        "print_count": print_count + 1,
+        "invoice_date": new_invoice_date,
+    }
+    if is_first:
+        upd["first_printed_at"] = print_dt
+
+    # If first print → post AR journal (idempotent via reference_type)
+    if is_first and not inv.get("ar_recognized"):
+        awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+        awbs = await db.awb_orders.find({"_id": {"$in": awb_ids_list}}).to_list(100)
+        total_dpp = sum(float(a.get("total_tariff") or 0) for a in awbs)
+        total_tax = sum(float(a.get("tax_amount") or 0) for a in awbs)
+        gross = round(total_dpp + total_tax, 2)
+        if gross > 0:
+            lines = [
+                {"account_code": "1201", "debit": gross, "credit": 0, "memo": inv["invoice_number"]},
+                {"account_code": "1290", "debit": 0, "credit": total_dpp, "memo": f"Clear PYMHD {inv['invoice_number']}"},
+            ]
+            if total_tax > 0:
+                lines.append({"account_code": "2210", "debit": 0, "credit": total_tax, "memo": f"PPN — {inv['invoice_number']}"})
+            try:
+                await post_journal(
+                    date=print_dt,
+                    description=f"Piutang & PPN — Invoice {inv['invoice_number']} dicetak",
+                    lines=lines,
+                    reference_type="invoice",
+                    reference_id=str(inv["_id"]),
+                    posted_by=user["id"],
+                )
+            except HTTPException:
+                pass
+        upd["ar_recognized"] = True
+
+    await db.invoices.update_one({"_id": inv["_id"]}, {"$set": upd})
+    new = await db.invoices.find_one({"_id": inv["_id"]})
+    return serialize(new)
+
+@app.post("/api/invoices/{iid}/cancel")
+async def cancel_invoice(iid: str, user: dict = Depends(require_role("operation"))):
+    """Cancel invoice: kembalikan AWB ke Reconciled, hapus jurnal terkait, hapus invoice doc."""
+    inv = await db.invoices.find_one({"_id": _oid(iid)})
+    if not inv:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+    # Refuse if any AWB is Paid
+    paid_awbs = await db.awb_orders.find({"_id": {"$in": awb_ids_list}, "status": "Paid"}).to_list(100)
+    if paid_awbs:
+        raise HTTPException(400, f"Tidak bisa cancel — sudah ada AWB yang Paid: {', '.join(a['awb_number'] for a in paid_awbs)}")
+    # Hapus invoice journal
+    journal_count = (await db.journal_entries.delete_many({
+        "reference_type": "invoice", "reference_id": str(inv["_id"])
+    })).deleted_count
+    # Kembalikan AWB ke Reconciled
+    await db.awb_orders.update_many(
+        {"_id": {"$in": awb_ids_list}},
+        {"$set": {"status": "Reconciled"}, "$unset": {"invoiced_at": ""}}
+    )
+    # Hapus invoice doc
+    await db.invoices.delete_one({"_id": inv["_id"]})
+    return {
+        "ok": True,
+        "invoice_number": inv["invoice_number"],
+        "awbs_reverted": [str(x) for x in awb_ids_list],
+        "journals_deleted": journal_count,
     }
 
 # ---------------------------------------------------------------------------
@@ -4753,7 +4924,8 @@ class CashAdvanceIn(BaseModel):
     notes: Optional[str] = None
 
 class CashAdvanceBreakdownItem(BaseModel):
-    awb_id: str
+    awb_id: Optional[str] = None  # None / "OPERATION" → direct cost ke operation (no AWB)
+    target: Optional[str] = None  # "awb" | "operation"
     amount: float
     description: Optional[str] = None
 
@@ -4845,12 +5017,30 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
     # Validate AWB breakdown if provided
     breakdown = []
     if data.awb_breakdown:
-        # Verify all AWBs exist and sum matches actual_amount
+        # Each item: target="awb" (with awb_id) or target="operation" (direct cost, no AWB)
         for it in data.awb_breakdown:
-            ao = await db.awb_orders.find_one({"_id": _oid(it.awb_id)})
-            if not ao:
-                raise HTTPException(400, f"AWB id {it.awb_id} tidak ditemukan")
-            breakdown.append({"awb_id": _oid(it.awb_id), "awb_number": ao["awb_number"], "amount": float(it.amount), "description": (it.description or "").strip() or None})
+            target = (it.target or ("operation" if not it.awb_id else "awb")).lower()
+            if target == "operation":
+                breakdown.append({
+                    "target": "operation",
+                    "awb_id": None,
+                    "awb_number": None,
+                    "amount": float(it.amount),
+                    "description": (it.description or "").strip() or None,
+                })
+            else:
+                if not it.awb_id:
+                    raise HTTPException(400, "AWB id wajib jika target=awb")
+                ao = await db.awb_orders.find_one({"_id": _oid(it.awb_id)})
+                if not ao:
+                    raise HTTPException(400, f"AWB id {it.awb_id} tidak ditemukan")
+                breakdown.append({
+                    "target": "awb",
+                    "awb_id": _oid(it.awb_id),
+                    "awb_number": ao["awb_number"],
+                    "amount": float(it.amount),
+                    "description": (it.description or "").strip() or None,
+                })
         total_breakdown = sum(b["amount"] for b in breakdown)
         actual = float(data.actual_amount if data.actual_amount is not None else total_breakdown)
         if abs(total_breakdown - actual) > 0.01:
@@ -4876,27 +5066,43 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
             "settled_at": sd,
             "settled_by": user["id"],
             "settle_notes": (data.notes or "").strip() or None,
-            "awb_breakdown": [{**b, "awb_id": str(b["awb_id"])} for b in breakdown] if breakdown else None,
+            "awb_breakdown": [{**b, "awb_id": str(b["awb_id"]) if b.get("awb_id") else None} for b in breakdown] if breakdown else None,
         }},
     )
-    # If breakdown given: create awb_costs for each AWB (Operational, settled)
+    # If breakdown given: create awb_costs for AWB targets / direct journals for Operation targets
     for b in breakdown:
-        cdoc = {
-            "awb_id": b["awb_id"],
-            "cost_category": "Operational",
-            "amount": b["amount"],
-            "description": (b["description"] or f"Panjar {ca['number']} - {ca['recipient_name']}"),
-            "sub_label": "Panjar",
-            "vendor_name": None,
-            "payment_type": "Cash",
-            "is_settled": True,
-            "cash_account_code": cash_acc,
-            "source": "cash_advance_settle",
-            "source_ref": cid,
-            "created_by": user["id"],
-            "created_at": sd,
-        }
-        await db.awb_costs.insert_one(cdoc)
+        if b.get("target") == "operation":
+            # Direct cost (Operation, no AWB) — post journal DR 5102 / CR 1101 already covered globally below
+            # But to keep accounting simple, we don't create awb_costs row. We record a marker doc in petty_cash for visibility.
+            await db.petty_cash.insert_one({
+                "number": await next_petty_cash_number(),
+                "category": "Operational",
+                "amount": float(b["amount"]),
+                "description": (b["description"] or f"Settle Panjar {ca['number']} - {ca['recipient_name']}"),
+                "expense_date": sd,
+                "cash_account_code": cash_acc,
+                "source": "panjar_settle",
+                "source_ref": cid,
+                "created_by": user["id"],
+                "created_at": sd,
+            })
+        else:
+            cdoc = {
+                "awb_id": b["awb_id"],
+                "cost_category": "Operational",
+                "amount": b["amount"],
+                "description": (b["description"] or f"Panjar {ca['number']} - {ca['recipient_name']}"),
+                "sub_label": "Panjar",
+                "vendor_name": None,
+                "payment_type": "Cash",
+                "is_settled": True,
+                "cash_account_code": cash_acc,
+                "source": "cash_advance_settle",
+                "source_ref": cid,
+                "created_by": user["id"],
+                "created_at": sd,
+            }
+            await db.awb_costs.insert_one(cdoc)
     # Journal: DR 5105 actual + DR cash refund / CR 1108
     # (When breakdown is used, the cost is logically 5102 per-AWB, but since panjar accrual sits on 1108,
     #  we still credit 1108. For simplicity always post to 5105 to balance 1108 release.)
@@ -5523,3 +5729,319 @@ async def reclass_cost_to_accrue(cid: str, user: dict = Depends(require_role("fi
     except HTTPException:
         pass
     return {"ok": True}
+
+# ===========================================================================
+# Petty Cash / Panjar Non-AWB (Operational expenses without AWB) — direct cost
+# Lintas, Operational, Umum, Kantor, dll. Semua masuk sebagai HPP (5102).
+# ===========================================================================
+PETTY_CASH_CATEGORIES = ["Operational", "Lintas", "Umum", "Kantor", "Lainnya"]
+
+class PettyCashIn(BaseModel):
+    category: str  # one of PETTY_CASH_CATEGORIES
+    amount: float
+    description: Optional[str] = None
+    expense_date: Optional[str] = None  # YYYY-MM-DD; default today
+    cash_account_code: Optional[str] = None  # default 1101
+
+async def next_petty_cash_number() -> str:
+    yyyymm = datetime.now(timezone.utc).strftime("%Y%m")
+    prefix = f"PC-{yyyymm}-"
+    last = await db.petty_cash.find_one({"number": {"$regex": f"^{prefix}"}}, sort=[("number", -1)])
+    seq = 1
+    if last:
+        m = re.search(r"-(\d+)$", last["number"])
+        if m:
+            seq = int(m.group(1)) + 1
+    return f"{prefix}{seq:04d}"
+
+@app.get("/api/petty-cash")
+async def list_petty_cash(month: Optional[str] = None, user: dict = Depends(get_current_user)):
+    q = {}
+    if month:
+        try:
+            year, mon = month.split("-")
+            year, mon = int(year), int(mon)
+            start = datetime(year, mon, 1, tzinfo=timezone.utc)
+            end = datetime(year + (1 if mon == 12 else 0), 1 if mon == 12 else mon + 1, 1, tzinfo=timezone.utc)
+            q["expense_date"] = {"$gte": start, "$lt": end}
+        except Exception:
+            pass
+    docs = await db.petty_cash.find(q).sort("expense_date", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/petty-cash")
+async def create_petty_cash(data: PettyCashIn, user: dict = Depends(require_role("finance", "operation"))):
+    if data.category not in PETTY_CASH_CATEGORIES:
+        raise HTTPException(400, f"Kategori harus salah satu: {', '.join(PETTY_CASH_CATEGORIES)}")
+    if data.amount <= 0:
+        raise HTTPException(400, "Nominal harus > 0")
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    if data.expense_date:
+        try:
+            y, m, d = [int(x) for x in data.expense_date.split("-")]
+            now = datetime.now(timezone.utc)
+            exp_date = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "expense_date harus YYYY-MM-DD")
+    else:
+        exp_date = datetime.now(timezone.utc)
+    doc = {
+        "number": await next_petty_cash_number(),
+        "category": data.category,
+        "amount": float(data.amount),
+        "description": (data.description or "").strip() or None,
+        "expense_date": exp_date,
+        "cash_account_code": cash_acc,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.petty_cash.insert_one(doc)
+    # Journal: DR 5102 (Operational/direct cost as HPP) / CR Kas/Bank
+    try:
+        await post_journal(
+            date=exp_date,
+            description=f"Petty Cash {doc['number']} — {data.category}: {data.description or ''}",
+            lines=[
+                {"account_code": "5102", "debit": doc["amount"], "credit": 0, "memo": f"{data.category} - {doc['number']}"},
+                {"account_code": cash_acc, "debit": 0, "credit": doc["amount"], "memo": doc["number"]},
+            ],
+            reference_type="petty_cash", reference_id=str(r.inserted_id), posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
+    return serialize(await db.petty_cash.find_one({"_id": r.inserted_id}))
+
+@app.delete("/api/petty-cash/{pid}")
+async def delete_petty_cash(pid: str, user: dict = Depends(require_role("administrator", "finance"))):
+    pc = await db.petty_cash.find_one({"_id": _oid(pid)})
+    if not pc:
+        raise HTTPException(404, "Petty cash tidak ditemukan")
+    await db.petty_cash.delete_one({"_id": _oid(pid)})
+    await db.journal_entries.delete_many({"reference_type": "petty_cash", "reference_id": pid})
+    return {"ok": True, "deleted": pc.get("number")}
+
+# ===========================================================================
+# PO / Surat Perintah Vendor (Manifest) — bisa dengan/tanpa AWB
+# ===========================================================================
+class POIn(BaseModel):
+    vendor_name: str
+    description: str
+    amount: float
+    awb_id: Optional[str] = None  # optional — jika ada → otomatis cost ke AWB tersebut
+    po_date: Optional[str] = None
+    notes: Optional[str] = None
+
+async def next_po_number() -> str:
+    yyyymm = datetime.now(timezone.utc).strftime("%Y%m")
+    prefix = f"PO-{yyyymm}-"
+    last = await db.purchase_orders.find_one({"number": {"$regex": f"^{prefix}"}}, sort=[("number", -1)])
+    seq = 1
+    if last:
+        m = re.search(r"-(\d+)$", last["number"])
+        if m:
+            seq = int(m.group(1)) + 1
+    return f"{prefix}{seq:04d}"
+
+@app.get("/api/purchase-orders")
+async def list_purchase_orders(user: dict = Depends(get_current_user)):
+    docs = await db.purchase_orders.find().sort("po_date", -1).to_list(2000)
+    out = []
+    for d in docs:
+        s = serialize(d)
+        if d.get("awb_id"):
+            awb = await db.awb_orders.find_one({"_id": d["awb_id"]})
+            s["awb_number"] = awb["awb_number"] if awb else None
+        out.append(s)
+    return out
+
+@app.post("/api/purchase-orders")
+async def create_purchase_order(data: POIn, user: dict = Depends(require_role("operation", "finance"))):
+    if data.amount <= 0:
+        raise HTTPException(400, "Nominal PO harus > 0")
+    if data.po_date:
+        try:
+            y, m, d = [int(x) for x in data.po_date.split("-")]
+            now = datetime.now(timezone.utc)
+            po_dt = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "po_date harus YYYY-MM-DD")
+    else:
+        po_dt = datetime.now(timezone.utc)
+    doc = {
+        "number": await next_po_number(),
+        "vendor_name": data.vendor_name.strip(),
+        "description": data.description.strip(),
+        "amount": float(data.amount),
+        "awb_id": _oid(data.awb_id) if data.awb_id else None,
+        "po_date": po_dt,
+        "notes": (data.notes or "").strip() or None,
+        "status": "Open",  # Open / Received POD / Cancelled
+        "linked_cost_id": None,  # if AWB given, auto-create cost
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.purchase_orders.insert_one(doc)
+    # If AWB given → auto-create vendor cost (accrue) on that AWB
+    if data.awb_id:
+        awb = await db.awb_orders.find_one({"_id": _oid(data.awb_id)})
+        if not awb:
+            raise HTTPException(400, "AWB id tidak ditemukan")
+        cost_doc = {
+            "awb_id": _oid(data.awb_id),
+            "cost_category": "Vendor",
+            "amount": float(data.amount),
+            "description": f"PO {doc['number']} - {data.description}",
+            "sub_label": "PO Vendor",
+            "vendor_name": data.vendor_name.strip(),
+            "payment_type": "Accrue",
+            "is_settled": False,
+            "source": "purchase_order",
+            "source_ref": str(r.inserted_id),
+            "created_by": user["id"],
+            "created_at": po_dt,
+        }
+        cr = await db.awb_costs.insert_one(cost_doc)
+        await db.purchase_orders.update_one({"_id": r.inserted_id}, {"$set": {"linked_cost_id": str(cr.inserted_id)}})
+        # Journal: DR 5101 Vendor / CR 2101 Hutang Usaha
+        try:
+            await post_journal(
+                date=po_dt,
+                description=f"PO {doc['number']} → cost {awb['awb_number']}",
+                lines=[
+                    {"account_code": "5101", "debit": doc["amount"], "credit": 0, "memo": f"PO {doc['number']} - {data.vendor_name}"},
+                    {"account_code": "2101", "debit": 0, "credit": doc["amount"], "memo": data.vendor_name},
+                ],
+                reference_type="cost", reference_id=str(cr.inserted_id), posted_by=user["id"],
+            )
+        except HTTPException:
+            pass
+        try:
+            await recognize_revenue_for_awb(_oid(data.awb_id), user["id"], trigger_date=po_dt)
+        except Exception:
+            pass
+    return serialize(await db.purchase_orders.find_one({"_id": r.inserted_id}))
+
+class POReceiveIn(BaseModel):
+    pod_date: Optional[str] = None
+    pod_notes: Optional[str] = None
+
+@app.post("/api/purchase-orders/{pid}/receive-pod")
+async def receive_pod(pid: str, data: POReceiveIn = POReceiveIn(), user: dict = Depends(get_current_user)):
+    po = await db.purchase_orders.find_one({"_id": _oid(pid)})
+    if not po:
+        raise HTTPException(404, "PO tidak ditemukan")
+    if data.pod_date:
+        try:
+            y, m, d = [int(x) for x in data.pod_date.split("-")]
+            now = datetime.now(timezone.utc)
+            pod_dt = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "pod_date harus YYYY-MM-DD")
+    else:
+        pod_dt = datetime.now(timezone.utc)
+    await db.purchase_orders.update_one(
+        {"_id": _oid(pid)},
+        {"$set": {"status": "Received POD", "pod_date": pod_dt, "pod_notes": (data.pod_notes or "").strip() or None, "pod_received_by": user["id"]}}
+    )
+    return serialize(await db.purchase_orders.find_one({"_id": _oid(pid)}))
+
+@app.delete("/api/purchase-orders/{pid}")
+async def delete_purchase_order(pid: str, user: dict = Depends(require_role("administrator", "operation"))):
+    po = await db.purchase_orders.find_one({"_id": _oid(pid)})
+    if not po:
+        raise HTTPException(404, "PO tidak ditemukan")
+    # Cascade: hapus linked cost & journal-nya
+    if po.get("linked_cost_id"):
+        try:
+            cid = po["linked_cost_id"]
+            cost = await db.awb_costs.find_one({"_id": _oid(cid)})
+            if cost:
+                if cost.get("is_settled"):
+                    raise HTTPException(400, "Cost terkait sudah disettle — tidak bisa hapus PO. Reverse pembayaran dulu.")
+                await db.awb_costs.delete_one({"_id": _oid(cid)})
+                await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": cid})
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+    await db.purchase_orders.delete_one({"_id": _oid(pid)})
+    return {"ok": True, "deleted": po.get("number")}
+
+# ===========================================================================
+# Sender memory (autocomplete pengirim) — per customer
+# ===========================================================================
+@app.get("/api/sender-suggestions")
+async def sender_suggestions(customer_id: str, user: dict = Depends(get_current_user)):
+    docs = await db.sender_memory.find({"customer_id": _oid(customer_id)}).sort("last_used", -1).to_list(200)
+    return [{"id": str(d["_id"]), "name": d.get("name"), "use_count": d.get("use_count", 0)} for d in docs]
+
+@app.delete("/api/sender-suggestions/{sid}")
+async def delete_sender_suggestion(sid: str, user: dict = Depends(get_current_user)):
+    await db.sender_memory.delete_one({"_id": _oid(sid)})
+    return {"ok": True}
+
+# ===========================================================================
+# Vendor Aging — hutang vendor (akrual) bucket by umur
+# ===========================================================================
+@app.get("/api/reports/vendor-aging")
+async def vendor_aging(as_of: Optional[str] = None, user: dict = Depends(get_current_user)):
+    """Aging hutang vendor (accrue & belum settled) per vendor + bucket umur."""
+    if as_of:
+        try:
+            y, m, d = [int(x) for x in as_of.split("-")]
+            ref_date = datetime(y, m, d, 23, 59, 59, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "as_of harus YYYY-MM-DD")
+    else:
+        ref_date = datetime.now(timezone.utc)
+    # Outstanding = accrued vendor costs (is_settled=false)
+    costs = await db.awb_costs.find({
+        "cost_category": "Vendor",
+        "payment_type": "Accrue",
+        "is_settled": {"$ne": True},
+    }).to_list(20000)
+    awb_ids = list({c["awb_id"] for c in costs if c.get("awb_id")})
+    amap = {a["_id"]: a for a in await db.awb_orders.find({"_id": {"$in": awb_ids}}).to_list(20000)}
+    buckets = ["0-30", "31-60", "61-90", "90+"]
+    by_vendor: dict = {}
+    for c in costs:
+        vendor = (c.get("vendor_name") or "(Tanpa nama vendor)").strip() or "(Tanpa nama vendor)"
+        cdate = c.get("created_at") or ref_date
+        days = max(0, (ref_date - cdate).days) if isinstance(cdate, datetime) else 0
+        if days <= 30:
+            bucket = "0-30"
+        elif days <= 60:
+            bucket = "31-60"
+        elif days <= 90:
+            bucket = "61-90"
+        else:
+            bucket = "90+"
+        amt = float(c.get("amount") or 0)
+        if vendor not in by_vendor:
+            by_vendor[vendor] = {"vendor": vendor, "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0, "items": []}
+        by_vendor[vendor][bucket] += amt
+        by_vendor[vendor]["total"] += amt
+        awb_doc = amap.get(c.get("awb_id"))
+        by_vendor[vendor]["items"].append({
+            "cost_id": str(c["_id"]),
+            "awb_number": awb_doc["awb_number"] if awb_doc else "",
+            "amount": amt,
+            "created_at": cdate.isoformat() if isinstance(cdate, datetime) else None,
+            "days": days,
+            "bucket": bucket,
+            "description": c.get("description") or "",
+        })
+    rows = list(by_vendor.values())
+    rows.sort(key=lambda r: r["total"], reverse=True)
+    totals = {b: sum(r[b] for r in rows) for b in buckets}
+    totals["total"] = sum(r["total"] for r in rows)
+    return {
+        "as_of": ref_date.isoformat(),
+        "buckets": buckets,
+        "rows": rows,
+        "totals": totals,
+        "count_vendors": len(rows),
+    }

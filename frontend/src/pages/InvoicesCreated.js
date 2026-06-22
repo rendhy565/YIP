@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet } from "lucide-react";
+import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -46,6 +46,50 @@ export default function InvoicesCreated() {
   const toggleAll = () => {
     if (selected.size === filtered.length) setSelected(new Set());
     else setSelected(new Set(filtered.map((i) => i.id)));
+  };
+
+  const cancelInvoice = async (inv) => {
+    if (!window.confirm(
+      `PERINGATAN: Membatalkan invoice ${inv.invoice_number}\n\n`+
+      `Efek:\n`+
+      `• AWB ${(inv.awb_numbers || [inv.awb_number]).join(", ")} kembali ke status RECONCILED (siap dibuat invoice ulang)\n`+
+      `• Jurnal Piutang & PPN dihapus (akunting dibalik)\n`+
+      `• Tidak bisa dilakukan jika sudah ada pembayaran (Paid)\n\n`+
+      `Lanjutkan?`
+    )) return;
+    try {
+      const r = await api.post(`/invoices/${inv.id}/cancel`);
+      toast.success(`Invoice ${r.data.invoice_number} dibatalkan. ${r.data.awbs_reverted.length} AWB → Reconciled. ${r.data.journals_deleted} jurnal dihapus.`);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const handlePrint = async (inv) => {
+    // Warn if already printed
+    if (inv.print_count > 0 && inv.invoice_date) {
+      const printedDate = new Date(inv.invoice_date);
+      const now = new Date();
+      const sameMonth = printedDate.getMonth() === now.getMonth() && printedDate.getFullYear() === now.getFullYear();
+      const dateLabel = printedDate.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+      let msg = `Invoice ini sudah pernah dicetak pada ${dateLabel}.\nApakah Anda mau cetak ulang?\n\n` +
+                `OK = pakai tanggal LAMA (${dateLabel})\nCancel = pakai tanggal BARU (hari ini)`;
+      if (!sameMonth) {
+        msg = `⚠ PERINGATAN: Tanggal cetak lama (${dateLabel}) sudah LEWAT BULAN!\n\n` + msg;
+      }
+      const useOld = window.confirm(msg);
+      try {
+        await api.post(`/invoices/${inv.id}/mark-printed`, { use_old_date: useOld });
+        window.open(`/arc/invoices/${inv.id}/print`, "_blank");
+      } catch (e) { toast.error(errMsg(e)); }
+    } else {
+      // First print
+      try {
+        await api.post(`/invoices/${inv.id}/mark-printed`, { use_old_date: false });
+        toast.success("Invoice dicetak — Piutang tercatat & tanggal invoice diset");
+        window.open(`/arc/invoices/${inv.id}/print`, "_blank");
+        load();
+      } catch (e) { toast.error(errMsg(e)); }
+    }
   };
 
   const targetIds = () => (selected.size > 0 ? Array.from(selected) : filtered.map((i) => i.id));
@@ -177,16 +221,43 @@ export default function InvoicesCreated() {
                   </button>
                 </Td>
                 <Td className="font-mono font-semibold">{i.invoice_number}</Td>
-                <Td className="font-mono">{i.awb_number}</Td>
+                <Td className="font-mono">
+                  {i.awb_count > 1 ? (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="text-[10px] uppercase font-bold bg-purple-100 text-purple-800 rounded px-1.5 py-0.5">{i.awb_count} AWB</span>
+                      <span className="text-xs text-slate-600" title={(i.awb_numbers || []).join(", ")}>
+                        {(i.awb_numbers || [])[0]}{i.awb_count > 1 ? `...` : ""}
+                      </span>
+                    </span>
+                  ) : i.awb_number}
+                </Td>
                 <Td className="text-xs">{i.company_name || <span className="text-slate-400">—</span>}</Td>
                 <Td>{i.customer_name}</Td>
-                <Td className="text-xs text-slate-600">{fmtDate(i.created_at)}</Td>
+                <Td className="text-xs text-slate-600">
+                  {i.invoice_date ? (
+                    <span className="font-semibold text-blue-700">{fmtDate(i.invoice_date)}</span>
+                  ) : (
+                    <span className="text-amber-700">Belum dicetak</span>
+                  )}
+                </Td>
                 <Td className="text-right font-semibold">{fmtIDR(i.grand_total)}</Td>
                 <Td><StatusBadge status={i.awb_status}/></Td>
                 <Td className="text-right">
-                  <Link to={`/invoices/${i.id}/print`} target="_blank">
-                    <Button variant="secondary" data-testid={`print-invoice-${i.id}`}><Printer size={14}/> Print</Button>
-                  </Link>
+                  <div className="flex gap-1 justify-end">
+                    <Button
+                      variant={i.print_count > 0 ? "secondary" : "default"}
+                      data-testid={`print-invoice-${i.id}`}
+                      onClick={() => handlePrint(i)}
+                      className={i.print_count > 0 ? "!bg-amber-100 !text-amber-900 hover:!bg-amber-200 !border-amber-300" : ""}
+                    >
+                      <Printer size={14}/> {i.print_count > 0 ? `Cetak Ulang (${i.print_count}x)` : "Cetak"}
+                    </Button>
+                    {i.awb_status !== "Paid" && (
+                      <Button variant="secondary" data-testid={`cancel-invoice-${i.id}`} onClick={() => cancelInvoice(i)} className="!bg-rose-50 !text-rose-700 hover:!bg-rose-100 !border-rose-200">
+                        <X size={14}/> Cancel
+                      </Button>
+                    )}
+                  </div>
                 </Td>
               </tr>
             ))}

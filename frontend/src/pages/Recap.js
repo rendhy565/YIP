@@ -124,6 +124,12 @@ export default function Recap() {
   const reconcileSelected = async () => {
     const ids = selected.size > 0 ? Array.from(selected) : readyRows.map((r) => r.id);
     if (ids.length === 0) { toast.error("Tidak ada AWB siap rekonsiliasi"); return; }
+    // Validate received_at first
+    const notReceived = readyRows.filter((r) => ids.includes(r.id) && !r.received_at);
+    if (notReceived.length > 0) {
+      toast.error(`Barang belum diterima — tidak bisa direkonsiliasi: ${notReceived.slice(0, 3).map((r) => r.awb_number).join(", ")}${notReceived.length > 3 ? "..." : ""}`);
+      return;
+    }
     try {
       const r = await api.post("/orders/reconcile", { awb_ids: ids });
       toast.success(`${r.data.updated} AWB direkonsiliasi${r.data.skipped_no_cost ? ` (${r.data.skipped_no_cost} di-skip: belum ada cost)` : ""}`);
@@ -132,7 +138,7 @@ export default function Recap() {
   };
 
   const revert = async (id) => {
-    if (!window.confirm("Kembalikan AWB ini ke status Open?")) return;
+    if (!window.confirm("PERINGATAN: Revert AWB ini ke status Open. Jika sudah ada cost/akuntansi, mereka tetap. Lanjutkan?")) return;
     try { await api.post(`/orders/${id}/revert-to-open`); toast.success("Direvert ke Open"); load(); }
     catch (e) { toast.error(errMsg(e)); }
   };
@@ -370,13 +376,16 @@ export default function Recap() {
           </tr></thead>
           <tbody>
             {pagReady.paged.map((r) => (
-              <tr key={r.id} data-testid={`ready-row-${r.id}`}>
+              <tr key={r.id} data-testid={`ready-row-${r.id}`} className={!r.received_at ? "bg-amber-50/50" : ""}>
                 <Td>
-                  <button onClick={() => toggle(r.id)}>
-                    {selected.has(r.id) ? <CheckSquare size={14} className="text-blue-700"/> : <Square size={14} className="text-slate-400"/>}
+                  <button onClick={() => toggle(r.id)} disabled={!r.received_at} title={!r.received_at ? "Barang belum diterima — tidak bisa direkonsiliasi" : ""}>
+                    {selected.has(r.id) ? <CheckSquare size={14} className="text-blue-700"/> : <Square size={14} className={r.received_at ? "text-slate-400" : "text-slate-300"}/>}
                   </button>
                 </Td>
-                <Td className="font-mono font-semibold">{r.awb_number}</Td>
+                <Td className="font-mono font-semibold">
+                  {r.awb_number}
+                  {!r.received_at && <span className="ml-1 text-[10px] uppercase font-bold text-amber-700 bg-amber-100 rounded px-1">belum diterima</span>}
+                </Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
                 <Td className="text-xs">{r.reff_no || "-"}</Td>
                 <Td>{r.customer_name}</Td>

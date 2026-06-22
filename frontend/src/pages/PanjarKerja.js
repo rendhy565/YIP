@@ -52,10 +52,10 @@ export default function PanjarKerja() {
   const openSettle = (r) => {
     setSettleFor(r);
     setSettleForm({ refund_amount: "0", settle_date: todayStr(), notes: "" });
-    setBreakdown([{ awb_id: "", amount: "", description: "" }]);
+    setBreakdown([{ target: "awb", awb_id: "", amount: "", description: "" }]);
   };
 
-  const addRow = () => setBreakdown([...breakdown, { awb_id: "", amount: "", description: "" }]);
+  const addRow = (target = "awb") => setBreakdown([...breakdown, { target, awb_id: "", amount: "", description: "" }]);
   const removeRow = (idx) => setBreakdown(breakdown.filter((_, i) => i !== idx));
   const updateRow = (idx, key, val) => setBreakdown(breakdown.map((b, i) => i === idx ? { ...b, [key]: val } : b));
 
@@ -66,8 +66,14 @@ export default function PanjarKerja() {
   const isBalanced = Math.abs(settleTotal - panjarAmt) < 0.01;
 
   const doSettle = async () => {
-    if (breakdown.some((b) => !b.awb_id || !b.amount || parseFloat(b.amount) <= 0)) {
-      toast.error("Lengkapi semua baris breakdown (AWB & nominal)"); return;
+    // Validate each row
+    for (const b of breakdown) {
+      if (!b.amount || parseFloat(b.amount) <= 0) {
+        toast.error("Lengkapi semua baris breakdown (nominal > 0)"); return;
+      }
+      if ((b.target || "awb") === "awb" && !b.awb_id) {
+        toast.error("Untuk target AWB, pilih AWB-nya"); return;
+      }
     }
     if (!isBalanced) {
       toast.error(`Total breakdown (${fmtIDR(breakdownTotal)}) + refund (${fmtIDR(refund)}) harus sama dengan panjar (${fmtIDR(panjarAmt)})`);
@@ -81,12 +87,13 @@ export default function PanjarKerja() {
         settle_date: settleForm.settle_date,
         notes: settleForm.notes,
         awb_breakdown: breakdown.map((b) => ({
-          awb_id: b.awb_id,
+          target: b.target || "awb",
+          awb_id: (b.target === "operation") ? null : b.awb_id,
           amount: parseFloat(b.amount),
           description: b.description || null,
         })),
       });
-      toast.success(`Panjar ${settleFor.number} disettle ke ${breakdown.length} AWB`);
+      toast.success(`Panjar ${settleFor.number} disettle ke ${breakdown.length} item`);
       setSettleFor(null);
       load();
     } catch (e) { toast.error(errMsg(e)); }
@@ -209,35 +216,53 @@ export default function PanjarKerja() {
             <div className="space-y-4">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500">Breakdown ke AWB (otomatis jadi cost per AWB)</h4>
-                  <button type="button" onClick={addRow} className="text-[11px] font-bold text-blue-700 hover:text-blue-900 inline-flex items-center gap-1"><Plus size={12}/> Baris</button>
+                  <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500">Breakdown ke AWB / Operation</h4>
+                  <div className="flex gap-2">
+                    <button type="button" data-testid="add-awb-row-btn" onClick={() => addRow("awb")} className="text-[11px] font-bold text-blue-700 hover:text-blue-900 inline-flex items-center gap-1"><Plus size={12}/> Baris AWB</button>
+                    <button type="button" data-testid="add-operation-row-btn" onClick={() => addRow("operation")} className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1"><Plus size={12}/> Baris Operation</button>
+                  </div>
                 </div>
                 <div className="space-y-2">
-                  {breakdown.map((b, i) => (
-                    <div key={i} className="grid grid-cols-12 gap-2 items-center" data-testid={`breakdown-row-${i}`}>
-                      <div className="col-span-5">
-                        <SearchableSelect
-                          testid={`breakdown-awb-${i}`}
-                          value={b.awb_id}
-                          onChange={(v) => updateRow(i, "awb_id", v)}
-                          options={allOrders.map((o) => ({ value: o.id, label: o.awb_number, sub: `${o.status} · ${o.customer_name} · ${o.origin}→${o.destination}` }))}
-                          placeholder="— Pilih AWB —"
-                          emptyText="AWB tidak ditemukan"
-                        />
+                  {breakdown.map((b, i) => {
+                    const target = b.target || "awb";
+                    return (
+                      <div key={i} className="grid grid-cols-12 gap-2 items-center" data-testid={`breakdown-row-${i}`}>
+                        <div className="col-span-2">
+                          <Select data-testid={`breakdown-target-${i}`} value={target} onChange={(e) => updateRow(i, "target", e.target.value)}>
+                            <option value="awb">AWB</option>
+                            <option value="operation">Operation</option>
+                          </Select>
+                        </div>
+                        <div className="col-span-3">
+                          {target === "awb" ? (
+                            <SearchableSelect
+                              testid={`breakdown-awb-${i}`}
+                              value={b.awb_id}
+                              onChange={(v) => updateRow(i, "awb_id", v)}
+                              options={allOrders.map((o) => ({ value: o.id, label: o.awb_number, sub: `${o.status} · ${o.customer_name} · ${o.origin}→${o.destination}` }))}
+                              placeholder="— Pilih AWB —"
+                              emptyText="AWB tidak ditemukan"
+                            />
+                          ) : (
+                            <div className="px-2 py-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded">
+                              Direct Cost → HPP Operation
+                            </div>
+                          )}
+                        </div>
+                        <div className="col-span-3">
+                          <Input data-testid={`breakdown-amount-${i}`} type="number" step="0.01" placeholder="Nominal (IDR)" value={b.amount} onChange={(e) => updateRow(i, "amount", e.target.value)}/>
+                        </div>
+                        <div className="col-span-3">
+                          <Input data-testid={`breakdown-desc-${i}`} placeholder="Deskripsi (opsional)" value={b.description} onChange={(e) => updateRow(i, "description", e.target.value)}/>
+                        </div>
+                        <div className="col-span-1 text-right">
+                          {breakdown.length > 1 && (
+                            <button type="button" onClick={() => removeRow(i)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
+                          )}
+                        </div>
                       </div>
-                      <div className="col-span-3">
-                        <Input data-testid={`breakdown-amount-${i}`} type="number" step="0.01" placeholder="Nominal (IDR)" value={b.amount} onChange={(e) => updateRow(i, "amount", e.target.value)}/>
-                      </div>
-                      <div className="col-span-3">
-                        <Input data-testid={`breakdown-desc-${i}`} placeholder="Deskripsi (opsional)" value={b.description} onChange={(e) => updateRow(i, "description", e.target.value)}/>
-                      </div>
-                      <div className="col-span-1 text-right">
-                        {breakdown.length > 1 && (
-                          <button type="button" onClick={() => removeRow(i)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 

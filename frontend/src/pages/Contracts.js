@@ -5,7 +5,7 @@ import { errMsg, fmtIDR } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X } from "lucide-react";
 
-const empty = { customer_id: "", origin: "", destination: "", price_per_kg: 0, via: "" };
+const empty = { customer_id: "", origin: "", destination: "", price_per_kg: 0, via: "", minimum_kg: "" };
 
 const VIA_LABEL = { D: "Darat", L: "Laut", U: "Udara" };
 
@@ -29,6 +29,7 @@ export default function Contracts() {
       await api.post("/contracts", {
         ...form,
         price_per_kg: parseFloat(form.price_per_kg),
+        minimum_kg: form.minimum_kg === "" ? null : parseFloat(form.minimum_kg),
         via: form.via || null,
       });
       toast.success("Perjanjian Rate dibuat");
@@ -52,7 +53,7 @@ export default function Contracts() {
         <Table>
           <thead><tr>
             <Th>Customer</Th><Th>Origin</Th><Th>Destination</Th><Th>Via</Th>
-            <Th className="text-right">Tarif / Kg</Th><Th></Th>
+            <Th className="text-right">Tarif / Kg</Th><Th className="text-right">Min Kg</Th><Th></Th>
           </tr></thead>
           <tbody>
             {rows.map((r) => (
@@ -68,10 +69,11 @@ export default function Contracts() {
                   ) : <span className="text-slate-400 text-xs">—</span>}
                 </Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.price_per_kg)}</Td>
+                <Td className="text-right text-xs">{r.minimum_kg ? `${r.minimum_kg} kg` : <span className="text-slate-400">—</span>}</Td>
                 <Td className="text-right"><button onClick={() => del(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button></Td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><Td colSpan={6} className="text-center text-slate-500 py-8">Belum ada perjanjian rate.</Td></tr>}
+            {rows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-8">Belum ada perjanjian rate.</Td></tr>}
           </tbody>
         </Table>
       </Card>
@@ -111,6 +113,10 @@ export default function Contracts() {
                   <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Harga per Kg (IDR) *</label>
                   <Input data-testid="contract-price-input" type="number" step="0.01" value={form.price_per_kg} onChange={(e) => setForm({ ...form, price_per_kg: e.target.value })} required />
                 </div>
+              </div>
+              <div>
+                <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Minimum Berat (Kg) — opsional</label>
+                <Input data-testid="contract-min-kg-input" type="number" step="0.01" min="0" value={form.minimum_kg} onChange={(e) => setForm({ ...form, minimum_kg: e.target.value })} placeholder="Mis. 50 (artinya order < 50kg tetap ditagih 50kg)"/>
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="secondary" type="button" onClick={() => setOpen(false)}>Batal</Button>

@@ -520,7 +520,6 @@ export default function AnalyticsDashboard() {
                 <ColHead align="right" onClick={() => sortCol("total_tariff")} sorted={sortBy === "total_tariff" ? sortDir : null}>Selling</ColHead>
                 <ColHead align="right">PPN</ColHead>
                 <ColHead align="right" onClick={() => sortCol("grand_total")} sorted={sortBy === "grand_total" ? sortDir : null}>Inv+PPN</ColHead>
-                <ColHead align="right">Cashback</ColHead>
                 <ColHead align="right">PPh 2%</ColHead>
                 <ColHead align="right">Total Biaya</ColHead>
                 <ColHead align="right">Margin Rp</ColHead>
@@ -532,7 +531,7 @@ export default function AnalyticsDashboard() {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={22} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
+                <tr><td colSpan={21} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
               )}
               {rows.map((r, i) => (
                 <tr key={r.id} className="hover:bg-blue-50/40 border-b border-slate-100">
@@ -550,7 +549,6 @@ export default function AnalyticsDashboard() {
                   <td className="px-3 py-2 text-right font-mono">{fmtIDR(r.selling)}</td>
                   <td className="px-3 py-2 text-right font-mono text-xs">{fmtIDR(r.ppn)}</td>
                   <td className="px-3 py-2 text-right font-mono font-bold">{fmtIDR(r.inv_ppn)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-rose-700">{r.cashback ? fmtIDR(r.cashback) : "-"}</td>
                   <td className="px-3 py-2 text-right font-mono text-xs text-rose-700">{r.pph_final ? fmtIDR(r.pph_final) : "-"}</td>
                   <td className="px-3 py-2 text-right font-mono text-rose-700">{fmtIDR(r.total_costs)}</td>
                   <td className={`px-3 py-2 text-right font-mono font-bold ${r.margin >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtIDR(r.margin)}</td>

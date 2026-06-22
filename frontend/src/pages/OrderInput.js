@@ -26,7 +26,8 @@ const COMPANY_OPTIONS = [
   { value: "PT. Abirama Mitra Pratama", label: "PT. Abirama Mitra Pratama" },
 ];
 
-const SERVICE_OPTIONS = ["LCL", "FCL", "LTL", "FTL", "AIR"];
+const SERVICE_OPTIONS = ["LCL", "FCL", "LTL", "FTL", "AIR", "Lumpsum"];
+const CHARTER_SERVICES = ["FCL", "FTL", "Lumpsum"]; // single price, no weight multiplier
 const VIA_OPTIONS = [
   { value: "D", label: "Darat" },
   { value: "L", label: "Laut" },
@@ -56,6 +57,7 @@ export default function OrderInput() {
     company_name: COMPANY_OPTIONS[0].value,
     pickup_date: todayStr(),
     customer_id: "",
+    sender_name: "",
     consignee: "",
     contract_id: "",
     item_description: "",
@@ -67,6 +69,7 @@ export default function OrderInput() {
     status_pengiriman: "",
     tariff_per_kg: "",
     qty_kg: "",
+    charter_amount: "",
     tax_percentage: "11",
     koli_count: "",
     koli_qty_per: "",
@@ -78,6 +81,10 @@ export default function OrderInput() {
     insurance_amount: "",
   });
 
+  // Sender suggestions for selected customer
+  const [senderSuggestions, setSenderSuggestions] = useState([]);
+  const [showSenderSuggest, setShowSenderSuggest] = useState(false);
+
   useEffect(() => {
     Promise.all([api.get("/customers"), api.get("/settings/tax-options")])
       .then(([c, t]) => { setCustomers(c.data); setTaxOpts(t.data); });
@@ -87,12 +94,23 @@ export default function OrderInput() {
     if (form.customer_id) {
       api.get("/contracts", { params: { customer_id: form.customer_id } })
         .then((r) => setContracts(r.data));
+      api.get("/sender-suggestions", { params: { customer_id: form.customer_id } })
+        .then((r) => setSenderSuggestions(r.data || []))
+        .catch(() => setSenderSuggestions([]));
     } else {
       setContracts([]);
+      setSenderSuggestions([]);
     }
     setForm((f) => ({ ...f, contract_id: "" }));
     // eslint-disable-next-line
   }, [form.customer_id]);
+
+  const deleteSenderSuggest = async (sid) => {
+    try {
+      await api.delete(`/sender-suggestions/${sid}`);
+      setSenderSuggestions((s) => s.filter((x) => x.id !== sid));
+    } catch (e) { /* ignore */ }
+  };
 
   const onContractChange = (cid) => {
     if (!cid) {
@@ -112,14 +130,16 @@ export default function OrderInput() {
     }
   };
 
+  const isCharter = CHARTER_SERVICES.includes(form.service);
+  const charterAmt = parseFloat(form.charter_amount) || 0;
   const tariff = parseFloat(form.tariff_per_kg) || 0;
   const qty = parseFloat(form.qty_kg) || 0;
   const taxPct = parseFloat(form.tax_percentage) || 0;
   const polisAmt = form.insurance_enabled ? (parseFloat(form.polis_amount) || 0) : 0;
   const insAmt = form.insurance_enabled ? (parseFloat(form.insurance_amount) || 0) : 0;
-  const totalTariff = useMemo(() => tariff * qty, [tariff, qty]);
+  const totalTariff = useMemo(() => isCharter ? charterAmt : tariff * qty, [isCharter, charterAmt, tariff, qty]);
   const taxAmt = useMemo(() => (totalTariff * taxPct) / 100, [totalTariff, taxPct]);
-  // Grand Total order (sebelum penerimaan) = tarif × qty + PPN. Polis & Asuransi default value
+  // Grand Total order (sebelum penerimaan) = total + PPN. Polis & Asuransi default value
   // ada di sini tapi BARU menambah nilai invoice saat di-checklist di Penerimaan.
   const grandTotal = useMemo(() => totalTariff + taxAmt, [totalTariff, taxAmt]);
   const invoiceEstimate = useMemo(() => grandTotal + polisAmt + insAmt, [grandTotal, polisAmt, insAmt]);
@@ -127,13 +147,23 @@ export default function OrderInput() {
 
   const submit = async (e) => {
     e.preventDefault();
+    // Validate koli mandatory
+    if (!form.koli_count || parseInt(form.koli_count, 10) <= 0) {
+      toast.error("Koli wajib diisi (lebih dari 0)"); return;
+    }
+    if (isCharter && (!form.charter_amount || parseFloat(form.charter_amount) <= 0)) {
+      toast.error(`Service ${form.service} adalah Charter — wajib isi Nilai Charter (IDR)`); return;
+    }
     try {
       const payload = {
         ...form,
-        tariff_per_kg: tariff,
-        qty_kg: qty,
+        tariff_per_kg: isCharter ? (parseFloat(form.charter_amount) || 0) : tariff,
+        qty_kg: isCharter ? 0 : qty,
         tax_percentage: taxPct,
-        koli_count: form.koli_count === "" ? null : parseInt(form.koli_count, 10),
+        is_charter: isCharter,
+        charter_amount: isCharter ? (parseFloat(form.charter_amount) || 0) : 0,
+        koli_count: parseInt(form.koli_count, 10),
+        sender_name: form.sender_name || null,
         polis_amount: form.insurance_enabled && form.polis_amount !== "" ? parseFloat(form.polis_amount) : null,
         insurance_amount: form.insurance_enabled && form.insurance_amount !== "" ? parseFloat(form.insurance_amount) : null,
         contract_id: form.contract_id || null,
@@ -196,11 +226,11 @@ export default function OrderInput() {
             </Select>
           </div>
 
-          {/* ROW: Customer + Consignee */}
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* ROW: Customer + Pengirim + Consignee */}
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <Label className="m-0">Customer *</Label>
+                <Label className="m-0">Customer (Induk) *</Label>
                 <button
                   type="button"
                   data-testid="new-customer-btn"
@@ -223,6 +253,34 @@ export default function OrderInput() {
                 emptyText="Customer tidak ditemukan"
                 required
               />
+            </div>
+            <div className="relative">
+              <Label>Pengirim (freetext)</Label>
+              <Input
+                data-testid="order-sender-input"
+                value={form.sender_name}
+                onChange={(e) => setForm({ ...form, sender_name: e.target.value })}
+                onFocus={() => setShowSenderSuggest(true)}
+                onBlur={() => setTimeout(() => setShowSenderSuggest(false), 200)}
+                placeholder="Nama pengirim"
+                disabled={!form.customer_id}
+              />
+              {showSenderSuggest && senderSuggestions.length > 0 && form.customer_id && (
+                <div className="absolute left-0 right-0 mt-1 bg-white border border-slate-300 rounded shadow-lg z-30 max-h-48 overflow-y-auto" data-testid="sender-suggest-list">
+                  {senderSuggestions
+                    .filter((s) => !form.sender_name || s.name.toLowerCase().includes(form.sender_name.toLowerCase()))
+                    .map((s) => (
+                      <div key={s.id} className="flex items-center justify-between px-2 py-1 hover:bg-slate-50">
+                        <button type="button" className="flex-1 text-left text-sm" onMouseDown={(e) => { e.preventDefault(); setForm({ ...form, sender_name: s.name }); setShowSenderSuggest(false); }}>
+                          {s.name} <span className="text-[10px] text-slate-400">· {s.use_count}x</span>
+                        </button>
+                        <button type="button" data-testid={`sender-delete-${s.id}`} className="p-1 text-slate-400 hover:text-rose-600" onMouseDown={(e) => { e.preventDefault(); deleteSenderSuggest(s.id); }}>
+                          <X size={11}/>
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
             <div>
               <Label>Consignee (Penerima)</Label>
@@ -306,8 +364,8 @@ export default function OrderInput() {
           {/* ROW: Koli + Qty Isi Koli */}
           <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <Label>Koli (jumlah)</Label>
-              <Input data-testid="order-koli-count-input" type="number" min="0" value={form.koli_count} onChange={(e) => setForm({ ...form, koli_count: e.target.value })} placeholder="Mis. 10"/>
+              <Label>Koli (jumlah) *</Label>
+              <Input data-testid="order-koli-count-input" type="number" min="1" value={form.koli_count} onChange={(e) => setForm({ ...form, koli_count: e.target.value })} required placeholder="Mis. 10"/>
             </div>
             <div>
               <Label>Qty</Label>
@@ -315,25 +373,40 @@ export default function OrderInput() {
             </div>
           </div>
 
-          {/* ROW: Tarif + Qty + PPN */}
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <Label>
-                Tarif per Kg (IDR) * {contractLocked && <span className="ml-1 text-blue-700 inline-flex items-center gap-1"><FileLock2 size={11}/> terkunci</span>}
-              </Label>
-              <Input data-testid="order-tariff-input" type="number" step="0.01" value={form.tariff_per_kg} onChange={(e) => setForm({ ...form, tariff_per_kg: e.target.value })} required disabled={contractLocked} />
+          {/* ROW: Charter mode (FCL/FTL/Lumpsum) OR Tarif × Qty */}
+          {isCharter ? (
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="md:col-span-1">
+                <Label>Nilai Charter (IDR) * <span className="text-blue-700 text-[10px] ml-1">— {form.service}: single price</span></Label>
+                <Input data-testid="order-charter-amount-input" type="number" step="0.01" value={form.charter_amount} onChange={(e) => setForm({ ...form, charter_amount: e.target.value })} required />
+              </div>
+              <div>
+                <Label>PPN *</Label>
+                <Select data-testid="order-tax-select" value={form.tax_percentage} onChange={(e) => setForm({ ...form, tax_percentage: e.target.value })} required>
+                  {taxOpts.map((t) => <option key={t.key} value={t.value}>{t.label}</option>)}
+                </Select>
+              </div>
             </div>
-            <div>
-              <Label>Qty (Kg) *</Label>
-              <Input data-testid="order-qty-input" type="number" step="0.01" value={form.qty_kg} onChange={(e) => setForm({ ...form, qty_kg: e.target.value })} required />
+          ) : (
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <Label>
+                  Tarif per Kg (IDR) * {contractLocked && <span className="ml-1 text-blue-700 inline-flex items-center gap-1"><FileLock2 size={11}/> terkunci</span>}
+                </Label>
+                <Input data-testid="order-tariff-input" type="number" step="0.01" value={form.tariff_per_kg} onChange={(e) => setForm({ ...form, tariff_per_kg: e.target.value })} required disabled={contractLocked} />
+              </div>
+              <div>
+                <Label>Qty (Kg) *</Label>
+                <Input data-testid="order-qty-input" type="number" step="0.01" value={form.qty_kg} onChange={(e) => setForm({ ...form, qty_kg: e.target.value })} required />
+              </div>
+              <div>
+                <Label>PPN *</Label>
+                <Select data-testid="order-tax-select" value={form.tax_percentage} onChange={(e) => setForm({ ...form, tax_percentage: e.target.value })} required>
+                  {taxOpts.map((t) => <option key={t.key} value={t.value}>{t.label}</option>)}
+                </Select>
+              </div>
             </div>
-            <div>
-              <Label>PPN *</Label>
-              <Select data-testid="order-tax-select" value={form.tax_percentage} onChange={(e) => setForm({ ...form, tax_percentage: e.target.value })} required>
-                {taxOpts.map((t) => <option key={t.key} value={t.value}>{t.label}</option>)}
-              </Select>
-            </div>
-          </div>
+          )}
 
           {/* ROW: Armada / Driver / Nopol */}
           <div className="mt-6 pt-4 border-t border-slate-200">
@@ -390,10 +463,17 @@ export default function OrderInput() {
             <h3 className="font-heading font-bold text-lg">Kalkulasi Otomatis</h3>
           </div>
           <div className="space-y-3 text-sm">
-            <div className="flex justify-between border-b border-slate-100 pb-2">
-              <span className="text-slate-500">Tarif × Qty</span>
-              <span className="font-mono text-xs">{fmtIDR(tariff)} × {qty}</span>
-            </div>
+            {isCharter ? (
+              <div className="flex justify-between border-b border-slate-100 pb-2">
+                <span className="text-slate-500">Charter ({form.service})</span>
+                <span className="font-mono text-xs">{fmtIDR(charterAmt)}</span>
+              </div>
+            ) : (
+              <div className="flex justify-between border-b border-slate-100 pb-2">
+                <span className="text-slate-500">Tarif × Qty</span>
+                <span className="font-mono text-xs">{fmtIDR(tariff)} × {qty}</span>
+              </div>
+            )}
             <div className="flex justify-between border-b border-slate-100 pb-2">
               <span className="text-slate-500">Total Tarif</span>
               <span data-testid="calc-total-tariff" className="font-semibold">{fmtIDR(totalTariff)}</span>

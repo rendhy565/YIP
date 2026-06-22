@@ -46,7 +46,15 @@ export default function OrdersList() {
   const [saving, setSaving] = useState(false);
 
   const load = () => {
-    api.get("/orders").then((r) => setRows(r.data));
+    api.get("/orders").then((r) => {
+      // Sort by created_at down to millisecond — display only shows date
+      const sorted = [...r.data].sort((a, b) => {
+        const ta = new Date(a.created_at).getTime();
+        const tb = new Date(b.created_at).getTime();
+        return tb - ta;
+      });
+      setRows(sorted);
+    });
   };
 
   useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); }, []);

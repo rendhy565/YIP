@@ -39,6 +39,9 @@ import ImportExcel from "./pages/ImportExcel";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import PanjarKerja from "./pages/PanjarKerja";
 import InvoicesCreated from "./pages/InvoicesCreated";
+import PettyCash from "./pages/PettyCash";
+import PurchaseOrders from "./pages/PurchaseOrders";
+import VendorAging from "./pages/VendorAging";
 
 function Protected({ children, roles }) {
   const { user } = useAuth();
@@ -111,6 +114,9 @@ export default function App() {
             <Route path="/import" element={<Protected roles={["administrator"]}><Shell><ImportExcel /></Shell></Protected>} />
             <Route path="/analytics" element={<Protected><Shell><AnalyticsDashboard /></Shell></Protected>} />
             <Route path="/panjar" element={<Protected><Shell><PanjarKerja /></Shell></Protected>} />
+            <Route path="/petty-cash" element={<Protected><Shell><PettyCash /></Shell></Protected>} />
+            <Route path="/purchase-orders" element={<Protected><Shell><PurchaseOrders /></Shell></Protected>} />
+            <Route path="/reports/vendor-aging" element={<Protected><Shell><VendorAging /></Shell></Protected>} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
