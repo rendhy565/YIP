@@ -4,7 +4,7 @@ import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from ".
 import SearchableSelect from "../components/SearchableSelect";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, X, Wallet, CheckCircle2, Trash2 } from "lucide-react";
+import { Plus, X, Wallet, CheckCircle2, Trash2, History } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 function todayStr() {
@@ -26,6 +26,7 @@ export default function PanjarKerja() {
   // Settle modal
   const [settleFor, setSettleFor] = useState(null);
   const [settleForm, setSettleForm] = useState({ refund_amount: "0", settle_date: todayStr(), notes: "" });
+  const [historyFor, setHistoryFor] = useState(null);
   const [breakdown, setBreakdown] = useState([]); // [{awb_id, amount, description}]
   const [settling, setSettling] = useState(false);
 
@@ -186,6 +187,11 @@ export default function PanjarKerja() {
                 </Td>
                 <Td className="text-right whitespace-nowrap">
                   <div className="flex gap-1 justify-end">
+                    {r.settle_history && r.settle_history.length > 0 && (
+                      <button data-testid={`history-panjar-${r.number}`} onClick={() => setHistoryFor(r)} title="Lihat history settle" className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-blue-100 text-blue-800 hover:bg-blue-200 inline-flex items-center gap-1">
+                        <History size={11}/> History ({r.settle_history.length})
+                      </button>
+                    )}
                     {r.status === "Open" && (
                       <button data-testid={`settle-panjar-${r.number}`} onClick={() => openSettle(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200 inline-flex items-center gap-1">
                         <CheckCircle2 size={11}/> Settle
@@ -333,6 +339,92 @@ export default function PanjarKerja() {
               <Button data-testid="confirm-settle-panjar" variant="success" onClick={doSettle} disabled={settling || isOverSettle || settleTotal <= 0}>
                 {settling ? "Memproses..." : (isFullSettle ? "Settle (Final)" : "Settle (Partial)")}
               </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ===== HISTORY MODAL — settle_history per panjar ===== */}
+      {historyFor && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="panjar-history-modal">
+          <Card className="w-full max-w-2xl p-6 max-h-[88vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="font-heading font-bold text-xl flex items-center gap-2">
+                  <History size={18} className="text-blue-600"/>
+                  History Settlement — {historyFor.number}
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Panjar untuk {historyFor.recipient_name} · Total {fmtIDR(historyFor.amount)} · {historyFor.settle_history?.length || 0} event
+                </p>
+              </div>
+              <button onClick={() => setHistoryFor(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <Card className="p-2 bg-blue-50 border-blue-200">
+                  <div className="text-[9px] uppercase font-bold text-blue-700">Total Panjar</div>
+                  <div className="font-mono font-bold text-sm text-blue-900">{fmtIDR(historyFor.amount)}</div>
+                </Card>
+                <Card className="p-2 bg-emerald-50 border-emerald-200">
+                  <div className="text-[9px] uppercase font-bold text-emerald-700">Sudah Settle</div>
+                  <div className="font-mono font-bold text-sm text-emerald-900">{fmtIDR(historyFor.settled_amount || 0)}</div>
+                </Card>
+                <Card className={`p-2 ${historyFor.status === "Settled" ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
+                  <div className={`text-[9px] uppercase font-bold ${historyFor.status === "Settled" ? "text-emerald-700" : "text-amber-700"}`}>Sisa Outstanding</div>
+                  <div className={`font-mono font-bold text-sm ${historyFor.status === "Settled" ? "text-emerald-900" : "text-amber-900"}`}>
+                    {fmtIDR(historyFor.amount - (historyFor.settled_amount || 0) - (historyFor.refund_amount || 0))}
+                  </div>
+                </Card>
+              </div>
+
+              <div className="border border-slate-200 rounded overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-100">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">#</th>
+                      <th className="px-2 py-1.5 text-left">Tanggal</th>
+                      <th className="px-2 py-1.5 text-right">Settle</th>
+                      <th className="px-2 py-1.5 text-right">Refund</th>
+                      <th className="px-2 py-1.5 text-left">Breakdown</th>
+                      <th className="px-2 py-1.5 text-left">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(historyFor.settle_history || []).map((h, i) => (
+                      <tr key={i} className="border-t border-slate-100" data-testid={`history-event-${i}`}>
+                        <td className="px-2 py-1.5 text-xs font-bold">#{i + 1}</td>
+                        <td className="px-2 py-1.5 text-xs">{fmtDate(h.settle_date)}</td>
+                        <td className="px-2 py-1.5 text-right font-mono font-semibold text-emerald-700">{fmtIDR(h.actual_amount || 0)}</td>
+                        <td className="px-2 py-1.5 text-right font-mono">{fmtIDR(h.refund_amount || 0)}</td>
+                        <td className="px-2 py-1.5 text-xs">
+                          {(h.breakdown || []).length > 0 ? (
+                            <div className="space-y-0.5">
+                              {h.breakdown.map((b, bi) => (
+                                <div key={bi} className="text-[10px]">
+                                  <span className={`uppercase font-bold ${b.target === "operation" ? "text-emerald-700" : "text-blue-700"}`}>
+                                    {b.target === "operation" ? "OPS" : (b.awb_number || b.awb_id?.slice(-6))}
+                                  </span>: <span className="font-mono">{fmtIDR(b.amount)}</span>
+                                  {b.description && <span className="text-slate-500"> · {b.description}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : <span className="text-slate-400">—</span>}
+                        </td>
+                        <td className="px-2 py-1.5 text-xs text-slate-600">{h.notes || "-"}</td>
+                      </tr>
+                    ))}
+                    {(historyFor.settle_history || []).length === 0 && (
+                      <tr><td colSpan={6} className="px-2 py-4 text-center text-slate-400 text-xs">Belum ada history settle.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => setHistoryFor(null)}>Tutup</Button>
             </div>
           </Card>
         </div>

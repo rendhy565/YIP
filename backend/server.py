@@ -1387,6 +1387,10 @@ async def reconcile_orders(data: ReconcileIn, user: dict = Depends(require_role(
     not_received = [a["awb_number"] for a in awbs_all if not a.get("received_at")]
     if not_received:
         raise HTTPException(400, f"Barang belum diterima — tidak boleh direkonsiliasi: {', '.join(not_received[:5])}{'...' if len(not_received) > 5 else ''}")
+    # NEW: POD juga harus diterima
+    no_pod = [a["awb_number"] for a in awbs_all if a.get("received_at") and not a.get("pod_received_at")]
+    if no_pod:
+        raise HTTPException(400, f"POD belum diterima — tidak boleh direkonsiliasi: {', '.join(no_pod[:5])}{'...' if len(no_pod) > 5 else ''}")
     valid_ids = [i for i in ids if i in awb_with_cost]
     skipped = len(ids) - len(valid_ids)
     if not valid_ids:
@@ -1841,6 +1845,13 @@ async def receive_awb(oid: str, data: ReceiveAwbIn, user: dict = Depends(get_cur
         rd = datetime.now(timezone.utc)
     polis_eff = float(data.polis_amount or 0) if data.polis_enabled else 0
     asur_eff  = float(data.asuransi_amount or 0) if data.asuransi_enabled else 0
+    spsi_eff = float(data.spsi_amount or 0) if data.spsi_enabled else 0
+    forklift_eff = float(data.sewa_forklift_amount or 0) if data.sewa_forklift_enabled else 0
+    # NEW: Recompute grand_total = base + tax + invoice addons (SPSI/Forklift/Polis/Asuransi)
+    base_tariff = float(o.get("total_tariff") or 0)
+    base_tax = float(o.get("tax_amount") or 0)
+    addons_total = polis_eff + asur_eff + spsi_eff + forklift_eff
+    new_grand_total = round(base_tariff + base_tax + addons_total, 2)
     upd = {
         "received_at": rd,
         "received_by_name": data.received_by_name.strip(),
@@ -1849,22 +1860,27 @@ async def receive_awb(oid: str, data: ReceiveAwbIn, user: dict = Depends(get_cur
         "received_asuransi_enabled": bool(data.asuransi_enabled),
         "received_asuransi_amount": asur_eff,
         "spsi_enabled": bool(data.spsi_enabled),
-        "spsi_amount": float(data.spsi_amount or 0) if data.spsi_enabled else 0,
+        "spsi_amount": spsi_eff,
         "sewa_forklift_enabled": bool(data.sewa_forklift_enabled),
-        "sewa_forklift_amount": float(data.sewa_forklift_amount or 0) if data.sewa_forklift_enabled else 0,
+        "sewa_forklift_amount": forklift_eff,
+        "addons_total": round(addons_total, 2),
+        "grand_total": new_grand_total,  # auto-include addons
         "work_type": data.work_type,
         "mode": data.mode,
         "received_by": user["id"],
     }
     await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
     # NOTE: SPSI / Sewa Forklift / Polis / Asuransi adalah penambah nilai INVOICE,
-    # bukan cost. Jadi mereka HANYA disimpan di field awb_orders (received_*, spsi_*, sewa_forklift_*)
-    # dan otomatis ditambahkan ke grand_total saat invoice di-cetak.
-    # (Hapus cost lama yang mungkin dibuat oleh versi sebelumnya untuk migrasi data lama)
-    await db.awb_costs.delete_many({"awb_id": _oid(oid), "source": "receive"})
-    await db.journal_entries.delete_many({
-        "reference_type": "awb_cost",
-        "description": {"$regex": f"AWB {re.escape(o['awb_number'])} \\(penerimaan\\)"}
+    # bukan cost. Mereka HANYA disimpan di field awb_orders dan otomatis menambah grand_total
+    # serta ditampilkan di invoice saat dicetak.
+    # Hapus cost lama yang mungkin dibuat oleh versi sebelumnya untuk migrasi data lama —
+    # FILTER KETAT: hanya source=receive AND category=Operational AND sub_label in (SPSI, Sewa Forklift)
+    # supaya TIDAK pernah menyentuh Vendor accruals atau cost manual lainnya.
+    await db.awb_costs.delete_many({
+        "awb_id": _oid(oid),
+        "source": "receive",
+        "cost_category": "Operational",
+        "sub_label": {"$in": ["SPSI", "Sewa Forklift"]},
     })
     return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
 
@@ -6022,6 +6038,8 @@ async def vendor_aging(as_of: Optional[str] = None, user: dict = Depends(get_cur
     for c in costs:
         vendor = (c.get("vendor_name") or "(Tanpa nama vendor)").strip() or "(Tanpa nama vendor)"
         cdate = c.get("created_at") or ref_date
+        if isinstance(cdate, datetime) and cdate.tzinfo is None:
+            cdate = cdate.replace(tzinfo=timezone.utc)
         days = max(0, (ref_date - cdate).days) if isinstance(cdate, datetime) else 0
         if days <= 30:
             bucket = "0-30"
@@ -6087,6 +6105,8 @@ async def export_vendor_aging(as_of: Optional[str] = None, user: dict = Depends(
     for c in costs:
         vendor = (c.get("vendor_name") or "(Tanpa nama vendor)").strip() or "(Tanpa nama vendor)"
         cdate = c.get("created_at") or ref_date
+        if isinstance(cdate, datetime) and cdate.tzinfo is None:
+            cdate = cdate.replace(tzinfo=timezone.utc)
         days = max(0, (ref_date - cdate).days) if isinstance(cdate, datetime) else 0
         bucket = "0-30" if days <= 30 else ("31-60" if days <= 60 else ("61-90" if days <= 90 else "90+"))
         amt = float(c.get("amount") or 0)
@@ -6240,7 +6260,8 @@ async def export_vendor_aging(as_of: Optional[str] = None, user: dict = Depends(
 @app.post("/api/admin/migrate/reverse-unprinted-ar")
 async def migrate_reverse_unprinted_ar(user: dict = Depends(require_role("administrator"))):
     """Untuk invoice yang sudah punya jurnal AR (1201) tapi belum dicetak (invoice_date=null),
-    balik jurnalnya supaya saldo kembali ke 1290 (PYMHD) sesuai PSAK."""
+    POST REVERSING JOURNAL — bukan delete — supaya saldo kembali ke 1290 (PYMHD) sesuai PSAK,
+    DAN tetap muncul konsisten di Balance Sheet, Trial Balance, dan General Ledger (audit trail)."""
     invoices_unprinted = await db.invoices.find({
         "$or": [
             {"invoice_date": None},
@@ -6249,42 +6270,64 @@ async def migrate_reverse_unprinted_ar(user: dict = Depends(require_role("admini
     }).to_list(20000)
     reversed_count = 0
     affected_invoices = []
+    now = datetime.now(timezone.utc)
     for inv in invoices_unprinted:
-        # Find AR journal for this invoice (reference_type=invoice)
+        # Aggregate net DR/CR per account from journals of this invoice
         journals = await db.journal_entries.find({
             "reference_type": "invoice",
             "reference_id": str(inv["_id"]),
+            "is_reversal": {"$ne": True},  # skip already-reversed
         }).to_list(100)
         if not journals:
             continue
-        # Compute net DR 1201 in these journals (only reverse if there's an open AR)
-        net_dr_1201 = 0.0
+        # Sum lines per account (to know what to reverse)
+        from collections import defaultdict
+        line_sum = defaultdict(lambda: {"debit": 0.0, "credit": 0.0})
         for j in journals:
             for line in (j.get("lines") or []):
-                if line.get("account_code") == "1201":
-                    net_dr_1201 += float(line.get("debit") or 0) - float(line.get("credit") or 0)
-        if abs(net_dr_1201) < 0.01:
+                code = line.get("account_code")
+                line_sum[code]["debit"] += float(line.get("debit") or 0)
+                line_sum[code]["credit"] += float(line.get("credit") or 0)
+        # If 1201 not present, skip (means AR was never posted)
+        if "1201" not in line_sum or abs(line_sum["1201"]["debit"]) < 0.01:
             continue
-        # Delete the original journals (clean reversal)
-        await db.journal_entries.delete_many({
-            "reference_type": "invoice",
-            "reference_id": str(inv["_id"]),
-        })
+        # Build reversing journal: swap debit ↔ credit per line
+        reverse_lines = []
+        for code, vals in line_sum.items():
+            net_dr = vals["debit"] - vals["credit"]
+            if abs(net_dr) < 0.01:
+                continue
+            if net_dr > 0:
+                # was net debit → reverse with credit
+                reverse_lines.append({"account_code": code, "debit": 0, "credit": round(net_dr, 2), "memo": f"Reversal — {inv['invoice_number']} belum dicetak"})
+            else:
+                reverse_lines.append({"account_code": code, "debit": round(-net_dr, 2), "credit": 0, "memo": f"Reversal — {inv['invoice_number']} belum dicetak"})
+        try:
+            await post_journal(
+                date=now,
+                description=f"REVERSAL AR — Invoice {inv['invoice_number']} belum dicetak (PSAK: piutang baru diakui saat faktur dicetak)",
+                lines=reverse_lines,
+                reference_type="invoice_ar_reversal",
+                reference_id=str(inv["_id"]),
+                posted_by=user["id"],
+                extra_fields={"is_reversal": True, "reversed_invoice": inv["invoice_number"]},
+            )
+        except HTTPException:
+            continue
         # Mark invoice as ar_recognized=false (re-creatable on print)
         await db.invoices.update_one(
             {"_id": inv["_id"]},
-            {"$set": {"ar_recognized": False, "invoice_date": None}}
+            {"$set": {"ar_recognized": False, "invoice_date": None, "ar_reversed_at": now}}
         )
         reversed_count += 1
         affected_invoices.append({
             "invoice_number": inv.get("invoice_number"),
-            "amount": net_dr_1201,
-            "journals_deleted": len(journals),
+            "amount": round(line_sum["1201"]["debit"], 2),
         })
     return {
         "ok": True,
         "reversed_count": reversed_count,
         "total_invoices_unprinted": len(invoices_unprinted),
         "affected": affected_invoices,
-        "note": "Invoice belum dicetak → AR di-reverse. Saat dicetak, jurnal AR akan re-post.",
+        "note": "Posted reverse-journals (audit trail kept). Saat invoice dicetak, AR akan re-post otomatis.",
     }

@@ -1,0 +1,60 @@
+{
+  "summary": "Iteration 16 — verified all 6 user-reported fixes: (1) settle_history is array per-event with full breakdown; History modal on /panjar with 3 summary cards + table. (2) Receive endpoint now UPDATES awb_orders.grand_total = base + addons_total (SPSI+Forklift+Polis+Asuransi) and stores addons_total field. (3) Reconcile endpoint now checks BOTH received_at AND pod_received_at — returns 400 'POD belum diterima' when missing. (4) CostListModal extracted as shared component; same data-testid='cost-list-modal' across /orders, /recap, /analytics. (5) Migrate reverse-unprinted-ar uses REVERSE-JOURNAL pattern (audit trail) — second run skips already-reversed via is_reversal=true flag (idempotent). (6) Receive's awb_costs delete is ultra-narrow: source=receive AND cost_category=Operational AND sub_label in [SPSI, Sewa Forklift] only — Vendor accruals are safe. Backend: 14/14 NEW iter16 tests PASS. Frontend smoke: all 4 critical clickable flows work.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/reports/vendor-aging", "issue": "Legacy bug: subtracting tz-naive cdate from tz-aware ref_date caused 500. FIXED in this iteration by normalizing cdate to UTC tz-aware before delta."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/panjar Settle modal & POD/Receive modals", "issues": ["Still uses browser-native date input (type=date) instead of shadcn Calendar — carried over from iter15."]}
+    ]
+  },
+  "verified_features": [
+    "POST /api/orders/{oid}/receive with SPSI 100k + Forklift 50k + Polis 25k + Asuransi 10k → awb_orders.addons_total=185000 AND grand_total = base + 185000 (verified)",
+    "POST /api/orders/{oid}/receive does NOT create any awb_costs documents (count before==after)",
+    "Vendor cost (cost_category=Vendor, source=manual) is NOT deleted when /receive is called — narrow filter respected",
+    "POST /api/orders/reconcile with received but no POD → 400 'POD belum diterima — tidak boleh direkonsiliasi'",
+    "POST /api/orders/reconcile with received + POD + cost → 200 success",
+    "POST /api/admin/migrate/reverse-unprinted-ar (admin only): returns {ok, reversed_count, total_invoices_unprinted, affected, note}; note mentions reverse-journal/audit trail; operation/finance → 401/403",
+    "Migration idempotent: 2nd run reversed_count=0 (skipped via is_reversal=true filter)",
+    "GET /api/reports/trial-balance — total_debit == total_credit (balanced)",
+    "GET /api/reports/balance-sheet — total_assets == total_liabilities + total_equity (balanced)",
+    "Cash-advance settle_history is List[dict] with {settle_date, actual_amount, refund_amount, breakdown, notes, settled_by}",
+    "Frontend /panjar: history-panjar-{number} buttons open panjar-history-modal with 3 summary cards (Total Panjar / Sudah Settle / Sisa Outstanding) + per-event table",
+    "Frontend /orders: view-cost-{awb} buttons open cost-list-modal (shared CostListModal component)",
+    "Frontend /recap: same view-cost buttons open same data-testid='cost-list-modal'",
+    "Frontend /analytics: same view-cost buttons open same data-testid='cost-list-modal'",
+    "Login admin/admin123 → 200 + access_token"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration16_features.py",
+    "/app/test_reports/pytest/iter16_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Replace native HTML date inputs in /panjar settle, /orders Terima Barang/POD modals with shadcn Calendar component for consistency.",
+    "INFO: Some iter14 regression tests still fail as EXPECTED — TestReconcileBlockedWithoutReceive::test_receive_then_reconcile now expects 200 but iter16 correctly returns 400 because POD also required. Test needs updating to mark POD before asserting 200. Other iter14 failures (TestInvoiceTwoPhase pytest.inv_id, TestPurchaseOrders.test_receive_pod 404, TestBulkGrouped string match) are pre-existing brittleness, not regressions."
+  ],
+  "critical_code_review_comments": [
+    "server.py now 6332 lines — still exceeds 700-line guideline. Continue splitting (panjar.py, migrations.py, reports.py).",
+    "Receive endpoint correctly computes new_grand_total = base_tariff + base_tax + addons_total (line 1854) and persists both addons_total + grand_total. Good audit field.",
+    "Reconcile (L1391-1393) correctly enforces POD before reconcile; error message clear and lists offending AWBs.",
+    "Migration (L6256-6329) posts reverse-journal with is_reversal=true; filter {'is_reversal': {'$ne': True}} guarantees idempotency. Excellent PSAK-compliant pattern.",
+    "Vendor-aging endpoint had tz-naive datetime bug (FIXED here) — recommend a project-wide audit: any datetime read from old documents should always be tz-normalized before arithmetic.",
+    "CostListModal is now a single source of truth — DRY win. Same data-testid across pages enables uniform testing."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration16_features.py (NEW — 14 tests covering iter16 scope)",
+    "/app/backend/server.py (vendor_aging: normalize tz-naive cdate to UTC tz-aware to fix legacy 500 — minor robustness fix during regression run)"
+  ],
+  "success_rate": {"backend": "100% (14/14 iter16 tests pass)", "frontend": "100% (4/4 critical flows: panjar history, /orders cost, /recap cost, /analytics cost)"},
+  "test_credentials": "admin/admin123, operation/operation123, finance/finance123 — all working",
+  "seed_data_creation": "Created TEST_IT16_C_* customer (if needed), several AWBs (TEST-IT16), TEST_IT16_VendorX/Vy vendor costs, PNJ panjar TEST_IT16_Recipient. Total 1jt panjar settled 400k partial.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: python -m pytest backend/tests/test_iteration16_features.py -v + backend/tests/test_iteration15_refactor.py -v (vendor_aging now passes after tz fix). KNOWN iter14 outdated tests: TestReconcileBlockedWithoutReceive::test_receive_then_reconcile expects 200 but now needs POD too — main agent should update that test to add a /receive-pod call before reconcile assertion. Migration is idempotent via is_reversal flag — safe to invoke repeatedly. addons_total field on awb_orders is new — InvoicePrint.js no longer needs to sum on the fly (grand_total already includes addons).",
+  "rca_of_the_issue": "Vendor-aging 500: legacy awb_costs docs have tz-naive created_at; (ref_date - cdate) raised TypeError when ref_date was tz-aware. Fix: normalize cdate via cdate.replace(tzinfo=timezone.utc) when tzinfo is None. Applied to both /reports/vendor-aging and /exports/vendor-aging (replace_all=True)."
+}

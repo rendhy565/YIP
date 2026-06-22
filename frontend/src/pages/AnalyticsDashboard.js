@@ -9,6 +9,7 @@ import {
 } from "recharts";
 import { toast } from "sonner";
 import { errMsg } from "../lib/utils";
+import CostListModal from "../components/CostListModal";
 
 const COLORS = ["#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#6366f1", "#14b8a6", "#a855f7"];
 
@@ -43,6 +44,7 @@ export default function AnalyticsDashboard() {
   const [regions, setRegions] = useState([]);
   const [fleetTypes, setFleetTypes] = useState([]);
   const [armadaTypes, setArmadaTypes] = useState([]);
+  const [viewCostFor, setViewCostFor] = useState(null);
 
   // Dashboard data
   const [dash, setDash] = useState(null);
@@ -548,7 +550,13 @@ export default function AnalyticsDashboard() {
                   <td className="px-3 py-2 text-right font-mono text-xs">{fmtIDR(r.ppn)}</td>
                   <td className="px-3 py-2 text-right font-mono font-bold">{fmtIDR(r.inv_ppn)}</td>
                   <td className="px-3 py-2 text-right font-mono text-xs text-rose-700">{r.pph_final ? fmtIDR(r.pph_final) : "-"}</td>
-                  <td className="px-3 py-2 text-right font-mono text-rose-700">{fmtIDR(r.total_costs)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-rose-700">
+                    {r.total_costs > 0 ? (
+                      <button data-testid={`view-cost-${r.awb_number}`} onClick={() => setViewCostFor({ id: r.id, awb_number: r.awb_number })} className="hover:underline font-semibold">
+                        {fmtIDR(r.total_costs)}
+                      </button>
+                    ) : fmtIDR(r.total_costs)}
+                  </td>
                   <td className={`px-3 py-2 text-right font-mono font-bold ${r.margin >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtIDR(r.margin)}</td>
                   <td className={`px-3 py-2 text-right font-mono font-bold text-xs ${r.margin_pct >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{r.margin_pct.toFixed(1)}%</td>
                   <td className="px-3 py-2"><span className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold ${STATUS_COLORS[r.status] || "bg-slate-100"}`}>{r.status}</span></td>
@@ -560,6 +568,10 @@ export default function AnalyticsDashboard() {
           </table>
         </div>
       </Card>
+
+      {viewCostFor && (
+        <CostListModal awb={viewCostFor} onClose={() => setViewCostFor(null)} />
+      )}
     </div>
   );
 }

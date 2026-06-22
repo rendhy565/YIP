@@ -7,6 +7,7 @@ import { useAuth } from "../lib/auth";
 import { toast } from "sonner";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
+import CostListModal from "../components/CostListModal";
 
 function todayStr() {
   const d = new Date();
@@ -50,10 +51,8 @@ export default function OrdersList() {
   const [podForm, setPodForm] = useState({ pod_date: todayStr(), pod_notes: "", pod_signed_by: "" });
   const [savingPod, setSavingPod] = useState(false);
 
-  // Cost popup — list & delete costs
+  // Cost popup — list & delete costs (uses shared component)
   const [costFor, setCostFor] = useState(null);
-  const [costList, setCostList] = useState([]);
-  const [loadingCosts, setLoadingCosts] = useState(false);
 
   const load = () => {
     Promise.all([
@@ -168,31 +167,7 @@ export default function OrdersList() {
     finally { setSavingPod(false); }
   };
 
-  const openCostList = async (r) => {
-    setCostFor(r);
-    setLoadingCosts(true);
-    try {
-      const res = await api.get("/costs", { params: { awb_id: r.id } });
-      setCostList(res.data);
-    } catch (e) { toast.error(errMsg(e)); setCostList([]); }
-    finally { setLoadingCosts(false); }
-  };
-  const deleteCost = async (c, confirmFlag = false) => {
-    if (!confirmFlag && !window.confirm(`Hapus cost ${c.description || c.sub_label || ""} sebesar ${fmtIDR(c.amount)}?`)) return;
-    try {
-      const res = await api.delete(`/costs/${c.id}`, { params: confirmFlag ? { confirm: true } : {} });
-      if (res.data && res.data.needs_confirmation) {
-        if (window.confirm(`⚠ ${res.data.warning}\n\nLanjutkan hapus dengan reversal pengakuan pendapatan?`)) {
-          return deleteCost(c, true);
-        }
-        return;
-      }
-      toast.success("Cost dihapus" + (res.data?.reversal_info?.message ? ` — ${res.data.reversal_info.message}` : ""));
-      // Refresh
-      if (costFor) openCostList(costFor);
-      load();
-    } catch (e) { toast.error(errMsg(e)); }
-  };
+  const openCostList = (r) => setCostFor(r);
 
   return (
     <div data-testid="orders-list-page">
@@ -474,72 +449,13 @@ export default function OrdersList() {
         </div>
       )}
 
-      {/* ========== COST LIST POPUP — Rincian + Hapus Cost ========== */}
+      {/* ========== COST LIST POPUP — Reusable shared component ========== */}
       {costFor && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="cost-list-modal">
-          <Card className="w-full max-w-2xl p-6 max-h-[88vh] overflow-y-auto">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="font-heading font-bold text-xl">Rincian Cost — AWB {costFor.awb_number}</h3>
-                <p className="text-xs text-slate-500 mt-1">Klik <strong>Hapus</strong> per baris. Jika ini cost terakhir, sistem akan minta konfirmasi reversal revenue.</p>
-              </div>
-              <button onClick={() => { setCostFor(null); setCostList([]); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
-            </div>
-            {loadingCosts ? (
-              <p className="text-center text-slate-500 py-6">Memuat...</p>
-            ) : (
-              <div className="border border-slate-200 rounded overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-100 text-slate-700">
-                    <tr>
-                      <th className="px-2 py-1.5 text-left">Kategori</th>
-                      <th className="px-2 py-1.5 text-left">Deskripsi</th>
-                      <th className="px-2 py-1.5 text-left">Vendor</th>
-                      <th className="px-2 py-1.5 text-left">Status</th>
-                      <th className="px-2 py-1.5 text-right">Nominal</th>
-                      <th className="px-2 py-1.5 text-right">Aksi</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {costList.map((c) => (
-                      <tr key={c.id} className="border-t border-slate-100" data-testid={`cost-row-${c.id}`}>
-                        <td className="px-2 py-1.5"><span className="text-[10px] uppercase font-bold bg-slate-100 text-slate-700 rounded px-1.5 py-0.5">{c.cost_category}{c.sub_label ? ` · ${c.sub_label}` : ""}</span></td>
-                        <td className="px-2 py-1.5 text-xs">{c.description || "-"}</td>
-                        <td className="px-2 py-1.5 text-xs">{c.vendor_name || "-"}</td>
-                        <td className="px-2 py-1.5">
-                          <span className={`text-[10px] uppercase font-bold rounded px-1.5 py-0.5 ${c.is_settled ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                            {c.is_settled ? c.payment_type || "Cash" : "Accrue"}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 text-right font-mono font-semibold">{fmtIDR(c.amount)}</td>
-                        <td className="px-2 py-1.5 text-right">
-                          <button data-testid={`delete-cost-${c.id}`} onClick={() => deleteCost(c)} className="p-1.5 rounded hover:bg-red-50 text-red-600">
-                            <Trash2 size={12}/>
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {costList.length === 0 && (
-                      <tr><td colSpan={6} className="px-2 py-4 text-center text-slate-400 text-xs">Tidak ada cost.</td></tr>
-                    )}
-                  </tbody>
-                  {costList.length > 0 && (
-                    <tfoot>
-                      <tr className="bg-slate-50 font-bold">
-                        <td colSpan={4} className="px-2 py-1.5 text-right">TOTAL</td>
-                        <td className="px-2 py-1.5 text-right font-mono">{fmtIDR(costList.reduce((s, c) => s + (c.amount || 0), 0))}</td>
-                        <td/>
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
-              </div>
-            )}
-            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
-              <Button variant="secondary" type="button" onClick={() => { setCostFor(null); setCostList([]); }}>Tutup</Button>
-            </div>
-          </Card>
-        </div>
+        <CostListModal
+          awb={costFor}
+          onClose={() => setCostFor(null)}
+          onChanged={load}
+        />
       )}
     </div>
   );

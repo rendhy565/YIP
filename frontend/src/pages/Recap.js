@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircle, Edit3, Save, X, FileSpreadsheet } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
+import CostListModal from "../components/CostListModal";
 
 function todayStr() {
   const d = new Date();
@@ -45,6 +46,9 @@ export default function Recap() {
   const [costFor, setCostFor] = useState(null);
   const [costForm, setCostForm] = useState({ cost_category: "Vendor", amount: "", description: "", vendor_name: "" });
   const [savingCost, setSavingCost] = useState(false);
+
+  // View cost details popup (shared CostListModal)
+  const [viewCostFor, setViewCostFor] = useState(null);
 
   const load = async () => {
     // Always fetch ALL — client-side AND/OR filter
@@ -394,7 +398,13 @@ export default function Recap() {
                 <Td className="text-xs">{[r.service, r.via].filter(Boolean).join(" / ") || "-"}</Td>
                 <Td className="text-xs">{[r.armada, r.nopol].filter(Boolean).join(" · ") || "-"}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
-                <Td className="text-right text-rose-700">{fmtIDR(r._total_cost)}</Td>
+                <Td className="text-right">
+                  {r._total_cost > 0 ? (
+                    <button data-testid={`view-cost-${r.awb_number}`} onClick={() => setViewCostFor(r)} className="text-rose-700 font-bold hover:underline">
+                      {fmtIDR(r._total_cost)}
+                    </button>
+                  ) : <span className="text-slate-400">—</span>}
+                </Td>
                 <Td className={`text-right font-bold ${r._margin >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtIDR(r._margin)}</Td>
                 <Td className="text-right whitespace-nowrap">
                   <div className="flex gap-1 justify-end">
@@ -559,6 +569,15 @@ export default function Recap() {
             </div>
           </Card>
         </div>
+      )}
+
+      {/* Shared cost-details modal */}
+      {viewCostFor && (
+        <CostListModal
+          awb={viewCostFor}
+          onClose={() => setViewCostFor(null)}
+          onChanged={load}
+        />
       )}
     </div>
   );
