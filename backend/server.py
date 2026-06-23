@@ -6112,22 +6112,20 @@ async def delete_purchase_order(pid: str, user: dict = Depends(require_role("adm
     po = await db.purchase_orders.find_one({"_id": _oid(pid)})
     if not po:
         raise HTTPException(404, "PO tidak ditemukan")
-    # Cascade: hapus semua linked cost dari items
     items = po.get("items") or []
     linked_ids = [it.get("linked_cost_id") for it in items if it.get("linked_cost_id")]
-    # Legacy single-item field
     if po.get("linked_cost_id"):
         linked_ids.append(po["linked_cost_id"])
+    # PRE-CHECK: refuse if ANY linked cost is settled (avoid partial cascade)
+    if linked_ids:
+        settled = await db.awb_costs.find({"_id": {"$in": [_oid(c) for c in linked_ids]}, "is_settled": True}).to_list(100)
+        if settled:
+            raise HTTPException(400, f"Tidak bisa hapus PO {po['number']} — ada {len(settled)} cost sudah disettle. Reverse pembayaran dulu.")
+    # Cascade delete
     for cid in linked_ids:
         try:
-            cost = await db.awb_costs.find_one({"_id": _oid(cid)})
-            if cost:
-                if cost.get("is_settled"):
-                    raise HTTPException(400, f"Cost terkait sudah disettle — tidak bisa hapus PO. Reverse pembayaran dulu.")
-                await db.awb_costs.delete_one({"_id": _oid(cid)})
-                await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": cid})
-        except HTTPException:
-            raise
+            await db.awb_costs.delete_one({"_id": _oid(cid)})
+            await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": cid})
         except Exception:
             pass
     await db.purchase_orders.delete_one({"_id": _oid(pid)})

@@ -1,6 +1,78 @@
 # PRD — ARC TMS Business Suite
 
-## Latest changes (Iteration 16 — 2026-06-22)
+## Latest changes (Iteration 17 — 2026-06-23)
+
+### PO / Surat Perintah Vendor — Multi-Item Refactor + Send WA
+- **New PO schema**: header (vendor_name + po_date + notes) + **items array**. Each item has: origin, destination, armada, item_description (Isi Barang/Material), qty, harga (optional), awb_id (optional).
+- **Harga & AWB optional** — boleh dikosongkan saat create, diisi nanti via PATCH endpoint.
+- **Auto-link cost**: jika item punya BOTH `awb_id` AND `harga > 0` → otomatis create Vendor Cost (Accrue) di AWB itu + post journal DR 5101 / CR 2101. Setiap perubahan via PATCH otomatis reverse cost lama & re-create.
+- **New endpoint**: `PATCH /api/purchase-orders/{pid}/items/{idx}` untuk update per-item.
+- **DELETE pre-check**: refuse hapus PO jika ada cost yang sudah disettle (avoid partial cascade).
+- **Send WA button** per PO — buka `wa.me/?text=...` (tanpa nomor — user pilih chat di WA). Template format:
+  ```
+  📌SCHEDULE PICK UP TGL 22 JUNI 2026
+  
+  1. ORIGIN : PT. SANGGAR - BANDUNG
+  TUJUAN : PT. MNI - JABODETABEK
+  ARMADA : FUSO KELAS BERAT
+  MATERIAL : TIANG 7.3 (320)
+  QTY : 320
+  
+  2. ORIGIN : ...
+  ...
+  ```
+- **Expandable rows** di table — klik chevron untuk expand items + tombol Edit per baris.
+
+### Backend infra fix
+- `serialize()` sekarang **recursive** untuk nested dicts/lists — fix bug ObjectId serialization di documents dengan items array.
+
+### Verified by testing agent (iteration 17)
+- Backend: **17/17 PASS**
+- Frontend: **100% PASS** (WA URL, multi-item form, expand, edit, save)
+- Balance Sheet still balanced
+- Regression: invoices, costs, panjar, orders all OK
+
+---
+
+## Cumulative architecture (after iter17)
+
+### Tech Stack
+- Backend: FastAPI + MongoDB — `/app/backend/server.py` (~6469 lines)
+- Frontend: React 18 + Tailwind + react-router (basename `/arc`)
+
+### Modules
+- **Master**: Customers, Contracts (with min_kg), Vendors, Regions, Armada, Sender Memory
+- **Order/AWB**: Input (Lumpsum + Charter + Koli + Sender suggest), List (Cost click via shared CostListModal, POD button, millisec sort)
+- **Receive**: Terima Barang + Terima POD; grand_total auto-include addons (SPSI/Forklift/Polis/Asuransi)
+- **Reconcile**: 3-status check (cost + received + POD)
+- **Cost**: Plotting, Settle Hutang Vendor (integrated Vendor Aging + Excel export)
+- **Panjar Kerja**: Partial settle + History modal
+- **PO/Manifest**: Multi-item (each row origin/destination/armada/qty/harga/awb) + Send WA + auto-link cost
+- **Invoice**: 2-phase (create → print sets date + posts AR), Multi-AWB bulk grouping, Cancel reversal, Reprint warning
+- **Analytics**: Dashboard (WO removed, Cashback removed, Total Biaya clickable)
+- **Reports**: PnL, BS, TB, Vendor Aging (embedded)
+- **Admin**: Migrations (reverse-unprinted-ar with reverse-journal pattern)
+
+### Shared Components
+- `CostListModal` — popup rincian cost (used in /orders, /recap, /analytics)
+- `SearchableSelect`, `FilterPresets`
+
+## Implemented features (with iteration dates)
+- 2026-06-22 Iter14: 17 major modifications
+- 2026-06-22 Iter15: 7 fixes
+- 2026-06-22 Iter16: 6 fixes
+- 2026-06-23 Iter17: PO multi-item refactor + Send WA + recursive serialize
+
+## Future Backlog
+- Refactor server.py (~6469 lines) into router modules (deferred per user)
+- Replace native date inputs with shadcn Calendar
+- Email notifications for vendor aging 60+/90+ days
+- PDF export per Panjar settle (history)
+- WA per-vendor phone (store on Vendor master) — opt-in nanti
+- Audit tz-naive datetime di seluruh backend
+
+## Verified credentials
+- admin/admin123, operation/operation123, finance/finance123
 
 ### 6 Issue Fixes from user iter15 feedback
 1. **History Settlement per panjar** — New `History (N)` button on /panjar untuk setiap panjar yang punya `settle_history`. Modal shows 3 summary cards (Total Panjar / Sudah Settle / Sisa Outstanding) + table per event dengan breakdown details (target AWB/OPS, jumlah, deskripsi, notes).
