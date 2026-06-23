@@ -56,6 +56,21 @@ def _oid(x: str) -> ObjectId:
     except Exception:
         raise HTTPException(status_code=400, detail="ID tidak valid")
 
+def _serialize_value(v):
+    """Recursive helper for serialize() — handles ObjectId, datetime, nested dicts/lists."""
+    if isinstance(v, ObjectId):
+        return str(v)
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, list):
+        return [_serialize_value(x) for x in v]
+    if isinstance(v, dict):
+        out = {}
+        for k, val in v.items():
+            out[k] = _serialize_value(val)
+        return out
+    return v
+
 def serialize(doc: dict) -> dict:
     if doc is None:
         return doc
@@ -63,12 +78,7 @@ def serialize(doc: dict) -> dict:
     if "_id" in doc:
         doc["id"] = str(doc.pop("_id"))
     for k, v in list(doc.items()):
-        if isinstance(v, ObjectId):
-            doc[k] = str(v)
-        elif isinstance(v, datetime):
-            doc[k] = v.isoformat()
-        elif isinstance(v, list):
-            doc[k] = [str(x) if isinstance(x, ObjectId) else (x.isoformat() if isinstance(x, datetime) else x) for x in v]
+        doc[k] = _serialize_value(v)
     return doc
 
 # ----- PPh withholding helpers (sprint 1) ---------------------------------
@@ -5871,13 +5881,20 @@ async def delete_petty_cash(pid: str, user: dict = Depends(require_role("adminis
 # ===========================================================================
 # PO / Surat Perintah Vendor (Manifest) — bisa dengan/tanpa AWB
 # ===========================================================================
+class POItemIn(BaseModel):
+    origin: str
+    destination: str
+    armada: Optional[str] = None
+    item_description: Optional[str] = None  # Isi Barang / Material
+    qty: Optional[float] = None
+    harga: Optional[float] = None  # boleh kosong, diisi nanti
+    awb_id: Optional[str] = None  # boleh kosong, diisi nanti
+
 class POIn(BaseModel):
     vendor_name: str
-    description: str
-    amount: float
-    awb_id: Optional[str] = None  # optional — jika ada → otomatis cost ke AWB tersebut
     po_date: Optional[str] = None
     notes: Optional[str] = None
+    items: List[POItemIn] = []
 
 async def next_po_number() -> str:
     yyyymm = datetime.now(timezone.utc).strftime("%Y%m")
@@ -5890,22 +5907,106 @@ async def next_po_number() -> str:
             seq = int(m.group(1)) + 1
     return f"{prefix}{seq:04d}"
 
+async def _process_po_item_cost(po_doc: dict, item: dict, user_id: str, po_dt: datetime) -> Optional[str]:
+    """Jika item punya awb_id DAN harga > 0 → auto-create vendor cost + journal.
+    Return linked_cost_id (string) or None."""
+    if not item.get("awb_id") or not item.get("harga") or float(item["harga"]) <= 0:
+        return None
+    awb_oid = _oid(item["awb_id"]) if isinstance(item["awb_id"], str) else item["awb_id"]
+    awb = await db.awb_orders.find_one({"_id": awb_oid})
+    if not awb:
+        return None
+    cost_doc = {
+        "awb_id": awb_oid,
+        "cost_category": "Vendor",
+        "amount": float(item["harga"]),
+        "description": f"PO {po_doc['number']} — {item.get('origin', '')}→{item.get('destination', '')} ({item.get('item_description') or 'Material'})",
+        "sub_label": "PO Vendor",
+        "vendor_name": po_doc["vendor_name"],
+        "payment_type": "Accrue",
+        "is_settled": False,
+        "source": "purchase_order",
+        "source_ref": str(po_doc["_id"]),
+        "created_by": user_id,
+        "created_at": po_dt,
+    }
+    cr = await db.awb_costs.insert_one(cost_doc)
+    try:
+        await post_journal(
+            date=po_dt,
+            description=f"PO {po_doc['number']} → cost {awb['awb_number']}",
+            lines=[
+                {"account_code": "5101", "debit": cost_doc["amount"], "credit": 0,
+                 "memo": f"PO {po_doc['number']} - {po_doc['vendor_name']}"},
+                {"account_code": "2101", "debit": 0, "credit": cost_doc["amount"],
+                 "memo": po_doc["vendor_name"]},
+            ],
+            reference_type="cost", reference_id=str(cr.inserted_id), posted_by=user_id,
+        )
+    except HTTPException:
+        pass
+    try:
+        await recognize_revenue_for_awb(awb_oid, user_id, trigger_date=po_dt)
+    except Exception:
+        pass
+    return str(cr.inserted_id)
+
 @app.get("/api/purchase-orders")
 async def list_purchase_orders(user: dict = Depends(get_current_user)):
     docs = await db.purchase_orders.find().sort("po_date", -1).to_list(2000)
+    # Collect all referenced AWBs across all items
+    all_awb_ids = set()
+    for d in docs:
+        for it in (d.get("items") or []):
+            if it.get("awb_id"):
+                all_awb_ids.add(it["awb_id"])
+        # legacy single-AWB field
+        if d.get("awb_id"):
+            all_awb_ids.add(d["awb_id"])
+    amap = {a["_id"]: a for a in await db.awb_orders.find({"_id": {"$in": list(all_awb_ids)}}).to_list(5000)}
     out = []
     for d in docs:
         s = serialize(d)
-        if d.get("awb_id"):
-            awb = await db.awb_orders.find_one({"_id": d["awb_id"]})
-            s["awb_number"] = awb["awb_number"] if awb else None
+        items_out = []
+        for it in (d.get("items") or []):
+            io = dict(it)
+            if io.get("awb_id"):
+                a = amap.get(io["awb_id"])
+                io["awb_id"] = str(io["awb_id"])
+                io["awb_number"] = a["awb_number"] if a else None
+            items_out.append(io)
+        s["items"] = items_out
+        # Aggregate totals
+        s["total_amount"] = sum(float(it.get("harga") or 0) for it in items_out)
+        s["total_qty"] = sum(float(it.get("qty") or 0) for it in items_out)
+        s["item_count"] = len(items_out)
+        # back-compat: legacy single-item flatten
+        if not items_out and d.get("amount"):
+            s["legacy"] = True
+            s["total_amount"] = float(d.get("amount") or 0)
+            s["item_count"] = 1
+            awb_legacy = amap.get(d.get("awb_id")) if d.get("awb_id") else None
+            s["items"] = [{
+                "origin": "-", "destination": "-", "armada": None,
+                "item_description": d.get("description"),
+                "qty": None, "harga": float(d.get("amount") or 0),
+                "awb_id": str(d["awb_id"]) if d.get("awb_id") else None,
+                "awb_number": awb_legacy["awb_number"] if awb_legacy else None,
+                "linked_cost_id": d.get("linked_cost_id"),
+            }]
         out.append(s)
     return out
 
 @app.post("/api/purchase-orders")
 async def create_purchase_order(data: POIn, user: dict = Depends(require_role("operation", "finance"))):
-    if data.amount <= 0:
-        raise HTTPException(400, "Nominal PO harus > 0")
+    if not data.vendor_name or not data.vendor_name.strip():
+        raise HTTPException(400, "Vendor wajib diisi")
+    if not data.items or len(data.items) == 0:
+        raise HTTPException(400, "Minimal 1 baris item wajib")
+    # Validate items
+    for i, it in enumerate(data.items):
+        if not it.origin or not it.destination:
+            raise HTTPException(400, f"Item #{i+1}: Origin & Destination wajib")
     if data.po_date:
         try:
             y, m, d = [int(x) for x in data.po_date.split("-")]
@@ -5915,59 +6016,89 @@ async def create_purchase_order(data: POIn, user: dict = Depends(require_role("o
             raise HTTPException(400, "po_date harus YYYY-MM-DD")
     else:
         po_dt = datetime.now(timezone.utc)
+    # Build items list (awb_id stored as ObjectId or None)
+    items_doc = []
+    for it in data.items:
+        items_doc.append({
+            "origin": it.origin.strip(),
+            "destination": it.destination.strip(),
+            "armada": (it.armada or "").strip() or None,
+            "item_description": (it.item_description or "").strip() or None,
+            "qty": float(it.qty) if it.qty not in (None, "") else None,
+            "harga": float(it.harga) if it.harga not in (None, "") else None,
+            "awb_id": _oid(it.awb_id) if it.awb_id else None,
+            "linked_cost_id": None,
+        })
     doc = {
         "number": await next_po_number(),
         "vendor_name": data.vendor_name.strip(),
-        "description": data.description.strip(),
-        "amount": float(data.amount),
-        "awb_id": _oid(data.awb_id) if data.awb_id else None,
         "po_date": po_dt,
         "notes": (data.notes or "").strip() or None,
-        "status": "Open",  # Open / Received POD / Cancelled
-        "linked_cost_id": None,  # if AWB given, auto-create cost
+        "status": "Open",
+        "items": items_doc,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.purchase_orders.insert_one(doc)
-    # If AWB given → auto-create vendor cost (accrue) on that AWB
-    if data.awb_id:
-        awb = await db.awb_orders.find_one({"_id": _oid(data.awb_id)})
-        if not awb:
-            raise HTTPException(400, "AWB id tidak ditemukan")
-        cost_doc = {
-            "awb_id": _oid(data.awb_id),
-            "cost_category": "Vendor",
-            "amount": float(data.amount),
-            "description": f"PO {doc['number']} - {data.description}",
-            "sub_label": "PO Vendor",
-            "vendor_name": data.vendor_name.strip(),
-            "payment_type": "Accrue",
-            "is_settled": False,
-            "source": "purchase_order",
-            "source_ref": str(r.inserted_id),
-            "created_by": user["id"],
-            "created_at": po_dt,
-        }
-        cr = await db.awb_costs.insert_one(cost_doc)
-        await db.purchase_orders.update_one({"_id": r.inserted_id}, {"$set": {"linked_cost_id": str(cr.inserted_id)}})
-        # Journal: DR 5101 Vendor / CR 2101 Hutang Usaha
-        try:
-            await post_journal(
-                date=po_dt,
-                description=f"PO {doc['number']} → cost {awb['awb_number']}",
-                lines=[
-                    {"account_code": "5101", "debit": doc["amount"], "credit": 0, "memo": f"PO {doc['number']} - {data.vendor_name}"},
-                    {"account_code": "2101", "debit": 0, "credit": doc["amount"], "memo": data.vendor_name},
-                ],
-                reference_type="cost", reference_id=str(cr.inserted_id), posted_by=user["id"],
+    doc["_id"] = r.inserted_id
+    # Process each item: if AWB + harga both present → auto-create cost
+    for idx, it in enumerate(items_doc):
+        cid = await _process_po_item_cost(doc, it, user["id"], po_dt)
+        if cid:
+            await db.purchase_orders.update_one(
+                {"_id": r.inserted_id, f"items.{idx}.linked_cost_id": None},
+                {"$set": {f"items.{idx}.linked_cost_id": cid}},
             )
-        except HTTPException:
-            pass
-        try:
-            await recognize_revenue_for_awb(_oid(data.awb_id), user["id"], trigger_date=po_dt)
-        except Exception:
-            pass
     return serialize(await db.purchase_orders.find_one({"_id": r.inserted_id}))
+
+@app.patch("/api/purchase-orders/{pid}/items/{idx}")
+async def update_po_item(pid: str, idx: int, data: POItemIn, user: dict = Depends(require_role("operation", "finance"))):
+    """Update satu baris item PO. Jika harga & AWB baru → otomatis create cost (kalau belum ada)."""
+    po = await db.purchase_orders.find_one({"_id": _oid(pid)})
+    if not po:
+        raise HTTPException(404, "PO tidak ditemukan")
+    items = po.get("items") or []
+    if idx < 0 or idx >= len(items):
+        raise HTTPException(400, "Index item tidak valid")
+    item = items[idx]
+    old_linked = item.get("linked_cost_id")
+    # Build updated values
+    new_item = {
+        "origin": data.origin.strip(),
+        "destination": data.destination.strip(),
+        "armada": (data.armada or "").strip() or None,
+        "item_description": (data.item_description or "").strip() or None,
+        "qty": float(data.qty) if data.qty not in (None, "") else None,
+        "harga": float(data.harga) if data.harga not in (None, "") else None,
+        "awb_id": _oid(data.awb_id) if data.awb_id else None,
+        "linked_cost_id": old_linked,
+    }
+    # If was previously linked but now AWB or harga missing → reverse the cost
+    if old_linked:
+        cost = await db.awb_costs.find_one({"_id": _oid(old_linked)})
+        same_awb = bool(new_item.get("awb_id")) and cost and cost.get("awb_id") == new_item["awb_id"]
+        same_amt = cost and abs(float(cost.get("amount") or 0) - float(new_item.get("harga") or 0)) < 0.01
+        need_recreate = not (new_item.get("awb_id") and new_item.get("harga") and new_item["harga"] > 0)
+        if need_recreate or not same_awb or not same_amt:
+            if cost and cost.get("is_settled"):
+                raise HTTPException(400, "Cost terkait sudah disettle — tidak bisa update item. Reverse pembayaran dulu.")
+            await db.awb_costs.delete_one({"_id": _oid(old_linked)})
+            await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": old_linked})
+            new_item["linked_cost_id"] = None
+    # Set item
+    items[idx] = new_item
+    await db.purchase_orders.update_one({"_id": _oid(pid)}, {"$set": {"items": items}})
+    # If now eligible → create cost
+    if not new_item.get("linked_cost_id") and new_item.get("awb_id") and new_item.get("harga") and new_item["harga"] > 0:
+        po_dt = po.get("po_date") or datetime.now(timezone.utc)
+        po_doc = {"_id": _oid(pid), "number": po["number"], "vendor_name": po["vendor_name"]}
+        cid = await _process_po_item_cost(po_doc, new_item, user["id"], po_dt)
+        if cid:
+            await db.purchase_orders.update_one(
+                {"_id": _oid(pid)},
+                {"$set": {f"items.{idx}.linked_cost_id": cid}},
+            )
+    return serialize(await db.purchase_orders.find_one({"_id": _oid(pid)}))
 
 class POReceiveIn(BaseModel):
     pod_date: Optional[str] = None
@@ -5981,14 +6112,18 @@ async def delete_purchase_order(pid: str, user: dict = Depends(require_role("adm
     po = await db.purchase_orders.find_one({"_id": _oid(pid)})
     if not po:
         raise HTTPException(404, "PO tidak ditemukan")
-    # Cascade: hapus linked cost & journal-nya
+    # Cascade: hapus semua linked cost dari items
+    items = po.get("items") or []
+    linked_ids = [it.get("linked_cost_id") for it in items if it.get("linked_cost_id")]
+    # Legacy single-item field
     if po.get("linked_cost_id"):
+        linked_ids.append(po["linked_cost_id"])
+    for cid in linked_ids:
         try:
-            cid = po["linked_cost_id"]
             cost = await db.awb_costs.find_one({"_id": _oid(cid)})
             if cost:
                 if cost.get("is_settled"):
-                    raise HTTPException(400, "Cost terkait sudah disettle — tidak bisa hapus PO. Reverse pembayaran dulu.")
+                    raise HTTPException(400, f"Cost terkait sudah disettle — tidak bisa hapus PO. Reverse pembayaran dulu.")
                 await db.awb_costs.delete_one({"_id": _oid(cid)})
                 await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": cid})
         except HTTPException:

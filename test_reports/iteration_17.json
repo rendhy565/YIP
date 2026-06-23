@@ -1,0 +1,25 @@
+{
+  "summary": "Iteration 17 — PO/Surat Perintah Vendor multi-item refactor verified end-to-end. Backend: 17/17 pytest passing covering POST validations, cost auto-creation rules (both awb_id & harga>0 required), PATCH update flows (add/remove/change), DELETE cascade, and serialize() regression on invoices/costs/orders/panjar. Frontend: WA button generates correct wa.me/?text= URL with Indonesian 'SCHEDULE PICK UP TGL …' template, Buat PO modal has multi-item dynamic rows with all required fields, save → list refresh works, expand→edit modal works with pre-filled values.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration17_po_refactor.py",
+    "/app/test_reports/pytest/iter17_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 6469 lines — should be split into modular files (po.py, costs.py, accounting.py, etc.) per the >700 line guideline.",
+    "_process_po_item_cost swallows post_journal HTTPException silently with bare except. Consider logging the error so a journal posting failure can be diagnosed.",
+    "PATCH update_po_item: when AWB-only or harga-only changes (e.g., user just updates armada description), the same_awb/same_amt comparison still passes and cost is preserved — good. But when ObjectId equality is compared (cost.get('awb_id') == new_item['awb_id']), both are ObjectId so OK; tested fine.",
+    "DELETE /api/purchase-orders raises HTTP 400 with 'Cost terkait sudah disettle' inside loop AFTER potentially deleting earlier costs (loop order non-deterministic). Should pre-check ALL linked costs for settled state before any deletion to avoid partial cascade.",
+    "Frontend buildWAText uses toLocaleDateString('id-ID') — relies on browser locale; works in tested env but could be unreliable on other devices."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration17_po_refactor.py"],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% (all flows verified)"},
+  "test_credentials": "admin/admin123, operation/operation123, finance/finance123",
+  "seed_data_creation": "Test PO docs (TEST_E2E_*, TEST_PO_*, TEST_PATCH_V, TEST_DEL_V) created during tests; each test cleans up via DELETE after assertion. A few from UI test (TEST_E2E_<timestamp>) remain in DB — safe to ignore or purge by prefix.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PO refactor stable. New schema items[] with origin/destination/armada/item_description/qty/harga/awb_id. Cost auto-created only when BOTH awb_id and harga>0. PATCH endpoint /api/purchase-orders/{pid}/items/{idx} handles update + cost reconciliation. WA button uses window.open to wa.me/?text= (no phone). For UI tests on this app, login inputs have no name/type='text'; use generic input[] query selector and fill by index. Public URL: https://git-tweak-staging.preview.emergentagent.com/arc/...",
+  "rca of the issue": "N/A — feature works as specified."
+}
