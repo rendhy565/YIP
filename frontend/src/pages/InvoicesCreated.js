@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X } from "lucide-react";
+import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -16,8 +16,57 @@ export default function InvoicesCreated() {
   const [company, setCompany] = useState("");
   const [filterMode, setFilterMode] = useState("OR"); // "OR" | "AND"
   const [selected, setSelected] = useState(new Set());
+  const [poEdit, setPoEdit] = useState({}); // { invoice_id: po_number_string }
+  const [savingPo, setSavingPo] = useState({});
+  const [showImport, setShowImport] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   const COMPANY_OPTIONS = ["PT. Abirama Mitra Pradana", "PT. Abirama Mitra Pratama"];
+
+  // Sync poEdit state with loaded invoices (po_number from backend)
+  useEffect(() => {
+    const map = {};
+    for (const inv of invoices) map[inv.id] = inv.po_number || "";
+    setPoEdit(map);
+  }, [invoices]);
+
+  const savePoNumber = async (invId) => {
+    setSavingPo((s) => ({ ...s, [invId]: true }));
+    try {
+      await api.patch(`/invoices/${invId}/po-number`, { po_number: poEdit[invId] || null });
+      toast.success("Nomor PO disimpan");
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setSavingPo((s) => ({ ...s, [invId]: false })); }
+  };
+
+  const downloadPoTemplate = async () => {
+    try {
+      const r = await api.get("/invoices/po-number-template", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement("a"); a.href = url;
+      a.download = "Invoice_PO_Number_Template.xlsx";
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Template Excel terdownload");
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const submitImport = async () => {
+    if (!importFile) { toast.error("Pilih file Excel dulu"); return; }
+    setImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+      const r = await api.post("/invoices/import-po-numbers", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      toast.success(`${r.data.updated_count} invoice diupdate${r.data.not_found_count > 0 ? `, ${r.data.not_found_count} tidak ditemukan` : ""}`);
+      setShowImport(false);
+      setImportFile(null);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setImporting(false); }
+  };
 
   const load = async () => {
     const [inv, cs] = await Promise.all([api.get("/invoices"), api.get("/customers")]);
@@ -194,6 +243,9 @@ export default function InvoicesCreated() {
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <h3 className="font-bold inline-flex items-center gap-2"><FileText size={16} className="text-purple-700"/> Daftar Invoice</h3>
           <div className="ml-auto flex gap-2 flex-wrap">
+            <Button data-testid="import-po-btn" variant="secondary" onClick={() => setShowImport(true)}>
+              <Upload size={14}/> Import PO Number
+            </Button>
             <Button data-testid="export-report-ar-from-invoices-btn" variant="secondary" onClick={exportReportAr}>
               <FileSpreadsheet size={14}/> Export REPORT AR (filter)
             </Button>
@@ -209,7 +261,7 @@ export default function InvoicesCreated() {
                 {selected.size === filtered.length && filtered.length > 0 ? <CheckSquare size={14}/> : <Square size={14}/>}
               </button>
             </Th>
-            <Th>No. Invoice</Th><Th>AWB</Th><Th>Company</Th><Th>Customer</Th><Th>Tanggal</Th>
+            <Th>No. Invoice</Th><Th>No. PO</Th><Th>AWB</Th><Th>Company</Th><Th>Customer</Th><Th>Tanggal</Th>
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
@@ -221,6 +273,22 @@ export default function InvoicesCreated() {
                   </button>
                 </Td>
                 <Td className="font-mono font-semibold">{i.invoice_number}</Td>
+                <Td className="whitespace-nowrap">
+                  <div className="flex items-center gap-1">
+                    <Input
+                      data-testid={`po-input-${i.id}`}
+                      value={poEdit[i.id] || ""}
+                      onChange={(e) => setPoEdit({ ...poEdit, [i.id]: e.target.value })}
+                      placeholder="No. PO"
+                      className="!h-8 !text-xs !w-28"
+                    />
+                    {(poEdit[i.id] || "") !== (i.po_number || "") && (
+                      <button data-testid={`save-po-${i.id}`} onClick={() => savePoNumber(i.id)} disabled={savingPo[i.id]} title="Simpan No PO" className="p-1 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
+                        <Save size={12}/>
+                      </button>
+                    )}
+                  </div>
+                </Td>
                 <Td className="font-mono">
                   {i.awb_count > 1 ? (
                     <span className="inline-flex items-center gap-1">
@@ -261,11 +329,53 @@ export default function InvoicesCreated() {
                 </Td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">Tidak ada invoice untuk filter ini.</Td></tr>}
+            {filtered.length === 0 && <tr><Td colSpan={10} className="text-center text-slate-500 py-10">Tidak ada invoice untuk filter ini.</Td></tr>}
           </tbody>
         </Table>
         <Pagination {...pag} testid="pagination-invoices"/>
       </Card>
+
+      {/* IMPORT PO NUMBER MODAL */}
+      {showImport && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="import-po-modal">
+          <Card className="w-full max-w-md p-6">
+            <div className="flex items-start justify-between mb-4">
+              <h3 className="font-heading font-bold text-xl"><Upload className="inline mr-2" size={18}/>Import Nomor PO</h3>
+              <button onClick={() => { setShowImport(false); setImportFile(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="space-y-3">
+              <div className="px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs">
+                <p className="font-semibold text-blue-900 mb-1">Cara pakai:</p>
+                <ol className="list-decimal pl-4 space-y-0.5 text-blue-800">
+                  <li>Download template Excel di bawah</li>
+                  <li>Isi kolom A (Invoice Number) & B (PO Number)</li>
+                  <li>Upload file di bawah, klik Import</li>
+                </ol>
+              </div>
+              <Button data-testid="download-po-template-btn" variant="secondary" onClick={downloadPoTemplate} className="w-full">
+                <Download size={14}/> Download Template Excel
+              </Button>
+              <div>
+                <Label>Pilih file Excel (.xlsx) *</Label>
+                <input
+                  data-testid="import-po-file"
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={(e) => setImportFile(e.target.files?.[0] || null)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                />
+                {importFile && <p className="text-[11px] text-slate-600 mt-1">File: {importFile.name}</p>}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => { setShowImport(false); setImportFile(null); }}>Batal</Button>
+              <Button data-testid="confirm-import-po-btn" onClick={submitImport} disabled={importing || !importFile}>
+                {importing ? "Memproses..." : (<><Upload size={14}/> Import</>)}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

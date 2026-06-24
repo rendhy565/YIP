@@ -110,21 +110,30 @@ export default function OrdersList() {
 
   const openReceive = (r) => {
     setRecvFor(r);
-    const hasPolis = !!(r.polis_amount && r.polis_amount > 0);
-    const hasAsuransi = !!(r.insurance_amount && r.insurance_amount > 0);
+    // Pre-fill: jika sudah pernah diterima, isi dari awb doc. Jika belum, pakai default order values.
+    const isUpdate = !!r.received_at;
+    const hasPolis = isUpdate
+      ? !!(r.received_polis_amount && r.received_polis_amount > 0)
+      : !!(r.polis_amount && r.polis_amount > 0);
+    const hasAsuransi = isUpdate
+      ? !!(r.received_asuransi_amount && r.received_asuransi_amount > 0)
+      : !!(r.insurance_amount && r.insurance_amount > 0);
+    const polisVal = isUpdate ? r.received_polis_amount : r.polis_amount;
+    const asuVal = isUpdate ? r.received_asuransi_amount : r.insurance_amount;
     setRecvForm({
-      received_date: todayStr(),
-      received_by_name: r.consignee || "",
+      received_date: isUpdate && r.received_at ? new Date(r.received_at).toISOString().slice(0, 10) : todayStr(),
+      received_by_name: r.received_by_name || r.consignee || "",
       polis_enabled: hasPolis,
-      polis_amount: hasPolis ? String(r.polis_amount) : "",
+      polis_amount: hasPolis ? String(polisVal) : "",
       asuransi_enabled: hasAsuransi,
-      asuransi_amount: hasAsuransi ? String(r.insurance_amount) : "",
-      spsi_enabled: false,
-      spsi_amount: "",
-      sewa_forklift_enabled: false,
-      sewa_forklift_amount: "",
-      work_type: "Kirim Barang",
-      mode: r.service === "AIR" ? "Air" : "Trucking",
+      asuransi_amount: hasAsuransi ? String(asuVal) : "",
+      spsi_enabled: !!r.spsi_enabled,
+      spsi_amount: r.spsi_amount ? String(r.spsi_amount) : "",
+      sewa_forklift_enabled: !!r.sewa_forklift_enabled,
+      sewa_forklift_amount: r.sewa_forklift_amount ? String(r.sewa_forklift_amount) : "",
+      work_type: r.work_type || "Kirim Barang",
+      mode: r.mode || (r.service === "AIR" ? "Air" : "Trucking"),
+      received_notes: r.received_notes || "",
     });
   };
 
@@ -138,9 +147,10 @@ export default function OrdersList() {
         asuransi_amount: recvForm.asuransi_enabled && recvForm.asuransi_amount !== "" ? parseFloat(recvForm.asuransi_amount) : null,
         spsi_amount: recvForm.spsi_enabled && recvForm.spsi_amount !== "" ? parseFloat(recvForm.spsi_amount) : null,
         sewa_forklift_amount: recvForm.sewa_forklift_enabled && recvForm.sewa_forklift_amount !== "" ? parseFloat(recvForm.sewa_forklift_amount) : null,
+        received_notes: recvForm.received_notes || null,
       };
       await api.post(`/orders/${recvFor.id}/receive`, payload);
-      toast.success(`Barang AWB ${recvFor.awb_number} ditandai DITERIMA`);
+      toast.success(`Barang AWB ${recvFor.awb_number} ${recvFor.received_at ? "diupdate" : "ditandai DITERIMA"}`);
       setRecvFor(null);
       load();
     } catch (e) { toast.error(errMsg(e)); }
@@ -226,16 +236,16 @@ export default function OrdersList() {
                 <Td className="text-slate-600 text-xs">{fmtDate(r.created_at)}</Td>
                 <Td className="text-slate-600 text-xs">
                   {r.received_at ? (
-                    <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold">
+                    <button data-testid={`edit-receive-${r.awb_number}`} onClick={() => openReceive(r)} className="inline-flex items-center gap-1 text-emerald-700 font-semibold hover:underline" title="Klik untuk edit data terima">
                       <PackageCheck size={11}/> {fmtDate(r.received_at)}
-                    </span>
+                    </button>
                   ) : <span className="text-slate-400">—</span>}
                 </Td>
                 <Td className="text-slate-600 text-xs">
                   {r.pod_received_at ? (
-                    <span className="inline-flex items-center gap-1 text-blue-700 font-semibold">
+                    <button data-testid={`edit-pod-${r.awb_number}`} onClick={() => openPod(r)} className="inline-flex items-center gap-1 text-blue-700 font-semibold hover:underline" title="Klik untuk edit POD">
                       <PackageCheck size={11}/> {fmtDate(r.pod_received_at)}
-                    </span>
+                    </button>
                   ) : <span className="text-slate-400">—</span>}
                 </Td>
                 <Td>{r.customer_name || "-"}</Td>
@@ -410,10 +420,23 @@ export default function OrdersList() {
               </p>
             </div>
 
+            {/* Catatan — optional */}
+            <div className="mt-4 pt-3 border-t border-slate-200">
+              <Label>Catatan <span className="text-slate-400 text-[10px] ml-1">(opsional)</span></Label>
+              <textarea
+                data-testid="receive-notes"
+                value={recvForm.received_notes || ""}
+                onChange={(e) => setRecvForm({ ...recvForm, received_notes: e.target.value })}
+                rows={2}
+                className="w-full px-3 py-2 border border-slate-300 rounded text-sm focus:ring-2 focus:ring-blue-300 outline-none resize-none"
+                placeholder="Catatan tambahan saat terima barang (opsional)"
+              />
+            </div>
+
             <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
               <Button variant="secondary" type="button" onClick={() => setRecvFor(null)}>Batal</Button>
               <Button data-testid="confirm-receive-btn" variant="success" onClick={submitReceive} disabled={saving || !recvForm.received_by_name}>
-                <PackageCheck size={14}/> {saving ? "Memproses..." : "Tandai Diterima"}
+                <PackageCheck size={14}/> {saving ? "Memproses..." : (recvFor.received_at ? "Update Penerimaan" : "Tandai Diterima")}
               </Button>
             </div>
           </Card>

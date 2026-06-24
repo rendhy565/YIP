@@ -83,28 +83,32 @@ export function InvoicePrintBody({ data }) {
         {/* Grey INVOICE banner */}
         <div className="grey-band text-center py-3 mb-5 font-bold text-3xl tracking-wide">INVOICE</div>
 
-        {/* Issuer left + Meta right */}
-        <div className="grid grid-cols-2 gap-6 mb-5 text-sm">
+        {/* "To" (Customer / Bill-to) on the LEFT + Meta (Invoice no, PO no, Date) on the RIGHT */}
+        <div className="grid grid-cols-2 gap-6 mb-3 text-sm">
           <div>
-            <div className="font-bold">{company.name}</div>
-            <div className="whitespace-pre-line text-slate-700">{company.address}</div>
-            {company.npwp && <div className="text-slate-700 font-mono text-xs mt-0.5">NPWP: {company.npwp}</div>}
+            <div className="text-xs uppercase tracking-wider text-slate-600 font-semibold mb-1">To:</div>
+            <div className="font-bold text-base">{customer?.name || awb?.company_name || ""}</div>
+            {customer?.address && <div className="whitespace-pre-line text-slate-700 mt-0.5">{customer.address}</div>}
+            {customer?.npwp && <div className="text-slate-700 font-mono text-xs mt-0.5">NPWP: {customer.npwp}</div>}
+            <div className="mt-2">
+              <span className="text-slate-700">Attn :</span> <span className="font-semibold">{awb?.consignee || customer?.pic_name || ""}</span>
+            </div>
           </div>
           <div className="text-sm">
             <div className="grid grid-cols-[110px_10px_1fr] gap-x-2 gap-y-0.5">
               <div className="font-semibold">Invoice No</div><div>:</div><div className="font-bold font-mono">{invoice.invoice_number}</div>
+              {invoice.po_number && (
+                <>
+                  <div className="font-semibold">No. PO</div><div>:</div><div className="font-mono">{invoice.po_number}</div>
+                </>
+              )}
               <div className="font-semibold">Date</div><div>:</div><div>{fmtIdDate(invDate)}</div>
               <div className="font-semibold">Due Date</div><div>:</div><div>{fmtIdDate(dueDate)}</div>
             </div>
           </div>
         </div>
 
-        {/* Attn */}
-        <div className="text-sm mb-4">
-          <span className="text-slate-700">Attn :</span> <span className="font-semibold">{awb.consignee || customer?.name || ""}</span>
-        </div>
-
-        {/* Items table */}
+        {/* Items table — supports multi-AWB */}
         <table className="w-full text-sm border border-slate-700">
           <thead>
             <tr className="dark-band">
@@ -114,18 +118,34 @@ export function InvoicePrintBody({ data }) {
             </tr>
           </thead>
           <tbody>
+            {/* Cover row — describes the invoice (Biaya Pengiriman Barang sekian AWB) */}
             <tr>
               <td className="p-2 border-l border-r border-slate-700 align-top">1.</td>
               <td className="p-2 border-l border-r border-slate-700">
-                <div>Biaya Pengiriman Barang{(awb.service || awb.armada) ? ` - ${[awb.service, awb.armada].filter(Boolean).join(" ")}` : ""}</div>
-                <div className="mt-1 grid grid-cols-[80px_8px_1fr] gap-x-2 text-xs text-slate-700">
-                  <div>Tanggal</div><div>:</div><div>{fmtIdDate(awb.created_at)}</div>
-                  <div>Origin</div><div>:</div><div>{awb.origin}</div>
-                  <div>Tujuan</div><div>:</div><div>{awb.destination}</div>
+                <div className="font-semibold">
+                  Biaya Pengiriman Barang {awbList.length} AWB
                 </div>
               </td>
               <td className="p-2 border-l border-r border-slate-700 text-right align-top font-mono">{fmtIDR(subTotal)}</td>
             </tr>
+            {/* Per-AWB detail rows */}
+            {awbList.map((a, idx) => (
+              <tr key={a.id || idx}>
+                <td className="p-2 border-l border-r border-slate-700 align-top text-xs text-slate-600">{idx + 1}.{idx + 1}</td>
+                <td className="p-2 border-l border-r border-slate-700">
+                  <div className="text-xs font-semibold font-mono">{a.awb_number}{(a.service || a.armada) ? ` — ${[a.service, a.armada].filter(Boolean).join(" ")}` : ""}</div>
+                  <div className="mt-1 grid grid-cols-[80px_8px_1fr] gap-x-2 text-xs text-slate-700">
+                    <div>Tanggal</div><div>:</div><div>{fmtIdDate(a.created_at)}</div>
+                    <div>Origin</div><div>:</div><div>{a.origin}</div>
+                    <div>Tujuan</div><div>:</div><div>{a.destination}</div>
+                    {a.koli_count != null && (<><div>Koli</div><div>:</div><div>{a.koli_count}{a.koli_qty_per ? ` (${a.koli_qty_per})` : ""}</div></>)}
+                    {a.qty_kg ? (<><div>Berat</div><div>:</div><div>{a.qty_kg} kg</div></>) : null}
+                  </div>
+                </td>
+                <td className="p-2 border-l border-r border-slate-700 text-right align-top font-mono text-xs text-slate-600">{fmtIDR(a.total_tariff || 0)}</td>
+              </tr>
+            ))}
+            {/* Addons rows */}
             {asuransi > 0 && (
               <tr>
                 <td className="p-2 border-l border-r border-slate-700">2.</td>
@@ -199,6 +219,12 @@ export function InvoicePrintBody({ data }) {
             <div className="text-left">Jakarta,  {fmtIdDate(invDate)}</div>
             <div className="h-28"></div>
             <div className="font-bold">(  {company.signer || "..........................."}  )</div>
+            {/* Issuer info (kecil, di bawah signature) */}
+            <div className="text-left text-[10px] text-slate-600 mt-3 leading-snug">
+              <div className="font-bold text-slate-800">{company.name}</div>
+              {company.address && <div className="whitespace-pre-line">{company.address}</div>}
+              {company.npwp && <div className="font-mono">NPWP: {company.npwp}</div>}
+            </div>
           </div>
         </div>
       </div>
@@ -222,18 +248,29 @@ export function InvoicePrintBody({ data }) {
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td className="p-2 border border-slate-300 font-mono">{awb.awb_number}</td>
-              <td className="p-2 border border-slate-300">{fmtIdDate(awb.created_at)}</td>
-              <td className="p-2 border border-slate-300">{awb.origin}</td>
-              <td className="p-2 border border-slate-300">{awb.destination}</td>
-              <td className="p-2 border border-slate-300">{awb.goods_content}</td>
-              <td className="p-2 border border-slate-300 text-right">{awb.qty_kg}</td>
-              <td className="p-2 border border-slate-300 text-right">{fmtIDR(awb.tariff_per_kg)}</td>
-              <td className="p-2 border border-slate-300 text-right">{fmtIDR(subTotal)}</td>
-              <td className="p-2 border border-slate-300 text-right">{fmtIDR(ppnAmt)}</td>
-              <td className="p-2 border border-slate-300 text-right font-bold">{fmtIDR(grandTotal)}</td>
-            </tr>
+            {awbList.map((a, idx) => (
+              <tr key={a.id || idx}>
+                <td className="p-2 border border-slate-300 font-mono">{a.awb_number}</td>
+                <td className="p-2 border border-slate-300">{fmtIdDate(a.created_at)}</td>
+                <td className="p-2 border border-slate-300">{a.origin}</td>
+                <td className="p-2 border border-slate-300">{a.destination}</td>
+                <td className="p-2 border border-slate-300">{a.goods_content}</td>
+                <td className="p-2 border border-slate-300 text-right">{a.qty_kg}</td>
+                <td className="p-2 border border-slate-300 text-right">{fmtIDR(a.tariff_per_kg)}</td>
+                <td className="p-2 border border-slate-300 text-right">{fmtIDR(a.total_tariff)}</td>
+                <td className="p-2 border border-slate-300 text-right">{fmtIDR(a.tax_amount)}</td>
+                <td className="p-2 border border-slate-300 text-right font-bold">{fmtIDR((a.total_tariff || 0) + (a.tax_amount || 0))}</td>
+              </tr>
+            ))}
+            {/* Total row */}
+            {awbList.length > 1 && (
+              <tr className="bg-slate-100 font-bold">
+                <td colSpan={7} className="p-2 border border-slate-300 text-right">TOTAL ({awbList.length} AWB)</td>
+                <td className="p-2 border border-slate-300 text-right">{fmtIDR(subTotal)}</td>
+                <td className="p-2 border border-slate-300 text-right">{fmtIDR(ppnAmt)}</td>
+                <td className="p-2 border border-slate-300 text-right">{fmtIDR(grandTotal)}</td>
+              </tr>
+            )}
           </tbody>
         </table>
         <p className="text-xs text-slate-500 mt-3">Lampiran ini merupakan bagian yang tidak terpisahkan dari Invoice No. {invoice.invoice_number}.</p>

@@ -104,6 +104,27 @@ export default function ImportExcel() {
     <div data-testid="import-page">
       <PageHeader title="Import Data Excel" subtitle="Import REPORT PENJUALAN dari file XLSX. Master Customer & Vendor otomatis dibuat. Jurnal akunting otomatis terposting." />
 
+      {/* Loading overlay — spinner + progress text when import is busy */}
+      {busy && (
+        <div className="fixed inset-0 bg-slate-900/60 z-[60] flex items-center justify-center" data-testid="import-loading-overlay">
+          <div className="bg-white rounded-lg shadow-2xl p-8 max-w-md text-center">
+            {/* Circle spinner */}
+            <div className="inline-block">
+              <svg className="animate-spin h-16 w-16 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
+            <div className="mt-4 font-heading font-bold text-lg text-slate-900">Memproses Import...</div>
+            <div className="text-xs text-slate-600 mt-1">Mohon tunggu, jangan tutup halaman ini.</div>
+            {/* Indeterminate progress bar */}
+            <div className="mt-4 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+              <div className="h-full bg-blue-600 animate-pulse" style={{ width: "70%" }}></div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* DANGER ZONE: WIPE */}
       <Card className="mb-6 border-rose-300">
         <div className="px-4 py-3 bg-rose-50 border-b border-rose-200 flex items-center gap-2">

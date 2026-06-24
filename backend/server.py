@@ -282,6 +282,7 @@ class ReceiveAwbIn(BaseModel):
     sewa_forklift_amount: Optional[float] = None
     work_type: Literal["Kirim Barang", "Dismantle Barang", "Relokasi Barang"]
     mode: Literal["Air", "Trucking", "Konsul"]
+    received_notes: Optional[str] = None  # Catatan — optional
 
 class AwbPodIn(BaseModel):
     """Terima POD pada AWB (Proof of Delivery — penerimaan barang oleh consignee)."""
@@ -1877,6 +1878,7 @@ async def receive_awb(oid: str, data: ReceiveAwbIn, user: dict = Depends(get_cur
         "grand_total": new_grand_total,  # auto-include addons
         "work_type": data.work_type,
         "mode": data.mode,
+        "received_notes": (data.received_notes or "").strip() or None,
         "received_by": user["id"],
     }
     await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
@@ -6463,4 +6465,112 @@ async def migrate_reverse_unprinted_ar(user: dict = Depends(require_role("admini
         "total_invoices_unprinted": len(invoices_unprinted),
         "affected": affected_invoices,
         "note": "Posted reverse-journals (audit trail kept). Saat invoice dicetak, AR akan re-post otomatis.",
+    }
+
+# ===========================================================================
+# Invoice PO Number — Input & Bulk Import via Excel
+# ===========================================================================
+class InvoicePONumberIn(BaseModel):
+    po_number: Optional[str] = None  # null/empty → clear
+
+@app.patch("/api/invoices/{iid}/po-number")
+async def set_invoice_po_number(iid: str, data: InvoicePONumberIn, user: dict = Depends(get_current_user)):
+    inv = await db.invoices.find_one({"_id": _oid(iid)})
+    if not inv:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    po_num = (data.po_number or "").strip() or None
+    await db.invoices.update_one(
+        {"_id": _oid(iid)},
+        {"$set": {"po_number": po_num, "po_number_updated_at": datetime.now(timezone.utc), "po_number_updated_by": user["id"]}}
+    )
+    return serialize(await db.invoices.find_one({"_id": _oid(iid)}))
+
+@app.get("/api/invoices/po-number-template")
+async def invoice_po_number_template(user: dict = Depends(get_current_user)):
+    """Excel template untuk bulk import PO Number per Invoice."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Import PO Number"
+    bold = Font(bold=True)
+    bold_white = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    info_fill = PatternFill("solid", fgColor="FEF3C7")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # Header
+    headers = ["Invoice Number *", "PO Number"]
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(1, i, h)
+        c.font = bold_white
+        c.fill = header_fill
+        c.alignment = Alignment(horizontal="center")
+        c.border = border
+
+    # Sample invoice numbers from DB
+    sample_invoices = await db.invoices.find().sort("created_at", -1).limit(5).to_list(5)
+    for i, inv in enumerate(sample_invoices, start=2):
+        ws.cell(i, 1, inv.get("invoice_number")).border = border
+        po_cell = ws.cell(i, 2, inv.get("po_number") or "")
+        po_cell.border = border
+
+    # Info note row
+    info_row = max(7, 2 + len(sample_invoices) + 2)
+    ws.cell(info_row, 1, "ℹ Instruksi:").font = bold
+    ws.cell(info_row + 1, 1, "• Kolom A 'Invoice Number' wajib diisi (case-insensitive, harus match dengan nomor invoice di sistem).")
+    ws.cell(info_row + 2, 1, "• Kolom B 'PO Number' — boleh kosong (clear), atau isi PO number dari customer.")
+    ws.cell(info_row + 3, 1, "• Baris yang invoice number-nya tidak ditemukan akan di-skip.")
+    ws.cell(info_row + 4, 1, "• Aman: import berulang akan UPDATE existing (idempotent).")
+    for r in range(info_row, info_row + 5):
+        ws.cell(r, 1).fill = info_fill
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=4)
+
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 30
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Invoice_PO_Number_Template.xlsx"'},
+    )
+
+@app.post("/api/invoices/import-po-numbers")
+async def import_invoice_po_numbers(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    """Bulk import PO numbers ke invoice via Excel upload."""
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    ws = wb.active
+    updated = []
+    skipped = []
+    not_found = []
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        if not row or all(v is None for v in row):
+            continue
+        inv_no = str(row[0] or "").strip()
+        po_no = (str(row[1]).strip() if len(row) > 1 and row[1] is not None else "") or None
+        if not inv_no or inv_no.startswith("ℹ") or inv_no.startswith("•"):
+            continue  # skip info rows
+        inv = await db.invoices.find_one({"invoice_number": {"$regex": f"^{re.escape(inv_no)}$", "$options": "i"}})
+        if not inv:
+            not_found.append(inv_no)
+            continue
+        await db.invoices.update_one(
+            {"_id": inv["_id"]},
+            {"$set": {"po_number": po_no, "po_number_updated_at": now, "po_number_updated_by": user["id"]}}
+        )
+        updated.append({"invoice_number": inv["invoice_number"], "po_number": po_no})
+    return {
+        "ok": True,
+        "updated_count": len(updated),
+        "not_found_count": len(not_found),
+        "updated": updated[:50],
+        "not_found": not_found[:50],
     }

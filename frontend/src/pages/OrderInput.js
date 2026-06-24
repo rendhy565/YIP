@@ -283,8 +283,15 @@ export default function OrderInput() {
               )}
             </div>
             <div>
-              <Label>Consignee (Penerima)</Label>
-              <Input data-testid="order-consignee-input" value={form.consignee} onChange={(e) => setForm({ ...form, consignee: e.target.value })} placeholder="Nama / perusahaan penerima"/>
+              <Label>Consignee (Penerima) — alamat lengkap & PIC</Label>
+              <textarea
+                data-testid="order-consignee-input"
+                value={form.consignee}
+                onChange={(e) => setForm({ ...form, consignee: e.target.value })}
+                rows={3}
+                className="w-full px-3 py-2 border border-slate-300 rounded text-sm focus:ring-2 focus:ring-blue-300 outline-none resize-vertical"
+                placeholder="Nama / perusahaan penerima, alamat lengkap, PIC, no telp"
+              />
             </div>
           </div>
 
