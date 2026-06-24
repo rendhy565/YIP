@@ -6,7 +6,7 @@ const BASE = RAW && RAW !== "undefined" ? RAW : "";
 
 const api = axios.create({
   baseURL: `${BASE}/api`,
-  timeout: 120000,
+  timeout: 0,
 });
 
 api.interceptors.request.use((cfg) => {

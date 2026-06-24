@@ -4236,7 +4236,7 @@ async def list_sheets(
     if not content:
         raise HTTPException(400, "File kosong")
     try:
-        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
     except Exception as e:
         raise HTTPException(400, f"File bukan Excel valid: {str(e)[:100]}")
     SKIP_SHEETS = {"REPORT", "DASHBOARD", "PIVOT TABLE", "SUMMARY", "Sheet4"}
