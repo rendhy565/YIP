@@ -118,7 +118,7 @@ export function InvoicePrintBody({ data }) {
             </tr>
           </thead>
           <tbody>
-            {/* Cover row — describes the invoice (Biaya Pengiriman Barang sekian AWB) */}
+            {/* Cover row — describes the invoice (Biaya Pengiriman Barang sekian AWB). Detail per-AWB ada di Lampiran. */}
             <tr>
               <td className="p-2 border-l border-r border-slate-700 align-top">1.</td>
               <td className="p-2 border-l border-r border-slate-700">
@@ -128,23 +128,6 @@ export function InvoicePrintBody({ data }) {
               </td>
               <td className="p-2 border-l border-r border-slate-700 text-right align-top font-mono">{fmtIDR(subTotal)}</td>
             </tr>
-            {/* Per-AWB detail rows */}
-            {awbList.map((a, idx) => (
-              <tr key={a.id || idx}>
-                <td className="p-2 border-l border-r border-slate-700 align-top text-xs text-slate-600">{idx + 1}.{idx + 1}</td>
-                <td className="p-2 border-l border-r border-slate-700">
-                  <div className="text-xs font-semibold font-mono">{a.awb_number}{(a.service || a.armada) ? ` — ${[a.service, a.armada].filter(Boolean).join(" ")}` : ""}</div>
-                  <div className="mt-1 grid grid-cols-[80px_8px_1fr] gap-x-2 text-xs text-slate-700">
-                    <div>Tanggal</div><div>:</div><div>{fmtIdDate(a.created_at)}</div>
-                    <div>Origin</div><div>:</div><div>{a.origin}</div>
-                    <div>Tujuan</div><div>:</div><div>{a.destination}</div>
-                    {a.koli_count != null && (<><div>Koli</div><div>:</div><div>{a.koli_count}{a.koli_qty_per ? ` (${a.koli_qty_per})` : ""}</div></>)}
-                    {a.qty_kg ? (<><div>Berat</div><div>:</div><div>{a.qty_kg} kg</div></>) : null}
-                  </div>
-                </td>
-                <td className="p-2 border-l border-r border-slate-700 text-right align-top font-mono text-xs text-slate-600">{fmtIDR(a.total_tariff || 0)}</td>
-              </tr>
-            ))}
             {/* Addons rows */}
             {asuransi > 0 && (
               <tr>
