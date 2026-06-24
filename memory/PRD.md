@@ -1,6 +1,84 @@
 # PRD — ARC TMS Business Suite
 
-## Latest changes (Iteration 17 — 2026-06-23)
+## Latest changes (Iteration 18 — 2026-06-24)
+
+### 10 UI/Feature improvements
+1. **Import progress overlay** — circle spinner + indeterminate progress bar muncul saat `busy=true` di /import page (data-testid `import-loading-overlay`)
+2. **Catatan optional** di Barang Diterima — field `received_notes` (textarea, 2 rows) di receive modal, disimpan ke `awb_orders.received_notes`
+3. **Click Tgl Terima / Tgl POD untuk edit** — cells di /orders sekarang clickable. `openReceive(r)` & `openPod(r)` pre-fill ALL fields dari awb doc (including pod_date dari `r.pod_received_at`)
+4. **Import PO Number Excel** — tombol di /invoices/created. Download template Excel via `/api/invoices/po-number-template` (kolom: Invoice Number, PO Number). Upload via `/api/invoices/import-po-numbers` (matched/skipped/not_found feedback)
+5. **Inline PO input per invoice row** — textbox per row, tombol Save icon muncul kalau ada draft change. PATCH `/api/invoices/{iid}/po-number`
+6. **No. PO di template invoice** — di bawah Invoice No (conditional render)
+7. **Invoice template reformat** — TOP section sekarang "**To: Customer name + address + NPWP**" (bukan issuer). "Attn :" = consignee (PIC). Issuer/Company moved to BOTTOM near signature.
+8. **Multi-AWB tampil semua** — Fixed: items table sekarang loop semua `awbList` dengan sub-row 1.1, 1.2, ... per AWB. Lampiran table juga loop semua AWB + TOTAL row jika count > 1.
+9. **Cover desc multi-AWB** — "Biaya Pengiriman Barang {N} AWB" (N = jumlah AWB)
+10. **Consignee = textarea** di /orders/new — rows=3, support longtext (alamat lengkap, PIC, no telp)
+
+### New endpoints
+- `PATCH /api/invoices/{iid}/po-number` — set/clear po_number per invoice
+- `GET /api/invoices/po-number-template` — download Excel template
+- `POST /api/invoices/import-po-numbers` — bulk import via Excel upload
+
+### Verified by testing agent (iteration 18)
+- Backend: **9/9 pytest PASS** (`/app/backend/tests/test_iteration18_features.py`)
+- Frontend: **100% PASS** (all 10 flows verified)
+- Test report: `/app/test_reports/iteration_18.json`
+- Tests: receive-notes optional+saved, po-number set+clear+null, template xlsx download, import success+idempotent+not_found, multi-AWB awbs[] in /full, inline PO + save persists, invoice print "To"/"Attn"/"No. PO" structure, cover "Biaya Pengiriman {N} AWB", Consignee textarea rows=3
+
+### Bug fix (post-test)
+- Minor: `openPod` now pre-fills `pod_date` from `r.pod_received_at` (was always `todayStr()`)
+
+### Testing agent code review (recommendations, not blockers)
+- server.py is 6577 lines → recommend split into routers (deferred)
+- `po_number` accepts any length string — consider max 100 chars validation
+- `import-po-numbers` could use `bulk_write` for >500 rows performance
+- Info row skip uses fragile `startswith('ℹ')` check
+
+---
+
+## Cumulative architecture (after iter18)
+
+### Tech Stack
+- Backend: FastAPI + MongoDB — `/app/backend/server.py` (~6577 lines)
+- Frontend: React 18 + Tailwind + react-router (basename `/arc`)
+
+### Modules
+- **Master**: Customers (induk), Contracts (with min_kg), Vendors, Regions, Armada, Sender Memory
+- **Order/AWB**: Input (Lumpsum + Charter + Koli + Sender suggest + Consignee textarea), List (Cost click, click-Terima-edit, click-POD-edit, millisec sort)
+- **Receive**: Terima Barang (with optional Catatan) + Terima POD; grand_total auto-include addons
+- **Reconcile**: 3-status check (cost + received + POD)
+- **Cost**: Plotting, Settle Hutang Vendor (integrated Vendor Aging + Excel export)
+- **Panjar Kerja**: Partial settle + History modal
+- **PO/Manifest**: Multi-item + Send WA
+- **Invoice**: 2-phase (create → print), Multi-AWB bulk, **PO Number inline + Excel import**, Cancel reversal, Reprint warning
+- **Invoice Print Template**: "To" header + "Attn", multi-AWB items, PO number, issuer at bottom, lampiran multi-row
+- **Analytics**: Dashboard (no WO, no Cashback, Total Biaya clickable)
+- **Reports**: PnL, BS, TB, Vendor Aging (embedded), Excel exports
+- **Admin**: Migrations (reverse-unprinted-ar)
+- **Import**: Excel REPORT PENJUALAN with **progress overlay**
+
+### Shared Components
+- `CostListModal` — popup rincian cost (used in /orders, /recap, /analytics)
+- `SearchableSelect`, `FilterPresets`, `Pagination`
+
+## Implemented features (with iteration dates)
+- 2026-06-22 Iter14: 17 major modifications
+- 2026-06-22 Iter15: 7 fixes
+- 2026-06-22 Iter16: 6 fixes
+- 2026-06-23 Iter17: PO multi-item refactor + Send WA + recursive serialize
+- 2026-06-24 Iter18: 10 UI/feature improvements (loading overlay, optional notes, click-to-edit dates, PO number import + inline, invoice template reformat, multi-AWB fix, Consignee textarea)
+
+## Future Backlog
+- Refactor server.py (~6577 lines) into router modules
+- Replace native date inputs with shadcn Calendar
+- Bulk write for import-po-numbers (large imports)
+- po_number max length validation
+- Email notifications for vendor aging 60+/90+ days
+- PDF export per Panjar settle
+- WA per-vendor phone
+
+## Verified credentials
+- admin/admin123, operation/operation123, finance/finance123
 
 ### PO / Surat Perintah Vendor — Multi-Item Refactor + Send WA
 - **New PO schema**: header (vendor_name + po_date + notes) + **items array**. Each item has: origin, destination, armada, item_description (Isi Barang/Material), qty, harga (optional), awb_id (optional).

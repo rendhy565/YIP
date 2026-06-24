@@ -160,7 +160,7 @@ export default function OrdersList() {
   const openPod = (r) => {
     setPodFor(r);
     setPodForm({
-      pod_date: todayStr(),
+      pod_date: r.pod_received_at ? new Date(r.pod_received_at).toISOString().slice(0, 10) : todayStr(),
       pod_notes: r.pod_notes || "",
       pod_signed_by: r.pod_signed_by || r.consignee || "",
     });
