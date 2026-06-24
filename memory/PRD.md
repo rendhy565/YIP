@@ -1,5 +1,8 @@
 # PRD — ARC TMS Business Suite
 
+## Latest tweak (2026-02 follow-up)
+- **Invoice cover description simplified** — Removed itemized list (1.1, 1.2, ...) on Cover row. Now shows ONLY "Biaya Pengiriman Barang {N} AWB". Detail per-AWB tetap ada di Lampiran. File: `/app/frontend/src/pages/InvoicePrint.js` (line 121-126).
+
 ## Latest changes (Iteration 18 — 2026-06-24)
 
 ### 10 UI/Feature improvements
