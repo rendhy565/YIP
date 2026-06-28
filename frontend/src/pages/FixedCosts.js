@@ -471,14 +471,22 @@ export default function FixedCosts() {
               {importPreview && !importResult && (
                 <div className="border border-emerald-200 bg-emerald-50/50 rounded p-3 space-y-2">
                   <div className="font-bold text-emerald-900 flex items-center gap-1"><Check size={16}/> Preview Hasil</div>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
                     <div className="p-2 bg-white rounded border border-emerald-200">
-                      <div className="text-[10px] uppercase text-slate-500 font-bold">Panjar Kerja</div>
-                      <div className="font-heading text-2xl font-black">{importPreview.panjar_imported}</div>
+                      <div className="text-[10px] uppercase text-slate-500 font-bold">Panjar Baru</div>
+                      <div className="font-heading text-xl font-black">{importPreview.panjar_imported}</div>
                     </div>
                     <div className="p-2 bg-white rounded border border-emerald-200">
-                      <div className="text-[10px] uppercase text-slate-500 font-bold">Expense</div>
-                      <div className="font-heading text-2xl font-black">{importPreview.expense_imported}</div>
+                      <div className="text-[10px] uppercase text-emerald-700 font-bold">Auto-Settled</div>
+                      <div className="font-heading text-xl font-black text-emerald-700">{importPreview.panjar_settled || 0}</div>
+                    </div>
+                    <div className="p-2 bg-white rounded border border-red-200">
+                      <div className="text-[10px] uppercase text-red-700 font-bold">Overspent</div>
+                      <div className="font-heading text-xl font-black text-red-700">{importPreview.panjar_overspent || 0}</div>
+                    </div>
+                    <div className="p-2 bg-white rounded border border-emerald-200">
+                      <div className="text-[10px] uppercase text-slate-500 font-bold">Expense (no panjar)</div>
+                      <div className="font-heading text-xl font-black">{importPreview.expense_imported}</div>
                     </div>
                   </div>
                   {importPreview.categories_created?.length > 0 && (
@@ -516,6 +524,10 @@ export default function FixedCosts() {
                   <div className="font-bold text-emerald-900 flex items-center gap-1"><Check size={16}/> Import Selesai!</div>
                   <div className="text-sm space-y-1">
                     <div>✓ <strong>{importResult.panjar_imported}</strong> Panjar Kerja terimport</div>
+                    <div>✓ <strong>{importResult.panjar_settled || 0}</strong> Panjar auto-settled by laporan</div>
+                    {importResult.panjar_overspent > 0 && (
+                      <div className="text-red-700">⚠ <strong>{importResult.panjar_overspent}</strong> Panjar overspent (kurang panjar) — cek warna merah di Panjar Kerja</div>
+                    )}
                     <div>✓ <strong>{importResult.expense_imported}</strong> Expense terimport</div>
                     {importResult.skipped_duplicate > 0 && <div className="text-amber-700">⚠ {importResult.skipped_duplicate} duplikat di-skip</div>}
                     {importResult.errors?.length > 0 && (

@@ -1,5 +1,16 @@
 # PRD — ARC TMS Business Suite
 
+## Latest (2026-06-28) — BKK Import: Auto-link Panjar ↔ Settlement + Overspend support
+- **Auto-settle**: BKK-numeric `Laporan Operasional - X` (Dr filled) sekarang auto-link ke Panjar BKK-JV terdekat (recipient match, oldest open, advance_date ≤ settle_date).
+- **Overspend allowed**: jika settlement > panjar, sisa di-debit ke akun kas (extra cash out). Field baru: `overspend_amount`, `refund_amount`.
+- **Color coding di Panjar Kerja**: row Settled normal = hijau muda, Settled overspent = pink/merah dengan badge "OVERSPENT" + label "Kurang panjar: Rp X".
+- **Journal entries balanced**: 
+  - Normal: Dr 5102/COGS, Cr 1108 (panjar)
+  - Refund: Dr 5102 + Dr 1101 (cash back) / Cr 1108
+  - Overspend: Dr 5102 / Cr 1108 + Cr 1101 (extra cash out)
+- **Dry-run preview**: simulasi panjar in-memory supaya bisa pratinjau hasil linking + overspend count sebelum import beneran.
+- **Test result file Jan 2026**: 67 panjar imported → 66 auto-settled, 32 overspent, 81 standalone expenses. 0 errors. All journals balanced.
+
 ## Latest feature (2026-06-28) — BKK Excel Import
 - **Endpoint** `POST /api/expense/import-bkk` (multipart upload, `?dry_run=true` for preview)
 - **Logic**:

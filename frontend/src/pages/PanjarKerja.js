@@ -157,19 +157,31 @@ export default function PanjarKerja() {
             <Th>Status</Th><Th>Breakdown AWB</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.id} data-testid={`panjar-row-${r.number}`}>
+            {rows.map((r) => {
+              const overspend = (r.overspend_amount || 0);
+              const isOverspent = r.status === "Settled" && overspend > 0;
+              const rowCls = isOverspent
+                ? "bg-red-50/60 hover:bg-red-50"
+                : (r.status === "Settled" ? "bg-emerald-50/40 hover:bg-emerald-50/70" : "bg-amber-50/40 hover:bg-amber-50/70");
+              return (
+              <tr key={r.id} data-testid={`panjar-row-${r.number}`} className={rowCls}>
                 <Td className="font-mono font-semibold">{r.number}</Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.advance_date)}</Td>
                 <Td className="font-semibold">{r.recipient_name}</Td>
                 <Td className="text-xs">{r.purpose || "-"}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.amount)}</Td>
-                <Td className="text-right">{r.settled_amount != null ? fmtIDR(r.settled_amount) : (r.actual_amount != null ? fmtIDR(r.actual_amount) : "-")}</Td>
+                <Td className={`text-right ${isOverspent ? "text-red-700 font-bold" : ""}`}>{r.settled_amount != null ? fmtIDR(r.settled_amount) : (r.actual_amount != null ? fmtIDR(r.actual_amount) : "-")}</Td>
                 <Td className="text-right">{r.refund_amount != null ? fmtIDR(r.refund_amount) : "-"}</Td>
                 <Td>
                   <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${
-                    r.status === "Settled" ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-amber-100 text-amber-800 border-amber-200"
-                  }`}>{r.status}</span>
+                    isOverspent ? "bg-red-100 text-red-800 border-red-300"
+                    : (r.status === "Settled" ? "bg-emerald-100 text-emerald-800 border-emerald-200" : "bg-amber-100 text-amber-800 border-amber-200")
+                  }`}>{isOverspent ? "Overspent" : r.status}</span>
+                  {isOverspent && (
+                    <div className="text-[9px] text-red-700 font-bold mt-0.5">
+                      Kurang panjar: {fmtIDR(overspend)}
+                    </div>
+                  )}
                   {r.status === "Open" && r.settled_amount > 0 && (
                     <div className="text-[9px] text-amber-700 mt-0.5">
                       Sisa: {fmtIDR(r.amount - (r.settled_amount || 0) - (r.refund_amount || 0))}
@@ -203,7 +215,8 @@ export default function PanjarKerja() {
                   </div>
                 </Td>
               </tr>
-            ))}
+              );
+            })}
             {rows.length === 0 && <tr><Td colSpan={10} className="text-center text-slate-500 py-8">Belum ada panjar kerja.</Td></tr>}
           </tbody>
         </Table>

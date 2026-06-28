@@ -6843,12 +6843,14 @@ async def import_bkk_excel(
     # --- Process rows ---
     summary = {
         "panjar_imported": 0,
+        "panjar_settled": 0,
+        "panjar_overspent": 0,
         "expense_imported": 0,
         "skipped_duplicate": 0,
         "skipped_empty": 0,
         "categories_created": [],
         "errors": [],  # list of {row, message}
-        "samples": {"panjar": [], "expense": []},
+        "samples": {"panjar": [], "expense": [], "settlements": []},
     }
 
     # Cache categories (avoid re-fetching)
@@ -6872,6 +6874,9 @@ async def import_bkk_excel(
                 cat = await get_expense_category(n) or await get_expense_category("Lainnya")
         cat_cache[n] = cat
         return cat
+
+    # In-memory tracking for dry-run mode (since panjars aren't actually inserted)
+    dry_run_open_panjars: list = []  # list of {recipient, amount, advance_date, "number": fake}
 
     now = datetime.now(timezone.utc)
     for ridx, row in enumerate(ws.iter_rows(min_row=header_row_idx + 1, values_only=True), start=header_row_idx + 1):
@@ -6938,6 +6943,13 @@ async def import_bkk_excel(
                     continue
                 if dry_run:
                     summary["panjar_imported"] += 1
+                    # Track in-memory so settlement lookup later can match it (within same import file)
+                    dry_run_open_panjars.append({
+                        "recipient": recipient,
+                        "amount": amount,
+                        "advance_date": expense_date,
+                        "number": f"DRY-{ridx}",
+                    })
                     if len(summary["samples"]["panjar"]) < 5:
                         summary["samples"]["panjar"].append({"recipient": recipient, "amount": amount, "date": expense_date.strftime("%Y-%m-%d"), "desc": desc[:80]})
                     continue
@@ -6977,17 +6989,139 @@ async def import_bkk_excel(
                 if len(summary["samples"]["panjar"]) < 5:
                     summary["samples"]["panjar"].append({"number": pj_doc["number"], "recipient": recipient, "amount": amount, "date": expense_date.strftime("%Y-%m-%d")})
             else:
-                # Expense — amount: Dr (settlement) else Cr (direct)
+                # BKK-numeric → either:
+                #   - Settlement of an Open Panjar (if Dr filled & matching panjar found by recipient), OR
+                #   - Direct Expense (fallback)
                 amount = dr_amt if dr_amt > 0 else cr_amt
                 if amount <= 0:
                     summary["skipped_empty"] += 1
                     continue
+                expense_date_str = expense_date.strftime("%Y-%m-%d")
+                period_month = expense_date.strftime("%Y-%m")
+
+                # --- Try to settle an existing Open Panjar (only when Dr is filled) ---
+                settled_panjar = False
+                if dr_amt > 0 and "laporan" in desc.lower():
+                    recipient = _bkk_parse_recipient(desc) or None
+                    if recipient:
+                        panjar = None
+                        # In dry-run, check in-memory simulated panjars first
+                        if dry_run:
+                            for i, p in enumerate(dry_run_open_panjars):
+                                if p["recipient"].lower() == recipient.lower() and p["advance_date"] <= expense_date:
+                                    panjar = {"_id": None, "number": p["number"], "amount": p["amount"], "recipient_name": p["recipient"]}
+                                    dry_run_open_panjars.pop(i)
+                                    break
+                        # Real DB lookup (also fallback for dry-run when no in-mem match)
+                        if not panjar:
+                            panjar = await db.cash_advances.find_one(
+                                {
+                                    "recipient_name": {"$regex": f"^{re.escape(recipient)}$", "$options": "i"},
+                                    "status": "Open",
+                                    "advance_date": {"$lte": expense_date},
+                                },
+                                sort=[("advance_date", 1)],
+                            )
+                        if panjar:
+                            # idempotency: if this BKK already linked, skip
+                            existing_links = panjar.get("bkk_settle_links") or []
+                            if any(l.get("bkk_source_no") == no_bkk for l in existing_links):
+                                summary["skipped_duplicate"] += 1
+                                continue
+                            if dry_run:
+                                summary["panjar_settled"] = summary.get("panjar_settled", 0) + 1
+                                panjar_amt = float(panjar.get("amount") or 0)
+                                if amount > panjar_amt:
+                                    summary["panjar_overspent"] = summary.get("panjar_overspent", 0) + 1
+                                if len(summary["samples"].setdefault("settlements", [])) < 5:
+                                    summary["samples"]["settlements"].append({
+                                        "panjar": panjar.get("number"),
+                                        "recipient": recipient,
+                                        "panjar_amt": panjar_amt,
+                                        "settle_amt": amount,
+                                        "diff": amount - panjar_amt,
+                                        "date": expense_date_str,
+                                    })
+                                settled_panjar = True
+                                continue
+                            # --- DO SETTLE ---
+                            panjar_amt = float(panjar.get("amount") or 0)
+                            overspend = max(0.0, amount - panjar_amt)   # extra cash out (settle > panjar)
+                            refund    = max(0.0, panjar_amt - amount)   # cash returned to office (settle < panjar)
+                            cat = await _resolve_or_create_cat(code or "Operation")
+                            expense_code = cat.get("account_code") or "5102"
+                            # Update panjar
+                            update_set = {
+                                "actual_amount": amount,
+                                "settled_amount": amount,
+                                "refund_amount": refund,
+                                "overspend_amount": overspend,
+                                "status": "Settled",
+                                "settled_at": expense_date,
+                                "settle_category": cat["name"],
+                                "settle_account_code": expense_code,
+                                "settle_description": desc,
+                                "settle_bkk_source_no": no_bkk,
+                            }
+                            await db.cash_advances.update_one(
+                                {"_id": panjar["_id"]},
+                                {
+                                    "$set": update_set,
+                                    "$push": {"bkk_settle_links": {
+                                        "bkk_source_no": no_bkk,
+                                        "amount": amount,
+                                        "date": expense_date_str,
+                                        "description": desc,
+                                        "remark": remark,
+                                        "overspend": overspend,
+                                        "refund": refund,
+                                        "imported_at": now,
+                                    }},
+                                },
+                            )
+                            # Journal: clears 1108 (panjar), records expense, handles refund/overspend cash
+                            lines = [
+                                {"account_code": expense_code, "debit": amount, "credit": 0, "memo": desc[:60]},
+                                {"account_code": "1108", "debit": 0, "credit": panjar_amt, "memo": panjar["number"]},
+                            ]
+                            if overspend > 0:
+                                lines.append({"account_code": "1101", "debit": 0, "credit": overspend, "memo": f"Overspend {panjar['number']}"})
+                            if refund > 0:
+                                lines.append({"account_code": "1101", "debit": refund, "credit": 0, "memo": f"Refund {panjar['number']}"})
+                            try:
+                                tag = " (overspend)" if overspend > 0 else (" (refund)" if refund > 0 else "")
+                                await post_journal(
+                                    date=expense_date,
+                                    description=f"Settle panjar {panjar['number']} - {recipient}{tag} ({no_bkk})",
+                                    lines=lines,
+                                    reference_type="cash_advance_settle",
+                                    reference_id=str(panjar["_id"]),
+                                    posted_by=user["id"],
+                                )
+                            except HTTPException:
+                                pass
+                            summary["panjar_settled"] = summary.get("panjar_settled", 0) + 1
+                            if overspend > 0:
+                                summary["panjar_overspent"] = summary.get("panjar_overspent", 0) + 1
+                            if len(summary["samples"].setdefault("settlements", [])) < 5:
+                                summary["samples"]["settlements"].append({
+                                    "panjar": panjar["number"],
+                                    "recipient": recipient,
+                                    "panjar_amt": panjar_amt,
+                                    "settle_amt": amount,
+                                    "diff": amount - panjar_amt,
+                                    "date": expense_date_str,
+                                })
+                            settled_panjar = True
+
+                if settled_panjar:
+                    continue  # don't also create as standalone expense
+
+                # --- Fallback: create as standalone Expense ---
                 cat = await _resolve_or_create_cat(code or "Lainnya")
                 if not cat:
                     summary["errors"].append({"row": ridx, "message": f"Kategori '{code}' tidak bisa di-resolve"})
                     continue
-                expense_date_str = expense_date.strftime("%Y-%m-%d")
-                period_month = expense_date.strftime("%Y-%m")
                 # idempotency
                 dup = await db.fixed_costs.find_one({
                     "bkk_source_no": no_bkk,
