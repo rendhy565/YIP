@@ -146,7 +146,7 @@ export default function FixedCosts() {
   const [openCopy, setOpenCopy] = useState(false);
   const [copyTarget, setCopyTarget] = useState("");
   const [copyOverwrite, setCopyOverwrite] = useState(false);
-  const [form, setForm] = useState({ category: "", description: "", amount: "", period_month: currentMonth() });
+  const [form, setForm] = useState({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) });
 
   const load = () => api.get("/fixed-costs", { params: { month } }).then((r) => setRows(r.data));
   const loadCategories = () => api.get("/expense-categories").then((r) => setCategories(r.data));
@@ -163,7 +163,7 @@ export default function FixedCosts() {
       await api.post("/fixed-costs", { ...form, amount: parseFloat(form.amount) });
       toast.success("Expense ditambahkan");
       setOpen(false);
-      setForm({ category: "", description: "", amount: "", period_month: month });
+      setForm({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) });
       load();
     } catch (e2) { toast.error(errMsg(e2)); }
   };
@@ -219,7 +219,7 @@ export default function FixedCosts() {
             <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
               <Copy size={16}/> Salin ke Bulan Berikutnya
             </Button>
-            <Button data-testid="add-fixed-cost-btn" onClick={() => { setForm({ category: "", description: "", amount: "", period_month: month }); setOpen(true); }}>
+            <Button data-testid="add-fixed-cost-btn" onClick={() => { setForm({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) }); setOpen(true); }}>
               <Plus size={16}/> Tambah Expense
             </Button>
           </div>
@@ -280,7 +280,7 @@ export default function FixedCosts() {
               const ptype = r.posting_type || catByName[r.category]?.posting_type || "expense";
               return (
                 <tr key={r.id} data-testid={`fixed-cost-row-${r.id}`}>
-                  <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
+                  <Td className="text-xs text-slate-700 font-mono">{r.expense_date || fmtDate(r.created_at)}</Td>
                   <Td className="font-mono text-xs">{r.period_month}</Td>
                   <Td>
                     <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase text-slate-700 bg-slate-50 border-slate-200">
@@ -326,8 +326,8 @@ export default function FixedCosts() {
                 </div>
               </div>
               <div>
-                <Label>Periode (YYYY-MM) *</Label>
-                <Input type="month" value={form.period_month} onChange={(e) => setForm({ ...form, period_month: e.target.value })} required />
+                <Label>Tanggal Expense *</Label>
+                <Input data-testid="expense-date-input" type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })} required />
               </div>
               <div>
                 <Label>Jumlah (IDR) *</Label>

@@ -257,10 +257,11 @@ class PaymentMarkIn(BaseModel):
     awb_id: str
 
 class FixedCostIn(BaseModel):
-    category: str  # Gaji, Sewa, Utilities, Marketing, Lainnya
+    category: str  # name from db.expense_categories
     description: Optional[str] = None
     amount: float
-    period_month: str  # format YYYY-MM
+    expense_date: Optional[str] = None  # YYYY-MM-DD; preferred (datepicker). If absent, derived from period_month.
+    period_month: Optional[str] = None  # YYYY-MM (legacy); if absent, derived from expense_date
     cash_account_code: Optional[str] = None  # default 1101
 
 class MarkPaidIn(BaseModel):
@@ -390,10 +391,10 @@ COST_CATEGORY_TO_COA = {"Vendor": "5101", "Operational": "5102", "Lintas": "5103
 # posting_type: 'expense' → posts to Operating Expense (6xxx) — reduces Net Profit (below GM)
 DEFAULT_EXPENSE_CATEGORIES = [
     {"name": "Operation",     "posting_type": "cogs",    "account_code": "5102", "is_system": True},
+    {"name": "Marketing",     "posting_type": "cogs",    "account_code": "5104", "is_system": True},
     {"name": "Gaji",          "posting_type": "expense", "account_code": "6101", "is_system": True},
     {"name": "Sewa",          "posting_type": "expense", "account_code": "6102", "is_system": True},
     {"name": "Utilities",     "posting_type": "expense", "account_code": "6103", "is_system": True},
-    {"name": "Marketing",     "posting_type": "expense", "account_code": "6104", "is_system": True},
     {"name": "Administrasi",  "posting_type": "expense", "account_code": "6105", "is_system": True},
     {"name": "Lainnya",       "posting_type": "expense", "account_code": "6199", "is_system": True},
 ]
@@ -561,12 +562,30 @@ async def seed_data():
         )
 
     # Seed Expense Categories (replaces old hardcoded FIXED_COST_CATEGORIES list)
+    # For SYSTEM categories: keep posting_type/account_code in sync with DEFAULT_EXPENSE_CATEGORIES
+    # (so changing a default in code propagates to existing DBs)
     await db.expense_categories.create_index("name", unique=True)
     for ec in DEFAULT_EXPENSE_CATEGORIES:
         await db.expense_categories.update_one(
             {"name": ec["name"]},
-            {"$setOnInsert": {**ec, "active": True, "created_at": datetime.now(timezone.utc)}},
+            {
+                "$set": {
+                    "posting_type": ec["posting_type"],
+                    "account_code": ec["account_code"],
+                    "is_system": ec["is_system"],
+                    "active": True,
+                },
+                "$setOnInsert": {"name": ec["name"], "created_at": datetime.now(timezone.utc)},
+            },
             upsert=True,
+        )
+    # Migrate any legacy fixed_cost records whose category posting changed (e.g. Marketing → cogs).
+    # We update the cached posting_type/account_code on existing rows so P&L picks them up correctly,
+    # but only for records that match a system category name.
+    async for cat in db.expense_categories.find({"is_system": True}):
+        await db.fixed_costs.update_many(
+            {"category": cat["name"]},
+            {"$set": {"posting_type": cat["posting_type"], "account_code": cat["account_code"]}},
         )
 
     # Users
@@ -2114,13 +2133,30 @@ async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role
     cat = await get_expense_category(data.category)
     if not cat:
         raise HTTPException(400, f"Kategori '{data.category}' tidak terdaftar. Tambahkan kategori dulu.")
-    # validate period_month
-    try:
-        y, m = data.period_month.split("-")
-        int(y)
-        int(m)
-    except Exception:
-        raise HTTPException(400, "Format periode harus YYYY-MM")
+    # Resolve expense_date and period_month (accept either, derive the other)
+    expense_date_str = data.expense_date
+    period_month = data.period_month
+    expense_dt = None
+    if expense_date_str:
+        try:
+            expense_dt = datetime.strptime(expense_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "Format tanggal harus YYYY-MM-DD")
+        period_month = expense_dt.strftime("%Y-%m")
+    elif period_month:
+        try:
+            y, m = period_month.split("-")
+            int(y); int(m)
+        except Exception:
+            raise HTTPException(400, "Format periode harus YYYY-MM")
+        # Default expense_date = 1st of that month
+        expense_dt = datetime.strptime(f"{period_month}-01", "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        expense_date_str = expense_dt.strftime("%Y-%m-%d")
+    else:
+        # Both empty → use today
+        expense_dt = datetime.now(timezone.utc)
+        expense_date_str = expense_dt.strftime("%Y-%m-%d")
+        period_month = expense_dt.strftime("%Y-%m")
     cash_acc = data.cash_account_code or "1101"
     acc = await get_account(cash_acc)
     if not acc or not acc.get("is_cash"):
@@ -2132,20 +2168,21 @@ async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role
         "account_code": cat.get("account_code"),
         "description": data.description,
         "amount": data.amount,
-        "period_month": data.period_month,
+        "expense_date": expense_date_str,  # YYYY-MM-DD (new)
+        "period_month": period_month,       # YYYY-MM (kept for filtering/copy)
         "cash_account_code": cash_acc,
         "created_by": user["id"],
         "created_at": now,
     }
     r = await db.fixed_costs.insert_one(doc)
     new = await db.fixed_costs.find_one({"_id": r.inserted_id})
-    # Auto-post journal — uses account from category
+    # Auto-post journal — uses account from category and expense_date as journal date
     try:
         expense_code = cat.get("account_code") or FIXED_COST_TO_COA.get(data.category, "6199")
         label = "Beban Operasional" if cat.get("posting_type") == "cogs" else "Beban"
         await post_journal(
-            date=now,
-            description=f"{label} {cat['name']} - {data.period_month}",
+            date=expense_dt,
+            description=f"{label} {cat['name']} - {expense_date_str}",
             lines=[
                 {"account_code": expense_code, "debit": data.amount, "credit": 0, "memo": data.description or cat["name"]},
                 {"account_code": cash_acc, "debit": 0, "credit": data.amount, "memo": cat["name"]},

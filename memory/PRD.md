@@ -1,5 +1,9 @@
 # PRD — ARC TMS Business Suite
 
+## Latest tweaks (2026-06-28 — follow-up)
+- **Marketing kategori → COGS** (posting_type changed from `expense`/6104 to `cogs`/5104). Migration in `seed_data` auto-syncs system-category posting_type & propagates to existing fixed_cost records.
+- **Date picker** menggantikan month picker di form expense. New field `expense_date` (YYYY-MM-DD); `period_month` masih disimpan (auto-derived) untuk filter & copy. Tabel expense menampilkan `expense_date`. Backend accepts `expense_date` OR `period_month` for backward compat.
+
 ## Latest update (2026-06-28) — Expense module (replaces Fixed Cost / Overhead)
 - **Label rename**: "Biaya Tetap (Overhead) / Fixed Cost" → **Expense** (sidebar, page, P&L)
 - **Category posting rule**:
