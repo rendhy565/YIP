@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, currentMonth, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, Trash2, X, Banknote, Receipt, Copy, ChevronDown, Check, Search } from "lucide-react";
+import { Plus, Trash2, X, Banknote, Receipt, Copy, ChevronDown, Check, Search, Upload, FileSpreadsheet, AlertCircle } from "lucide-react";
 
 const POSTING_BADGE = {
   cogs:    { label: "COGS",    cls: "text-emerald-700 bg-emerald-50 border-emerald-200" },
@@ -146,6 +146,11 @@ export default function FixedCosts() {
   const [openCopy, setOpenCopy] = useState(false);
   const [copyTarget, setCopyTarget] = useState("");
   const [copyOverwrite, setCopyOverwrite] = useState(false);
+  const [openImport, setOpenImport] = useState(false);
+  const [importFile, setImportFile] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);  // dry_run result
+  const [importResult, setImportResult] = useState(null);    // actual result
   const [form, setForm] = useState({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) });
 
   const load = () => api.get("/fixed-costs", { params: { month } }).then((r) => setRows(r.data));
@@ -202,6 +207,51 @@ export default function FixedCosts() {
     } catch (e2) { toast.error(errMsg(e2)); }
   };
 
+  // ---------- BKK Import ----------
+  const openImportDialog = () => {
+    setImportFile(null);
+    setImportPreview(null);
+    setImportResult(null);
+    setOpenImport(true);
+  };
+
+  const handleFileChange = (e) => {
+    const f = e.target.files?.[0];
+    setImportFile(f || null);
+    setImportPreview(null);
+    setImportResult(null);
+  };
+
+  const runPreview = async () => {
+    if (!importFile) { toast.error("Pilih file dulu"); return; }
+    setImportBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+      const r = await api.post("/expense/import-bkk?dry_run=true", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setImportPreview(r.data);
+      toast.success(`Preview: ${r.data.panjar_imported} panjar + ${r.data.expense_imported} expense siap di-import`);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setImportBusy(false); }
+  };
+
+  const runImport = async () => {
+    if (!importFile) return;
+    if (!window.confirm(`Import ${(importPreview?.panjar_imported || 0)} panjar + ${(importPreview?.expense_imported || 0)} expense ke sistem?`)) return;
+    setImportBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", importFile);
+      const r = await api.post("/expense/import-bkk", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setImportResult(r.data);
+      toast.success(`✓ ${r.data.panjar_imported} panjar & ${r.data.expense_imported} expense ter-import`);
+      // refresh
+      load();
+      loadCategories();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setImportBusy(false); }
+  };
+
   // Resolve posting_type for each row via categories
   const catByName = Object.fromEntries(categories.map((c) => [c.name, c]));
   const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
@@ -216,6 +266,9 @@ export default function FixedCosts() {
         subtitle="Biaya operasional bulanan. Kategori 'Operation' masuk COGS (mempengaruhi Gross Margin); kategori lain masuk Expense (di bawah Gross Margin)."
         action={
           <div className="flex flex-wrap gap-2">
+            <Button data-testid="import-bkk-btn" variant="secondary" onClick={openImportDialog}>
+              <Upload size={16}/> Import BKK Excel
+            </Button>
             <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
               <Copy size={16}/> Salin ke Bulan Berikutnya
             </Button>
@@ -381,6 +434,111 @@ export default function FixedCosts() {
           </Card>
         </div>
       )}
+      {openImport && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <Card className="w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="font-heading font-bold text-xl flex items-center gap-2"><FileSpreadsheet size={20}/> Import BKK Excel</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Format kolom: <code className="bg-slate-100 px-1 rounded">No. BKK</code>, <code className="bg-slate-100 px-1 rounded">Date</code>, <code className="bg-slate-100 px-1 rounded">Desc.</code>, <code className="bg-slate-100 px-1 rounded">Code</code>, <code className="bg-slate-100 px-1 rounded">Dr</code>, <code className="bg-slate-100 px-1 rounded">Cr</code>.
+                  <br/><strong>BKK-JV</strong> → Panjar Kerja. <strong>BKK-numeric</strong> → Expense. Kategori baru auto-create. Duplikat otomatis di-skip.
+                </p>
+              </div>
+              <button onClick={() => setOpenImport(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <Label>File Excel BKK</Label>
+                <input
+                  data-testid="bkk-file-input"
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={handleFileChange}
+                  className="block w-full text-sm border border-slate-300 rounded-md p-2"
+                />
+              </div>
+
+              {importFile && !importPreview && !importResult && (
+                <div className="flex gap-2">
+                  <Button data-testid="bkk-preview-btn" disabled={importBusy} onClick={runPreview} variant="secondary">
+                    {importBusy ? "Memproses..." : "Preview Dulu (Dry Run)"}
+                  </Button>
+                </div>
+              )}
+
+              {importPreview && !importResult && (
+                <div className="border border-emerald-200 bg-emerald-50/50 rounded p-3 space-y-2">
+                  <div className="font-bold text-emerald-900 flex items-center gap-1"><Check size={16}/> Preview Hasil</div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="p-2 bg-white rounded border border-emerald-200">
+                      <div className="text-[10px] uppercase text-slate-500 font-bold">Panjar Kerja</div>
+                      <div className="font-heading text-2xl font-black">{importPreview.panjar_imported}</div>
+                    </div>
+                    <div className="p-2 bg-white rounded border border-emerald-200">
+                      <div className="text-[10px] uppercase text-slate-500 font-bold">Expense</div>
+                      <div className="font-heading text-2xl font-black">{importPreview.expense_imported}</div>
+                    </div>
+                  </div>
+                  {importPreview.categories_created?.length > 0 && (
+                    <div className="text-xs">
+                      <div className="font-semibold text-slate-700">Kategori akan dibuat:</div>
+                      <ul className="list-disc pl-5 mt-1">
+                        {importPreview.categories_created.map((c) => (
+                          <li key={c.name}><strong>{c.name}</strong> (akun {c.account_code}, {c.posting_type})</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {importPreview.skipped_duplicate > 0 && (
+                    <div className="text-xs text-amber-700">⚠ {importPreview.skipped_duplicate} baris duplikat akan di-skip</div>
+                  )}
+                  {importPreview.errors?.length > 0 && (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer text-red-700 font-semibold">{importPreview.errors.length} error</summary>
+                      <ul className="list-disc pl-5 mt-1">
+                        {importPreview.errors.slice(0, 10).map((e, i) => <li key={i}>Row {e.row}: {e.message}</li>)}
+                      </ul>
+                    </details>
+                  )}
+                  <div className="flex gap-2 pt-2">
+                    <Button data-testid="bkk-confirm-import-btn" disabled={importBusy} onClick={runImport}>
+                      {importBusy ? "Importing..." : "Lanjut Import"}
+                    </Button>
+                    <Button variant="secondary" onClick={() => { setImportPreview(null); setImportFile(null); }}>Pilih File Lain</Button>
+                  </div>
+                </div>
+              )}
+
+              {importResult && (
+                <div className="border border-emerald-300 bg-emerald-50 rounded p-3 space-y-2">
+                  <div className="font-bold text-emerald-900 flex items-center gap-1"><Check size={16}/> Import Selesai!</div>
+                  <div className="text-sm space-y-1">
+                    <div>✓ <strong>{importResult.panjar_imported}</strong> Panjar Kerja terimport</div>
+                    <div>✓ <strong>{importResult.expense_imported}</strong> Expense terimport</div>
+                    {importResult.skipped_duplicate > 0 && <div className="text-amber-700">⚠ {importResult.skipped_duplicate} duplikat di-skip</div>}
+                    {importResult.errors?.length > 0 && (
+                      <div className="text-red-700">⚠ {importResult.errors.length} error</div>
+                    )}
+                  </div>
+                  <Button onClick={() => { setOpenImport(false); }}>Tutup</Button>
+                </div>
+              )}
+
+              {!importFile && (
+                <div className="text-xs text-slate-500 bg-slate-50 rounded p-3 flex items-start gap-2">
+                  <AlertCircle size={14} className="mt-0.5"/>
+                  <div>
+                    Tip: gunakan &quot;Preview Dulu&quot; untuk lihat berapa baris yang akan masuk Panjar vs Expense, lalu lanjut import jika sudah benar. Jurnal otomatis dibuat untuk tiap entry.
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
     </div>
   );
 }

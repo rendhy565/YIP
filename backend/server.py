@@ -6757,3 +6757,284 @@ async def import_invoice_po_numbers(file: UploadFile = File(...), user: dict = D
         "updated": updated[:50],
         "not_found": not_found[:50],
     }
+
+
+# ===========================================================================
+# BKK (Bukti Kas Keluar) Import — for Expense + Panjar Kerja
+# ===========================================================================
+def _bkk_parse_recipient(desc: str) -> Optional[str]:
+    """Extract recipient name from BKK description.
+    Examples:
+      'Kasbon Operasional - Samsir' → 'Samsir'
+      'Pembelian P3K (...) - Desi'  → 'Desi'
+      'Laporan Operasional - Aziz (Perpanjang KIR) B 9096 TCS BV' → 'Aziz'
+    """
+    if not desc:
+        return None
+    # Split on " - " and take last segment's first word block
+    parts = re.split(r"\s+-\s+", desc)
+    if len(parts) >= 2:
+        last = parts[-1].strip()
+        # Take first word/name (before space or parenthesis)
+        m = re.match(r"([A-Za-z][A-Za-z\s]*?)(?:\s*[\(\[]|$|\s+B\s+\d)", last)
+        if m:
+            name = m.group(1).strip()
+            if 2 <= len(name) <= 30:
+                return name
+    return None
+
+
+@app.post("/api/expense/import-bkk")
+async def import_bkk_excel(
+    file: UploadFile = File(...),
+    dry_run: bool = False,
+    user: dict = Depends(require_role("finance", "administrator")),
+):
+    """Import BKK (Bukti Kas Keluar) Excel file.
+    Rules:
+      - BKK-JV (Cr filled)         → Panjar Kerja (cash advance)
+      - BKK-numeric (Dr or Cr)     → Expense (fixed_cost). Amount = Dr if present else Cr.
+      - Code column → expense category (auto-create if missing as posting_type='expense').
+      - Date column → expense_date/advance_date.
+      - Header detected automatically (looks for row with 'No. BKK' or 'Desc.').
+      - Idempotent: skips rows where (bkk_source_no, expense_date, amount) already exists.
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    ws = wb.active
+
+    # --- Detect header row dynamically ---
+    header_row_idx = None
+    col_idx = {}
+    for ridx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        if ridx > 20:
+            break
+        norm = [str(c).strip().lower() if c is not None else "" for c in row]
+        if any("no. bkk" in c for c in norm) or any("no.bkk" in c for c in norm):
+            header_row_idx = ridx
+            for i, c in enumerate(norm):
+                if c in ("no.", "no") and "no" not in col_idx:
+                    col_idx["no"] = i
+                elif c == "month":
+                    col_idx["month"] = i
+                elif "no. bkk" in c or "no.bkk" in c:
+                    col_idx["no_bkk"] = i
+                elif c == "date":
+                    col_idx["date"] = i
+                elif c in ("desc.", "desc", "description"):
+                    col_idx["desc"] = i
+                elif c == "code":
+                    col_idx["code"] = i
+                elif c == "dr":
+                    col_idx["dr"] = i
+                elif c == "cr":
+                    col_idx["cr"] = i
+                elif c == "saldo":
+                    col_idx["saldo"] = i
+                elif c == "remark":
+                    col_idx["remark"] = i
+            break
+    if not header_row_idx or "no_bkk" not in col_idx or "desc" not in col_idx:
+        raise HTTPException(400, "Header BKK tidak terdeteksi. Pastikan ada kolom 'No. BKK' dan 'Desc.'")
+
+    # --- Process rows ---
+    summary = {
+        "panjar_imported": 0,
+        "expense_imported": 0,
+        "skipped_duplicate": 0,
+        "skipped_empty": 0,
+        "categories_created": [],
+        "errors": [],  # list of {row, message}
+        "samples": {"panjar": [], "expense": []},
+    }
+
+    # Cache categories (avoid re-fetching)
+    cat_cache: dict = {}
+    async def _resolve_or_create_cat(name: str) -> dict:
+        n = (name or "").strip()
+        if not n:
+            n = "Lainnya"
+        if n in cat_cache:
+            return cat_cache[n]
+        cat = await get_expense_category(n)
+        if not cat:
+            try:
+                cat = await create_expense_category(n, posting_type="expense", user_id=user["id"])
+                summary["categories_created"].append({
+                    "name": cat["name"],
+                    "account_code": cat["account_code"],
+                    "posting_type": cat["posting_type"],
+                })
+            except HTTPException:
+                cat = await get_expense_category(n) or await get_expense_category("Lainnya")
+        cat_cache[n] = cat
+        return cat
+
+    now = datetime.now(timezone.utc)
+    for ridx, row in enumerate(ws.iter_rows(min_row=header_row_idx + 1, values_only=True), start=header_row_idx + 1):
+        try:
+            if not row or all(v is None for v in row):
+                summary["skipped_empty"] += 1
+                continue
+            no_bkk_raw = row[col_idx["no_bkk"]]
+            desc_raw = row[col_idx["desc"]]
+            if no_bkk_raw is None and desc_raw is None:
+                summary["skipped_empty"] += 1
+                continue
+            no_bkk = str(no_bkk_raw).strip() if no_bkk_raw is not None else ""
+            desc = str(desc_raw).strip() if desc_raw is not None else ""
+            code = str(row[col_idx["code"]]).strip() if col_idx.get("code") is not None and row[col_idx["code"]] is not None else ""
+            date_val = row[col_idx["date"]] if col_idx.get("date") is not None else None
+            dr_val = row[col_idx.get("dr")] if col_idx.get("dr") is not None else None
+            cr_val = row[col_idx.get("cr")] if col_idx.get("cr") is not None else None
+            remark = str(row[col_idx["remark"]]).strip() if col_idx.get("remark") is not None and row[col_idx["remark"]] is not None else None
+
+            # parse date
+            expense_date = None
+            if isinstance(date_val, datetime):
+                expense_date = date_val.replace(tzinfo=timezone.utc) if date_val.tzinfo is None else date_val
+            elif isinstance(date_val, str) and date_val:
+                try:
+                    expense_date = datetime.strptime(date_val.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            if not expense_date:
+                expense_date = now
+
+            # parse amounts
+            def _to_float(v):
+                if v is None:
+                    return 0.0
+                if isinstance(v, (int, float)):
+                    return float(v)
+                try:
+                    return float(str(v).replace(",", "").replace("Rp", "").strip())
+                except Exception:
+                    return 0.0
+            dr_amt = _to_float(dr_val)
+            cr_amt = _to_float(cr_val)
+
+            # classify: BKK-JV → panjar (uses Cr); else BKK-numeric → expense (Dr if present else Cr)
+            is_panjar = no_bkk.upper().startswith("BKK-JV") or no_bkk.upper().startswith("BK-JV")
+
+            if is_panjar:
+                amount = cr_amt or dr_amt
+                if amount <= 0:
+                    summary["errors"].append({"row": ridx, "message": "Panjar tanpa nilai"})
+                    continue
+                recipient = _bkk_parse_recipient(desc) or "Unknown"
+                # idempotency check
+                dup = await db.cash_advances.find_one({
+                    "bkk_source_no": no_bkk,
+                    "advance_date": expense_date,
+                    "amount": amount,
+                    "recipient_name": recipient,
+                })
+                if dup:
+                    summary["skipped_duplicate"] += 1
+                    continue
+                if dry_run:
+                    summary["panjar_imported"] += 1
+                    if len(summary["samples"]["panjar"]) < 5:
+                        summary["samples"]["panjar"].append({"recipient": recipient, "amount": amount, "date": expense_date.strftime("%Y-%m-%d"), "desc": desc[:80]})
+                    continue
+                # Create panjar
+                pj_doc = {
+                    "number": await next_cash_advance_number(),
+                    "recipient_name": recipient,
+                    "purpose": desc,
+                    "amount": amount,
+                    "advance_date": expense_date,
+                    "cash_account_code": "1101",
+                    "status": "Open",
+                    "actual_amount": None,
+                    "refund_amount": None,
+                    "settled_at": None,
+                    "notes": f"Imported from BKK ({no_bkk})",
+                    "bkk_source_no": no_bkk,
+                    "bkk_imported_at": now,
+                    "bkk_imported_by": user["id"],
+                    "created_by": user["id"],
+                    "created_at": now,
+                }
+                r = await db.cash_advances.insert_one(pj_doc)
+                try:
+                    await post_journal(
+                        date=expense_date,
+                        description=f"Panjar kerja {pj_doc['number']} - {recipient}",
+                        lines=[
+                            {"account_code": "1108", "debit": amount, "credit": 0, "memo": recipient},
+                            {"account_code": "1101", "debit": 0, "credit": amount, "memo": pj_doc["number"]},
+                        ],
+                        reference_type="cash_advance", reference_id=str(r.inserted_id), posted_by=user["id"],
+                    )
+                except HTTPException:
+                    pass
+                summary["panjar_imported"] += 1
+                if len(summary["samples"]["panjar"]) < 5:
+                    summary["samples"]["panjar"].append({"number": pj_doc["number"], "recipient": recipient, "amount": amount, "date": expense_date.strftime("%Y-%m-%d")})
+            else:
+                # Expense — amount: Dr (settlement) else Cr (direct)
+                amount = dr_amt if dr_amt > 0 else cr_amt
+                if amount <= 0:
+                    summary["skipped_empty"] += 1
+                    continue
+                cat = await _resolve_or_create_cat(code or "Lainnya")
+                if not cat:
+                    summary["errors"].append({"row": ridx, "message": f"Kategori '{code}' tidak bisa di-resolve"})
+                    continue
+                expense_date_str = expense_date.strftime("%Y-%m-%d")
+                period_month = expense_date.strftime("%Y-%m")
+                # idempotency
+                dup = await db.fixed_costs.find_one({
+                    "bkk_source_no": no_bkk,
+                    "expense_date": expense_date_str,
+                    "amount": amount,
+                })
+                if dup:
+                    summary["skipped_duplicate"] += 1
+                    continue
+                if dry_run:
+                    summary["expense_imported"] += 1
+                    if len(summary["samples"]["expense"]) < 5:
+                        summary["samples"]["expense"].append({"category": cat["name"], "amount": amount, "date": expense_date_str, "desc": desc[:80]})
+                    continue
+                ex_doc = {
+                    "category": cat["name"],
+                    "posting_type": cat.get("posting_type", "expense"),
+                    "account_code": cat.get("account_code"),
+                    "description": desc + (f" [Remark: {remark}]" if remark else ""),
+                    "amount": amount,
+                    "expense_date": expense_date_str,
+                    "period_month": period_month,
+                    "cash_account_code": "1101",
+                    "bkk_source_no": no_bkk,
+                    "bkk_imported_at": now,
+                    "bkk_imported_by": user["id"],
+                    "created_by": user["id"],
+                    "created_at": now,
+                }
+                r = await db.fixed_costs.insert_one(ex_doc)
+                try:
+                    expense_code = cat.get("account_code") or "6199"
+                    label = "Beban Operasional" if cat.get("posting_type") == "cogs" else "Beban"
+                    await post_journal(
+                        date=expense_date,
+                        description=f"{label} {cat['name']} - {expense_date_str} ({no_bkk})",
+                        lines=[
+                            {"account_code": expense_code, "debit": amount, "credit": 0, "memo": desc[:60]},
+                            {"account_code": "1101", "debit": 0, "credit": amount, "memo": no_bkk},
+                        ],
+                        reference_type="fixed_cost", reference_id=str(r.inserted_id), posted_by=user["id"],
+                    )
+                except HTTPException:
+                    pass
+                summary["expense_imported"] += 1
+                if len(summary["samples"]["expense"]) < 5:
+                    summary["samples"]["expense"].append({"category": cat["name"], "amount": amount, "date": expense_date_str, "no_bkk": no_bkk})
+        except Exception as e:
+            summary["errors"].append({"row": ridx, "message": str(e)[:200]})
+    return summary

@@ -1,5 +1,17 @@
 # PRD — ARC TMS Business Suite
 
+## Latest feature (2026-06-28) — BKK Excel Import
+- **Endpoint** `POST /api/expense/import-bkk` (multipart upload, `?dry_run=true` for preview)
+- **Logic**:
+  - `BKK-JV` rows → **Panjar Kerja** (`db.cash_advances`) with auto-generated `PNJ-YYYYMM-XXXX` number. Journal: Dr 1108 / Cr 1101.
+  - `BKK-numeric` rows → **Expense** (`db.fixed_costs`). Amount = `Dr` (settlement) else `Cr` (direct). Journal posted to category's account_code.
+- **Auto-create categories** for unknown `Code` values (e.g. "Rumah Tangga", "Document" → new 62XX COA each).
+- **Recipient parsing** from description (e.g. "Kasbon Operasional - Samsir" → "Samsir") for Panjar.
+- **Idempotency**: skips duplicates by (`bkk_source_no`, `expense_date`/`advance_date`, `amount`).
+- **Header detection** dynamic (looks for "No. BKK" + "Desc.").
+- **Frontend** modal at Expense page with: file upload, Dry-run preview (count panjar vs expense, new categories list, errors), then confirm Import.
+- Verified with user's `LAPORAN BKK JANUARI 2026.xlsx`: 67 panjar + 147 expense, 2 new categories (Rumah Tangga, Document), 0 errors.
+
 ## Latest tweaks (2026-06-28 — follow-up)
 - **Marketing kategori → COGS** (posting_type changed from `expense`/6104 to `cogs`/5104). Migration in `seed_data` auto-syncs system-category posting_type & propagates to existing fixed_cost records.
 - **Date picker** menggantikan month picker di form expense. New field `expense_date` (YYYY-MM-DD); `period_month` masih disimpan (auto-derived) untuk filter & copy. Tabel expense menampilkan `expense_date`. Backend accepts `expense_date` OR `period_month` for backward compat.
