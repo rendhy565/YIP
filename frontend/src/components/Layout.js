@@ -26,7 +26,7 @@ const NAV = [
   { to: "/accrue", label: "Settle Hutang Vendor", icon: Wallet, perm: "accrue" },
   { to: "/panjar", label: "Panjar Kerja", icon: Wallet, perm: "*" },
   { to: "/purchase-orders", label: "PO / Surat Perintah Vendor", icon: FileText, perm: "*" },
-  { to: "/fixed-costs", label: "Biaya Tetap (Overhead)", icon: Banknote, perm: "fixed_costs" },
+  { to: "/fixed-costs", label: "Expense", icon: Banknote, perm: "fixed_costs" },
 
   { type: "section", label: "Master & Laporan" },
   { to: "/analytics", label: "Dashboard Analitik", icon: BarChart3, perm: "*" },

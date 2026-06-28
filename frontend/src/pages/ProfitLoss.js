@@ -47,10 +47,11 @@ export default function ProfitLoss() {
       [],
       ["Total Revenue (AWB dengan biaya)", s.total_revenue],
       ["Total COGS", s.total_cogs],
+      ["  — termasuk Operation Expense", s.total_cogs_expense || 0],
       ["Gross Margin", s.gross_margin],
       ["Gross Margin %", `${(s.gross_margin_pct || 0).toFixed(2)}%`],
       [],
-      ["Total Fixed Cost (Overhead)", s.total_fixed_cost],
+      ["Total Expense (Operating)", s.total_fixed_cost],
       [],
       ["NET PROFIT", s.net_profit],
       ["Net Profit %", `${(s.net_profit_pct || 0).toFixed(2)}%`],
@@ -61,7 +62,7 @@ export default function ProfitLoss() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws3, "Ringkasan");
     XLSX.utils.book_append_sheet(wb, ws1, "Per AWB");
-    XLSX.utils.book_append_sheet(wb, ws2, "Fixed Cost");
+    XLSX.utils.book_append_sheet(wb, ws2, "Expense");
     XLSX.writeFile(wb, `Laba_Rugi_${month}.xlsx`);
   };
 
@@ -71,7 +72,7 @@ export default function ProfitLoss() {
     <div data-testid="pnl-page">
       <PageHeader
         title="Laporan Laba Rugi"
-        subtitle="Modul 7 — Gross Margin = Revenue − COGS, dikurangi Fixed Cost = Net Profit. Revenue hanya menghitung AWB yang sudah memiliki biaya."
+        subtitle="Gross Margin = Revenue − COGS (termasuk Operation Expense). Net Profit = Gross Margin − Expense (Operating). Revenue hanya menghitung AWB yang sudah memiliki biaya."
       />
 
       <Card className="p-4 mb-5">
@@ -100,7 +101,12 @@ export default function ProfitLoss() {
           <div className="md:col-span-1">
             <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-orange-400">COGS</div>
             <div data-testid="pnl-total-cost" className="font-heading font-black text-2xl mt-1">{fmtIDR(s.total_cogs)}</div>
-            <div className="text-[11px] text-slate-400">Biaya per AWB</div>
+            <div className="text-[11px] text-slate-400">
+              Per AWB
+              {s.total_cogs_expense > 0 && (
+                <> + Operation Exp <span className="text-emerald-300">{fmtIDR(s.total_cogs_expense)}</span></>
+              )}
+            </div>
           </div>
           <div className="hidden md:flex items-center justify-center text-slate-500 text-2xl">=</div>
           <div className="md:col-span-1">
@@ -117,9 +123,9 @@ export default function ProfitLoss() {
           </div>
           <div className="hidden md:flex items-center justify-center text-slate-500 text-2xl">−</div>
           <div className="md:col-span-1">
-            <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-red-400">Fixed Cost</div>
+            <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-red-400">Expense</div>
             <div data-testid="pnl-fixed-cost" className="font-heading font-black text-2xl mt-1">{fmtIDR(s.total_fixed_cost)}</div>
-            <div className="text-[11px] text-slate-400">Overhead bulanan</div>
+            <div className="text-[11px] text-slate-400">Operating expense</div>
           </div>
           <div className="hidden md:flex items-center justify-center text-slate-500 text-2xl">=</div>
           <div className="md:col-span-1">
@@ -142,17 +148,36 @@ export default function ProfitLoss() {
         </Card>
       )}
 
-      {/* Fixed Cost Breakdown */}
+      {/* Expense Breakdown */}
       {Object.keys(data.fixed_breakdown || {}).length > 0 && (
         <Card className="mb-5">
           <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
             <Banknote size={16} className="text-red-700"/>
-            <h3 className="font-bold">Rincian Fixed Cost — {month}</h3>
-            <span className="text-xs text-slate-500 ml-2">{(data.fixed_costs || []).length} item</span>
+            <h3 className="font-bold">Rincian Expense — {month}</h3>
+            <span className="text-xs text-slate-500 ml-2">{(data.fixed_costs || []).filter((f) => (f.posting_type || "expense") !== "cogs").length} item</span>
           </div>
           <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             {Object.entries(data.fixed_breakdown).map(([cat, amt]) => (
               <div key={cat} className={`p-3 rounded border ${FIXED_CAT_COLORS[cat] || FIXED_CAT_COLORS.Lainnya}`}>
+                <div className="text-[10px] uppercase tracking-[0.12em] font-bold opacity-70">{cat}</div>
+                <div className="font-heading font-black text-lg mt-1">{fmtIDR(amt)}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {/* COGS-typed Expense Breakdown (Operation kategori) */}
+      {Object.keys(data.cogs_expense_breakdown || {}).length > 0 && (
+        <Card className="mb-5 border-emerald-200">
+          <div className="px-4 py-3 border-b border-emerald-200 bg-emerald-50/50 flex items-center gap-2">
+            <Banknote size={16} className="text-emerald-700"/>
+            <h3 className="font-bold">Rincian Expense yang masuk COGS — {month}</h3>
+            <span className="text-xs text-emerald-700 ml-2">posting type: COGS</span>
+          </div>
+          <div className="p-4 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            {Object.entries(data.cogs_expense_breakdown).map(([cat, amt]) => (
+              <div key={cat} className="p-3 rounded border bg-emerald-50 border-emerald-200 text-emerald-900">
                 <div className="text-[10px] uppercase tracking-[0.12em] font-bold opacity-70">{cat}</div>
                 <div className="font-heading font-black text-lg mt-1">{fmtIDR(amt)}</div>
               </div>

@@ -142,7 +142,7 @@ MODULES = [
     {"key": "payments", "label": "Pembayaran", "default_roles": ["finance"]},
     {"key": "costs", "label": "Plotting Biaya", "default_roles": ["operation", "finance"]},
     {"key": "accrue", "label": "Settle Hutang Vendor", "default_roles": ["finance"]},
-    {"key": "fixed_costs", "label": "Biaya Tetap (Overhead)", "default_roles": ["finance"]},
+    {"key": "fixed_costs", "label": "Expense (Biaya Operasional)", "default_roles": ["finance"]},
     {"key": "customers", "label": "Master Customer", "default_roles": ["operation", "finance"]},
     {"key": "contracts", "label": "Master Kontrak", "default_roles": ["operation", "finance"]},
     {"key": "pnl", "label": "Laporan Laba Rugi", "default_roles": ["operation", "finance"]},
@@ -385,6 +385,19 @@ FIXED_COST_TO_COA = {
 }
 COST_CATEGORY_TO_COA = {"Vendor": "5101", "Operational": "5102", "Lintas": "5103", "Marketing": "5104"}
 
+# Default Expense Categories (seeded into db.expense_categories)
+# posting_type: 'cogs' → posts to COGS (5xxx) — reduces Gross Margin
+# posting_type: 'expense' → posts to Operating Expense (6xxx) — reduces Net Profit (below GM)
+DEFAULT_EXPENSE_CATEGORIES = [
+    {"name": "Operation",     "posting_type": "cogs",    "account_code": "5102", "is_system": True},
+    {"name": "Gaji",          "posting_type": "expense", "account_code": "6101", "is_system": True},
+    {"name": "Sewa",          "posting_type": "expense", "account_code": "6102", "is_system": True},
+    {"name": "Utilities",     "posting_type": "expense", "account_code": "6103", "is_system": True},
+    {"name": "Marketing",     "posting_type": "expense", "account_code": "6104", "is_system": True},
+    {"name": "Administrasi",  "posting_type": "expense", "account_code": "6105", "is_system": True},
+    {"name": "Lainnya",       "posting_type": "expense", "account_code": "6199", "is_system": True},
+]
+
 async def get_account(code: str) -> Optional[dict]:
     return await db.chart_of_accounts.find_one({"code": code})
 
@@ -461,6 +474,66 @@ async def journal_exists_for(reference_type: str, reference_id: str) -> bool:
     return bool(await db.journal_entries.find_one({"reference_type": reference_type, "reference_id": reference_id}))
 
 # ---------------------------------------------------------------------------
+# Expense Categories helpers
+# ---------------------------------------------------------------------------
+async def get_expense_category(name: str) -> Optional[dict]:
+    """Lookup expense category by name (case-insensitive)."""
+    if not name:
+        return None
+    return await db.expense_categories.find_one({"name": {"$regex": f"^{name}$", "$options": "i"}, "active": {"$ne": False}})
+
+async def _next_expense_account_code() -> str:
+    """Find next available expense account code in 62XX range."""
+    existing = await db.chart_of_accounts.find(
+        {"code": {"$regex": "^62[0-9]{2}$"}}
+    ).sort("code", -1).limit(1).to_list(1)
+    if existing:
+        last = int(existing[0]["code"])
+        return str(last + 1)
+    return "6201"
+
+async def create_expense_category(name: str, posting_type: str = "expense", user_id: Optional[str] = None) -> dict:
+    """Create new expense category. If posting_type='expense' (default), auto-create a new COA (62XX).
+    If posting_type='cogs', reuses 5102 (Beban Operasional Pengiriman).
+    """
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(400, "Nama kategori tidak boleh kosong")
+    existing = await get_expense_category(name)
+    if existing:
+        raise HTTPException(400, f"Kategori '{name}' sudah ada")
+    posting_type = (posting_type or "expense").lower()
+    if posting_type not in ("cogs", "expense"):
+        raise HTTPException(400, "posting_type harus 'cogs' atau 'expense'")
+    now = datetime.now(timezone.utc)
+    if posting_type == "cogs":
+        account_code = "5102"  # reuse Beban Operasional Pengiriman
+    else:
+        # Auto-create new COA in 62XX range
+        account_code = await _next_expense_account_code()
+        await db.chart_of_accounts.insert_one({
+            "code": account_code,
+            "name": f"Beban {name}",
+            "type": "expense",
+            "subtype": "operating_expense",
+            "normal": "debit",
+            "is_system": False,
+            "active": True,
+            "created_at": now,
+        })
+    doc = {
+        "name": name,
+        "posting_type": posting_type,
+        "account_code": account_code,
+        "is_system": False,
+        "active": True,
+        "created_at": now,
+        "created_by": user_id,
+    }
+    r = await db.expense_categories.insert_one(doc)
+    return await db.expense_categories.find_one({"_id": r.inserted_id})
+
+# ---------------------------------------------------------------------------
 # Lifespan / Seeding
 # ---------------------------------------------------------------------------
 async def seed_data():
@@ -484,6 +557,15 @@ async def seed_data():
         await db.chart_of_accounts.update_one(
             {"code": a["code"]},
             {"$setOnInsert": {**a, "active": True, "created_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
+    # Seed Expense Categories (replaces old hardcoded FIXED_COST_CATEGORIES list)
+    await db.expense_categories.create_index("name", unique=True)
+    for ec in DEFAULT_EXPENSE_CATEGORIES:
+        await db.expense_categories.update_one(
+            {"name": ec["name"]},
+            {"$setOnInsert": {**ec, "active": True, "created_at": datetime.now(timezone.utc)}},
             upsert=True,
         )
 
@@ -765,17 +847,21 @@ async def backfill_journals():
         except HTTPException:
             continue
 
-    # Fixed costs
+    # Fixed costs / Expenses
     fixed = await db.fixed_costs.find().to_list(5000)
+    cat_map_bf = {c["name"]: c for c in await db.expense_categories.find({}).to_list(500)}
     for f in fixed:
         if await journal_exists_for("fixed_cost", str(f["_id"])):
             continue
         try:
-            expense_code = FIXED_COST_TO_COA.get(f["category"], "6199")
+            cat = cat_map_bf.get(f.get("category"))
+            expense_code = f.get("account_code") or (cat or {}).get("account_code") or FIXED_COST_TO_COA.get(f["category"], "6199")
             cash_acc = f.get("cash_account_code") or "1101"
+            ptype = f.get("posting_type") or (cat or {}).get("posting_type", "expense")
+            label = "Beban Operasional" if ptype == "cogs" else "Beban"
             await post_journal(
                 date=f.get("created_at"),
-                description=f"[Backfill] Beban Tetap {f['category']} {f['period_month']}",
+                description=f"[Backfill] {label} {f['category']} {f['period_month']}",
                 lines=[
                     {"account_code": expense_code, "debit": f["amount"], "credit": 0},
                     {"account_code": cash_acc, "debit": 0, "credit": f["amount"]},
@@ -1974,13 +2060,45 @@ async def bulk_mark_paid(data: BulkMarkPaidIn, user: dict = Depends(require_role
     return {"paid": paid, "skipped": skipped, "paid_count": len(paid), "skipped_count": len(skipped)}
 
 # ---------------------------------------------------------------------------
-# Fixed Costs (Overhead — Finance only)
+# Fixed Costs (Expense — Finance only)
 # ---------------------------------------------------------------------------
-FIXED_COST_CATEGORIES = ["Gaji", "Sewa", "Utilities", "Marketing", "Administrasi", "Lainnya"]
+# DEPRECATED: kept for backwards-compat; categories now live in db.expense_categories.
+FIXED_COST_CATEGORIES = ["Operation", "Gaji", "Sewa", "Utilities", "Marketing", "Administrasi", "Lainnya"]
 
 @app.get("/api/fixed-costs/categories")
 async def fixed_cost_categories(user: dict = Depends(get_current_user)):
-    return FIXED_COST_CATEGORIES
+    """Legacy endpoint — returns category names only. New clients should use /api/expense-categories."""
+    cats = await db.expense_categories.find({"active": {"$ne": False}}).sort("name", 1).to_list(500)
+    return [c["name"] for c in cats]
+
+# --- New: Expense Categories CRUD ---
+class ExpenseCategoryIn(BaseModel):
+    name: str
+    posting_type: Optional[str] = "expense"  # 'cogs' or 'expense'
+
+@app.get("/api/expense-categories")
+async def list_expense_categories(user: dict = Depends(get_current_user)):
+    docs = await db.expense_categories.find({"active": {"$ne": False}}).sort([("posting_type", 1), ("name", 1)]).to_list(500)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/expense-categories")
+async def create_expense_category_ep(data: ExpenseCategoryIn, user: dict = Depends(require_role("finance"))):
+    doc = await create_expense_category(data.name, posting_type=data.posting_type or "expense", user_id=user["id"])
+    return serialize(doc)
+
+@app.delete("/api/expense-categories/{cid}")
+async def delete_expense_category(cid: str, user: dict = Depends(require_role("finance"))):
+    doc = await db.expense_categories.find_one({"_id": _oid(cid)})
+    if not doc:
+        raise HTTPException(404, "Kategori tidak ditemukan")
+    if doc.get("is_system"):
+        raise HTTPException(400, "Kategori sistem tidak dapat dihapus")
+    # Check usage
+    in_use = await db.fixed_costs.count_documents({"category": doc["name"]})
+    if in_use > 0:
+        raise HTTPException(400, f"Kategori sedang digunakan oleh {in_use} record expense. Hapus/ubah dulu.")
+    await db.expense_categories.delete_one({"_id": _oid(cid)})
+    return {"ok": True}
 
 @app.get("/api/fixed-costs")
 async def list_fixed_costs(month: Optional[str] = None, user: dict = Depends(get_current_user)):
@@ -1992,8 +2110,10 @@ async def list_fixed_costs(month: Optional[str] = None, user: dict = Depends(get
 
 @app.post("/api/fixed-costs")
 async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role("finance"))):
-    if data.category not in FIXED_COST_CATEGORIES:
-        raise HTTPException(400, f"Kategori tidak valid. Pilih: {', '.join(FIXED_COST_CATEGORIES)}")
+    # Lookup category from db.expense_categories (replaces hardcoded list)
+    cat = await get_expense_category(data.category)
+    if not cat:
+        raise HTTPException(400, f"Kategori '{data.category}' tidak terdaftar. Tambahkan kategori dulu.")
     # validate period_month
     try:
         y, m = data.period_month.split("-")
@@ -2007,7 +2127,9 @@ async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role
         raise HTTPException(400, "Akun kas/bank tidak valid")
     now = datetime.now(timezone.utc)
     doc = {
-        "category": data.category,
+        "category": cat["name"],  # canonical name from DB
+        "posting_type": cat.get("posting_type", "expense"),
+        "account_code": cat.get("account_code"),
         "description": data.description,
         "amount": data.amount,
         "period_month": data.period_month,
@@ -2017,15 +2139,16 @@ async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role
     }
     r = await db.fixed_costs.insert_one(doc)
     new = await db.fixed_costs.find_one({"_id": r.inserted_id})
-    # Auto-post journal
+    # Auto-post journal — uses account from category
     try:
-        expense_code = FIXED_COST_TO_COA.get(data.category, "6199")
+        expense_code = cat.get("account_code") or FIXED_COST_TO_COA.get(data.category, "6199")
+        label = "Beban Operasional" if cat.get("posting_type") == "cogs" else "Beban"
         await post_journal(
             date=now,
-            description=f"Beban Tetap {data.category} - {data.period_month}",
+            description=f"{label} {cat['name']} - {data.period_month}",
             lines=[
-                {"account_code": expense_code, "debit": data.amount, "credit": 0, "memo": data.description or data.category},
-                {"account_code": cash_acc, "debit": 0, "credit": data.amount, "memo": data.category},
+                {"account_code": expense_code, "debit": data.amount, "credit": 0, "memo": data.description or cat["name"]},
+                {"account_code": cash_acc, "debit": 0, "credit": data.amount, "memo": cat["name"]},
             ],
             reference_type="fixed_cost", reference_id=str(r.inserted_id), posted_by=user["id"],
         )
@@ -2101,18 +2224,33 @@ async def profit_loss(
             "margin_pct": (gross / rev * 100) if (has_cost and rev) else 0,
         })
 
-    # Fixed costs for the period (month-scoped only; ignored if no month filter is given because
-    # they are not customer-specific)
+    # Fixed costs / Expenses for the period (month-scoped only; ignored if no month filter is given because
+    # they are not customer-specific). Split by posting_type:
+    #   - posting_type='cogs' (e.g. Operation) → added to total_cogs (reduces Gross Margin)
+    #   - posting_type='expense' (default)     → added to total_fixed_cost (below GM, reduces Net Profit)
     fixed_q = {}
     if month:
         fixed_q["period_month"] = month
     fixed_rows = await db.fixed_costs.find(fixed_q).sort("created_at", -1).to_list(2000)
-    fixed_breakdown = {}
-    total_fixed = 0.0
+    # Resolve posting_type from db.expense_categories (handles legacy records w/o the field)
+    cat_map = {c["name"]: c for c in await db.expense_categories.find({}).to_list(500)}
+    fixed_breakdown = {}        # non-COGS only (Expense bucket)
+    cogs_expense_breakdown = {} # COGS-typed expenses (e.g. Operation)
+    total_fixed = 0.0           # Expense bucket only
+    total_cogs_expense = 0.0    # COGS-typed expenses added to total_cogs below
     for f in fixed_rows:
         amt = f.get("amount", 0) or 0
-        total_fixed += amt
-        fixed_breakdown[f["category"]] = fixed_breakdown.get(f["category"], 0) + amt
+        cat_name = f.get("category")
+        ptype = f.get("posting_type") or (cat_map.get(cat_name) or {}).get("posting_type", "expense")
+        if ptype == "cogs":
+            total_cogs_expense += amt
+            cogs_expense_breakdown[cat_name] = cogs_expense_breakdown.get(cat_name, 0) + amt
+        else:
+            total_fixed += amt
+            fixed_breakdown[cat_name] = fixed_breakdown.get(cat_name, 0) + amt
+
+    # Add COGS-typed expenses into total_cogs so Gross Margin reflects them
+    total_cogs += total_cogs_expense
 
     gross_margin = total_revenue - total_cogs
     net_profit = gross_margin - total_fixed
@@ -2121,12 +2259,15 @@ async def profit_loss(
         "rows": rows,
         "fixed_costs": [serialize(f) for f in fixed_rows],
         "fixed_breakdown": fixed_breakdown,
+        "cogs_expense_breakdown": cogs_expense_breakdown,
         "summary": {
             "total_revenue": total_revenue,
             "total_cogs": total_cogs,
+            "total_cogs_expense": total_cogs_expense,
             "gross_margin": gross_margin,
             "gross_margin_pct": (gross_margin / total_revenue * 100) if total_revenue else 0,
             "total_fixed_cost": total_fixed,
+            "total_expense": total_fixed,  # alias for new UI label
             "net_profit": net_profit,
             "net_profit_pct": (net_profit / total_revenue * 100) if total_revenue else 0,
             "count": len(rows),
@@ -2853,8 +2994,12 @@ async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_r
         await db.fixed_costs.delete_many({"period_month": data.target_month})
     new_docs = []
     for f in src:
+        # Lookup current category posting in case schema changed
+        cat = await get_expense_category(f["category"])
         new_docs.append({
             "category": f["category"],
+            "posting_type": (cat or {}).get("posting_type", f.get("posting_type", "expense")),
+            "account_code": (cat or {}).get("account_code", f.get("account_code")),
             "description": f.get("description"),
             "amount": f.get("amount", 0),
             "period_month": data.target_month,
@@ -2868,10 +3013,11 @@ async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_r
         # Post journal for each
         for inserted_id, doc in zip(result.inserted_ids, new_docs):
             try:
-                expense_code = FIXED_COST_TO_COA.get(doc["category"], "6199")
+                expense_code = doc.get("account_code") or FIXED_COST_TO_COA.get(doc["category"], "6199")
+                label = "Beban Operasional" if doc.get("posting_type") == "cogs" else "Beban"
                 await post_journal(
                     date=doc["created_at"],
-                    description=f"Beban Tetap {doc['category']} - {doc['period_month']} (copy)",
+                    description=f"{label} {doc['category']} - {doc['period_month']} (copy)",
                     lines=[
                         {"account_code": expense_code, "debit": doc["amount"], "credit": 0},
                         {"account_code": doc["cash_account_code"], "debit": 0, "credit": doc["amount"]},

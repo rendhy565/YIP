@@ -1,5 +1,19 @@
 # PRD — ARC TMS Business Suite
 
+## Latest update (2026-06-28) — Expense module (replaces Fixed Cost / Overhead)
+- **Label rename**: "Biaya Tetap (Overhead) / Fixed Cost" → **Expense** (sidebar, page, P&L)
+- **Category posting rule**:
+  - `Operation` (posting_type=`cogs`) → posts to **COGS** account `5102` → affects **Gross Margin**
+  - All other categories (posting_type=`expense`) → posts to dedicated **Expense** account (6101–6199 + auto-create 62XX for custom) → affects **Net Profit**
+- **Searchable combobox** with creatable categories (filter + Enter to create + "+ Tambah kategori baru" inline)
+- **Auto-create COA** in 62XX range when user adds new custom expense category
+- **New collection** `db.expense_categories` (replaces hardcoded `FIXED_COST_CATEGORIES`)
+- **P&L splits**: Operation expense added to `total_cogs`; others stay in `total_fixed_cost` (renamed UI: "Expense")
+- New endpoints: `GET /api/expense-categories`, `POST /api/expense-categories`, `DELETE /api/expense-categories/{id}`
+- Legacy `GET /api/fixed-costs/categories` retained (returns names from DB) for backwards compat
+- Files: `backend/server.py` (DEFAULT_EXPENSE_CATEGORIES, helpers, endpoints, P&L), `frontend/src/pages/FixedCosts.js` (full rewrite), `frontend/src/pages/ProfitLoss.js`, `frontend/src/components/Layout.js`
+- Verified: backend curl test pass (Operation → 5102/1101, Konsumsi → 6201/1101); UI screenshot confirms combobox + badges + new layout
+
 ## Latest tweak (2026-02 follow-up)
 - **Invoice cover description simplified** — Removed itemized list (1.1, 1.2, ...) on Cover row. Now shows ONLY "Biaya Pengiriman Barang {N} AWB". Detail per-AWB tetap ada di Lampiran. File: `/app/frontend/src/pages/InvoicePrint.js` (line 121-126).
 
