@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import api from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, currentMonth, errMsg } from "../lib/utils";
 import { toast } from "sonner";
@@ -141,7 +142,12 @@ function CategoryCombobox({ value, onChange, categories, onCategoryCreated }) {
 export default function FixedCosts() {
   const [rows, setRows] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [month, setMonth] = useState(currentMonth());
+  // Default date range = current month
+  const today = new Date();
+  const firstDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10);
+  const [startDate, setStartDate] = useState(firstDay);
+  const [endDate, setEndDate] = useState(lastDay);
   const [open, setOpen] = useState(false);
   const [openCopy, setOpenCopy] = useState(false);
   const [copyTarget, setCopyTarget] = useState("");
@@ -151,12 +157,18 @@ export default function FixedCosts() {
   const [importBusy, setImportBusy] = useState(false);
   const [importPreview, setImportPreview] = useState(null);  // dry_run result
   const [importResult, setImportResult] = useState(null);    // actual result
+  const [editingId, setEditingId] = useState(null);  // null = create mode, id = edit mode
   const [form, setForm] = useState({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) });
 
-  const load = () => api.get("/fixed-costs", { params: { month } }).then((r) => setRows(r.data));
+  // Permission check (finance & administrator can edit/delete)
+  const { user: authUser } = useAuth();
+  const userRole = authUser?.role || "";
+  const canEdit = userRole === "finance" || userRole === "administrator";
+
+  const load = () => api.get("/fixed-costs", { params: { start_date: startDate, end_date: endDate } }).then((r) => setRows(r.data));
   const loadCategories = () => api.get("/expense-categories").then((r) => setCategories(r.data));
   useEffect(() => { loadCategories(); }, []);
-  useEffect(() => { load(); }, [month]);
+  useEffect(() => { load(); }, [startDate, endDate]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -165,12 +177,29 @@ export default function FixedCosts() {
       return;
     }
     try {
-      await api.post("/fixed-costs", { ...form, amount: parseFloat(form.amount) });
-      toast.success("Expense ditambahkan");
+      if (editingId) {
+        await api.put(`/fixed-costs/${editingId}`, { ...form, amount: parseFloat(form.amount) });
+        toast.success("Expense diupdate");
+      } else {
+        await api.post("/fixed-costs", { ...form, amount: parseFloat(form.amount) });
+        toast.success("Expense ditambahkan");
+      }
       setOpen(false);
+      setEditingId(null);
       setForm({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) });
       load();
     } catch (e2) { toast.error(errMsg(e2)); }
+  };
+
+  const openEdit = (r) => {
+    setEditingId(r.id);
+    setForm({
+      category: r.category || "",
+      description: r.description || "",
+      amount: String(r.amount || ""),
+      expense_date: r.expense_date || new Date().toISOString().slice(0, 10),
+    });
+    setOpen(true);
   };
 
   const del = async (id) => {
@@ -185,12 +214,15 @@ export default function FixedCosts() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   };
 
+  // Derive month from startDate (for "Copy to next month" backward compat)
+  const sourceMonth = startDate.slice(0, 7); // YYYY-MM
+
   const openCopyDialog = () => {
     if (rows.length === 0) {
       toast.error("Tidak ada expense untuk disalin di periode ini");
       return;
     }
-    setCopyTarget(nextMonth(month));
+    setCopyTarget(nextMonth(sourceMonth));
     setCopyOverwrite(false);
     setOpenCopy(true);
   };
@@ -199,11 +231,16 @@ export default function FixedCosts() {
     e.preventDefault();
     try {
       const r = await api.post("/fixed-costs/copy", {
-        source_month: month, target_month: copyTarget, overwrite: copyOverwrite,
+        source_month: sourceMonth, target_month: copyTarget, overwrite: copyOverwrite,
       });
       toast.success(`${r.data.copied} expense disalin ke ${r.data.target_month}`);
       setOpenCopy(false);
-      setMonth(copyTarget);
+      // Update date range to target month
+      const [ty, tm] = copyTarget.split("-").map((x) => parseInt(x, 10));
+      const newFirst = `${ty}-${String(tm).padStart(2, "0")}-01`;
+      const newLast = new Date(ty, tm, 0).toISOString().slice(0, 10);
+      setStartDate(newFirst);
+      setEndDate(newLast);
     } catch (e2) { toast.error(errMsg(e2)); }
   };
 
@@ -266,26 +303,34 @@ export default function FixedCosts() {
         subtitle="Biaya operasional bulanan. Kategori 'Operation' masuk COGS (mempengaruhi Gross Margin); kategori lain masuk Expense (di bawah Gross Margin)."
         action={
           <div className="flex flex-wrap gap-2">
-            <Button data-testid="import-bkk-btn" variant="secondary" onClick={openImportDialog}>
-              <Upload size={16}/> Import BKK Excel
-            </Button>
-            <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
-              <Copy size={16}/> Salin ke Bulan Berikutnya
-            </Button>
-            <Button data-testid="add-fixed-cost-btn" onClick={() => { setForm({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) }); setOpen(true); }}>
-              <Plus size={16}/> Tambah Expense
-            </Button>
+            {canEdit && (
+              <>
+                <Button data-testid="import-bkk-btn" variant="secondary" onClick={openImportDialog}>
+                  <Upload size={16}/> Import BKK Excel
+                </Button>
+                <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
+                  <Copy size={16}/> Salin ke Bulan Berikutnya
+                </Button>
+                <Button data-testid="add-fixed-cost-btn" onClick={() => { setEditingId(null); setForm({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) }); setOpen(true); }}>
+                  <Plus size={16}/> Tambah Expense
+                </Button>
+              </>
+            )}
           </div>
         }
       />
 
       <Card className="p-4 mb-5">
         <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[180px]">
-            <Label>Periode (YYYY-MM)</Label>
-            <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+          <div className="min-w-[150px]">
+            <Label>Dari Tanggal</Label>
+            <Input data-testid="expense-filter-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
           </div>
-          <div className="ml-auto flex gap-4 items-end">
+          <div className="min-w-[150px]">
+            <Label>Sampai Tanggal</Label>
+            <Input data-testid="expense-filter-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </div>
+          <div className="ml-auto flex flex-wrap gap-4 items-end">
             <div className="text-right">
               <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-emerald-600">COGS (Operation)</div>
               <div data-testid="cogs-total" className="font-heading font-black text-xl text-emerald-700">{fmtIDR(totalCogs)}</div>
@@ -295,7 +340,7 @@ export default function FixedCosts() {
               <div data-testid="expense-total" className="font-heading font-black text-xl text-slate-800">{fmtIDR(totalExpense)}</div>
             </div>
             <div className="text-right border-l border-slate-200 pl-4">
-              <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-500">Total {month}</div>
+              <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-500">Total Periode</div>
               <div data-testid="fixed-cost-total" className="font-heading font-black text-2xl text-red-700">{fmtIDR(total)}</div>
             </div>
           </div>
@@ -348,7 +393,14 @@ export default function FixedCosts() {
                   <Td className="text-slate-700 text-sm">{r.description || "-"}</Td>
                   <Td className="text-right font-mono font-semibold">{fmtIDR(r.amount)}</Td>
                   <Td className="text-right">
-                    <button onClick={() => del(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
+                    {canEdit && (
+                      <div className="inline-flex gap-1">
+                        <button data-testid={`edit-expense-${r.id}`} onClick={() => openEdit(r)} title="Edit expense" className="p-1.5 rounded hover:bg-blue-50 text-blue-600">
+                          <Banknote size={14}/>
+                        </button>
+                        <button data-testid={`delete-expense-${r.id}`} onClick={() => del(r.id)} title="Hapus expense" className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
+                      </div>
+                    )}
                   </Td>
                 </tr>
               );
@@ -362,8 +414,8 @@ export default function FixedCosts() {
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
           <Card className="w-full max-w-lg p-6">
             <div className="flex items-start justify-between mb-4">
-              <h3 className="font-heading font-bold text-xl">Tambah Expense</h3>
-              <button onClick={() => setOpen(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+              <h3 className="font-heading font-bold text-xl">{editingId ? "Edit Expense" : "Tambah Expense"}</h3>
+              <button onClick={() => { setOpen(false); setEditingId(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
             <form onSubmit={submit} className="space-y-3">
               <div>
@@ -406,7 +458,7 @@ export default function FixedCosts() {
               <button onClick={() => setOpenCopy(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
             <p className="text-sm text-slate-600 mb-4">
-              Akan menyalin <strong>{rows.length} item</strong> expense dari <span className="font-mono font-bold">{month}</span> ke periode tujuan.
+              Akan menyalin <strong>{rows.length} item</strong> expense dari <span className="font-mono font-bold">{sourceMonth}</span> ke periode tujuan.
             </p>
             <form onSubmit={doCopy} className="space-y-3">
               <div>

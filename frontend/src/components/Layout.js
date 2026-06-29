@@ -32,6 +32,7 @@ const NAV = [
   { to: "/analytics", label: "Dashboard Analitik", icon: BarChart3, perm: "*" },
   { to: "/customers", label: "Customer", icon: Users, perm: "customers" },
   { to: "/contracts", label: "Perjanjian Rate", icon: ClipboardCheck, perm: "contracts" },
+  { to: "/expense-categories", label: "Master Kategori Expense", icon: Banknote, perm: "expense_categories" },
   { to: "/pnl", label: "Laba Rugi (Order)", icon: TrendingUp, perm: "pnl" },
 
   { type: "section", label: "Akunting (PSAK)", feature: "accounting" },

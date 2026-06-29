@@ -1,5 +1,15 @@
 # PRD — ARC TMS Business Suite
 
+## Latest update (2026-06-29) — 6-point Expense module enhancement
+1. **P&L date range**: replace month picker → start_date/end_date pickers. Backend `/api/reports/profit-loss?start_date=&end_date=` supported.
+2. **Sub-Expense in P&L**: rincian per-kategori (COGS-typed & Operating Expense) ditampilkan inline di dalam Ringkasan card (di bawah waterfall) sebagai chip kompak.
+3. **Mobile-friendly P&L**: 2 rows × 3 cols layout, font kompak (`text-base sm:text-xl lg:text-2xl`), fit dalam 1 page mobile (390px viewport).
+4. **Master Kategori Expense** (new page `/expense-categories`): CRUD dengan role permission (finance/administrator). Sidebar di "Master & Laporan". Backend `PUT /api/expense-categories/{id}` baru. Show usage count, system-locked badge, search.
+5. **Expense edit/delete** dengan role permission: tombol edit (Banknote icon) & delete (Trash2) muncul hanya untuk finance/administrator. Backend `PUT /api/fixed-costs/{id}` baru — auto re-post journal saat edit.
+6. **Expense filter date range**: replace month picker → start_date/end_date di halaman Expense. Backend `GET /api/fixed-costs?start_date=&end_date=`.
+- Permission via `useAuth` hook (not localStorage parse) for reliability.
+- New module key `expense_categories` registered in `FEATURE_MODULES`.
+
 ## Latest (2026-06-28) — BKK Import: Auto-link Panjar ↔ Settlement + Overspend support
 - **Auto-settle**: BKK-numeric `Laporan Operasional - X` (Dr filled) sekarang auto-link ke Panjar BKK-JV terdekat (recipient match, oldest open, advance_date ≤ settle_date).
 - **Overspend allowed**: jika settlement > panjar, sisa di-debit ke akun kas (extra cash out). Field baru: `overspend_amount`, `refund_amount`.

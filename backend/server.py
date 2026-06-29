@@ -143,6 +143,7 @@ MODULES = [
     {"key": "costs", "label": "Plotting Biaya", "default_roles": ["operation", "finance"]},
     {"key": "accrue", "label": "Settle Hutang Vendor", "default_roles": ["finance"]},
     {"key": "fixed_costs", "label": "Expense (Biaya Operasional)", "default_roles": ["finance"]},
+    {"key": "expense_categories", "label": "Master Kategori Expense", "default_roles": ["finance"]},
     {"key": "customers", "label": "Master Customer", "default_roles": ["operation", "finance"]},
     {"key": "contracts", "label": "Master Kontrak", "default_roles": ["operation", "finance"]},
     {"key": "pnl", "label": "Laporan Laba Rugi", "default_roles": ["operation", "finance"]},
@@ -2096,14 +2097,65 @@ class ExpenseCategoryIn(BaseModel):
     posting_type: Optional[str] = "expense"  # 'cogs' or 'expense'
 
 @app.get("/api/expense-categories")
-async def list_expense_categories(user: dict = Depends(get_current_user)):
+async def list_expense_categories(include_usage: bool = False, user: dict = Depends(get_current_user)):
     docs = await db.expense_categories.find({"active": {"$ne": False}}).sort([("posting_type", 1), ("name", 1)]).to_list(500)
-    return [serialize(d) for d in docs]
+    out = [serialize(d) for d in docs]
+    if include_usage:
+        for c in out:
+            c["in_use_count"] = await db.fixed_costs.count_documents({"category": c["name"]})
+    return out
 
 @app.post("/api/expense-categories")
 async def create_expense_category_ep(data: ExpenseCategoryIn, user: dict = Depends(require_role("finance"))):
     doc = await create_expense_category(data.name, posting_type=data.posting_type or "expense", user_id=user["id"])
     return serialize(doc)
+
+class ExpenseCategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    posting_type: Optional[str] = None  # 'cogs' or 'expense'
+
+@app.put("/api/expense-categories/{cid}")
+async def update_expense_category(cid: str, data: ExpenseCategoryUpdate, user: dict = Depends(require_role("finance"))):
+    doc = await db.expense_categories.find_one({"_id": _oid(cid)})
+    if not doc:
+        raise HTTPException(404, "Kategori tidak ditemukan")
+    if doc.get("is_system"):
+        raise HTTPException(400, "Kategori sistem tidak dapat diubah")
+    update_set = {}
+    rename_from = None
+    if data.name and data.name.strip() and data.name.strip() != doc["name"]:
+        new_name = data.name.strip()
+        exists = await db.expense_categories.find_one({"name": {"$regex": f"^{re.escape(new_name)}$", "$options": "i"}})
+        if exists and str(exists["_id"]) != cid:
+            raise HTTPException(400, f"Kategori '{new_name}' sudah ada")
+        rename_from = doc["name"]
+        update_set["name"] = new_name
+    if data.posting_type:
+        ptype = data.posting_type.lower()
+        if ptype not in ("cogs", "expense"):
+            raise HTTPException(400, "posting_type harus 'cogs' atau 'expense'")
+        if ptype != doc.get("posting_type"):
+            update_set["posting_type"] = ptype
+            # change account_code accordingly: cogs → 5102, expense → keep current if 6xxx else 6199
+            if ptype == "cogs":
+                update_set["account_code"] = "5102"
+            else:
+                cur = doc.get("account_code") or ""
+                if not cur.startswith("6"):
+                    update_set["account_code"] = "6199"
+    if not update_set:
+        return serialize(doc)
+    await db.expense_categories.update_one({"_id": _oid(cid)}, {"$set": update_set})
+    # Propagate to existing fixed_cost records using this category
+    if rename_from:
+        await db.fixed_costs.update_many({"category": rename_from}, {"$set": {"category": update_set["name"]}})
+    if "posting_type" in update_set:
+        propagate = {"posting_type": update_set["posting_type"]}
+        if "account_code" in update_set:
+            propagate["account_code"] = update_set["account_code"]
+        target_name = update_set.get("name") or doc["name"]
+        await db.fixed_costs.update_many({"category": target_name}, {"$set": propagate})
+    return serialize(await db.expense_categories.find_one({"_id": _oid(cid)}))
 
 @app.delete("/api/expense-categories/{cid}")
 async def delete_expense_category(cid: str, user: dict = Depends(require_role("finance"))):
@@ -2112,7 +2164,6 @@ async def delete_expense_category(cid: str, user: dict = Depends(require_role("f
         raise HTTPException(404, "Kategori tidak ditemukan")
     if doc.get("is_system"):
         raise HTTPException(400, "Kategori sistem tidak dapat dihapus")
-    # Check usage
     in_use = await db.fixed_costs.count_documents({"category": doc["name"]})
     if in_use > 0:
         raise HTTPException(400, f"Kategori sedang digunakan oleh {in_use} record expense. Hapus/ubah dulu.")
@@ -2120,9 +2171,17 @@ async def delete_expense_category(cid: str, user: dict = Depends(require_role("f
     return {"ok": True}
 
 @app.get("/api/fixed-costs")
-async def list_fixed_costs(month: Optional[str] = None, user: dict = Depends(get_current_user)):
+async def list_fixed_costs(
+    month: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
     q = {}
-    if month:
+    if start_date and end_date:
+        # Date range filter (preferred). Uses expense_date if available; fallback expects period_month logic.
+        q["expense_date"] = {"$gte": start_date, "$lte": end_date}
+    elif month:
         q["period_month"] = month
     docs = await db.fixed_costs.find(q).sort("created_at", -1).to_list(2000)
     return [serialize(d) for d in docs]
@@ -2193,9 +2252,73 @@ async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role
         new["journal_warning"] = e.detail
     return serialize(new)
 
+class FixedCostUpdate(BaseModel):
+    category: Optional[str] = None
+    description: Optional[str] = None
+    amount: Optional[float] = None
+    expense_date: Optional[str] = None  # YYYY-MM-DD
+
+@app.put("/api/fixed-costs/{fid}")
+async def update_fixed_cost(fid: str, data: FixedCostUpdate, user: dict = Depends(require_role("finance"))):
+    doc = await db.fixed_costs.find_one({"_id": _oid(fid)})
+    if not doc:
+        raise HTTPException(404, "Expense tidak ditemukan")
+    update_set: dict = {}
+    expense_dt = None
+    if data.expense_date:
+        try:
+            expense_dt = datetime.strptime(data.expense_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "Format tanggal harus YYYY-MM-DD")
+        update_set["expense_date"] = data.expense_date
+        update_set["period_month"] = expense_dt.strftime("%Y-%m")
+    if data.amount is not None:
+        if data.amount <= 0:
+            raise HTTPException(400, "Amount harus > 0")
+        update_set["amount"] = float(data.amount)
+    if data.description is not None:
+        update_set["description"] = data.description
+    if data.category:
+        cat = await get_expense_category(data.category)
+        if not cat:
+            raise HTTPException(400, f"Kategori '{data.category}' tidak terdaftar")
+        update_set["category"] = cat["name"]
+        update_set["posting_type"] = cat.get("posting_type", "expense")
+        update_set["account_code"] = cat.get("account_code")
+    if not update_set:
+        return serialize(doc)
+    update_set["updated_by"] = user["id"]
+    update_set["updated_at"] = datetime.now(timezone.utc)
+    await db.fixed_costs.update_one({"_id": _oid(fid)}, {"$set": update_set})
+    # Re-post journal: delete old, post new
+    await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": fid})
+    new = await db.fixed_costs.find_one({"_id": _oid(fid)})
+    try:
+        expense_code = new.get("account_code") or "6199"
+        label = "Beban Operasional" if new.get("posting_type") == "cogs" else "Beban"
+        cash_acc = new.get("cash_account_code") or "1101"
+        new_dt = expense_dt or (datetime.strptime(new["expense_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc) if new.get("expense_date") else new.get("created_at"))
+        await post_journal(
+            date=new_dt,
+            description=f"{label} {new['category']} - {new.get('expense_date') or new.get('period_month')} (edited)",
+            lines=[
+                {"account_code": expense_code, "debit": new["amount"], "credit": 0, "memo": new.get("description") or new["category"]},
+                {"account_code": cash_acc, "debit": 0, "credit": new["amount"], "memo": new["category"]},
+            ],
+            reference_type="fixed_cost", reference_id=fid, posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
+    return serialize(new)
+
 @app.delete("/api/fixed-costs/{fid}")
 async def delete_fixed_cost(fid: str, user: dict = Depends(require_role("finance"))):
+    doc = await db.fixed_costs.find_one({"_id": _oid(fid)})
+    if not doc:
+        raise HTTPException(404, "Expense tidak ditemukan")
     await db.fixed_costs.delete_one({"_id": _oid(fid)})
+    # Also clean up associated journals to keep books consistent
+    await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": fid})
     return {"ok": True}
 
 # ---------------------------------------------------------------------------
@@ -2204,19 +2327,31 @@ async def delete_fixed_cost(fid: str, user: dict = Depends(require_role("finance
 @app.get("/api/reports/profit-loss")
 async def profit_loss(
     month: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     customer_id: Optional[str] = None,
     user: dict = Depends(require_role("finance", "operation")),
 ):
     q = {}
     if customer_id:
         q["customer_id"] = _oid(customer_id)
-    if month:
+    start_dt = end_dt = None
+    if start_date and end_date:
+        try:
+            sy, sm, sd = [int(x) for x in start_date.split("-")]
+            ey, em, ed = [int(x) for x in end_date.split("-")]
+            start_dt = datetime(sy, sm, sd, tzinfo=timezone.utc)
+            end_dt = datetime(ey, em, ed, 23, 59, 59, tzinfo=timezone.utc)
+            q["created_at"] = {"$gte": start_dt, "$lte": end_dt}
+        except Exception:
+            raise HTTPException(400, "Format date harus YYYY-MM-DD")
+    elif month:
         try:
             y, m = month.split("-")
             y, m = int(y), int(m)
-            start = datetime(y, m, 1, tzinfo=timezone.utc)
-            end = datetime(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1, tzinfo=timezone.utc)
-            q["created_at"] = {"$gte": start, "$lt": end}
+            start_dt = datetime(y, m, 1, tzinfo=timezone.utc)
+            end_dt = datetime(y + (1 if m == 12 else 0), 1 if m == 12 else m + 1, 1, tzinfo=timezone.utc)
+            q["created_at"] = {"$gte": start_dt, "$lt": end_dt}
         except Exception:
             pass
     orders = await db.awb_orders.find(q).sort("created_at", -1).to_list(5000)
@@ -2261,12 +2396,11 @@ async def profit_loss(
             "margin_pct": (gross / rev * 100) if (has_cost and rev) else 0,
         })
 
-    # Fixed costs / Expenses for the period (month-scoped only; ignored if no month filter is given because
-    # they are not customer-specific). Split by posting_type:
-    #   - posting_type='cogs' (e.g. Operation) → added to total_cogs (reduces Gross Margin)
-    #   - posting_type='expense' (default)     → added to total_fixed_cost (below GM, reduces Net Profit)
+    # Fixed costs / Expenses for the period. Filter by date range (preferred) or month.
     fixed_q = {}
-    if month:
+    if start_date and end_date:
+        fixed_q["expense_date"] = {"$gte": start_date, "$lte": end_date}
+    elif month:
         fixed_q["period_month"] = month
     fixed_rows = await db.fixed_costs.find(fixed_q).sort("created_at", -1).to_list(2000)
     # Resolve posting_type from db.expense_categories (handles legacy records w/o the field)
