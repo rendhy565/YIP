@@ -7769,6 +7769,7 @@ async def delete_payment_receipt(rid: str, user: dict = Depends(require_role("fi
     awb_id = doc["awb_id"]
     await db.payment_receipts.delete_one({"_id": _oid(rid)})
     await db.journal_entries.delete_many({"reference_type": "payment_receipt", "reference_id": rid})
+    await log_activity(user, "delete", "payment_receipt", rid, f"Deleted payment {doc.get('amount')} for AWB {str(awb_id)[-6:]}")
     # Recheck status — if was Paid but now not fully paid → revert to Invoiced
     total_paid = await db.payment_receipts.aggregate([
         {"$match": {"awb_id": awb_id}},
@@ -8023,13 +8024,6 @@ async def run_due_recurring_expenses(user: dict = Depends(require_role("finance"
                 level="info" if rec.get("auto_execute") else "warning",
                 link="/fixed-costs",
             )
-            await push_notification(
-                user_id=None, broadcast=False,
-                title=f"Recurring: {rec['name']}",
-                message=f"Rp {rec['amount']:,.0f} ({rec['category']})",
-                level="info",
-                link="/fixed-costs",
-            ) if False else None  # already covered above
             notified += 1
         # Update next_due + occurrence_count
         next_due = _compute_next_due(rec["frequency"], rec["next_due"], rec.get("execute_day"))

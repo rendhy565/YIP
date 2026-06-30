@@ -1,5 +1,17 @@
 # PRD — ARC TMS Business Suite
 
+
+## Latest (2026-06-30) — Batch 2 of 9-item enhancement COMPLETE — 100% tested
+1. **Import Invoice Number** (`POST /api/invoices/import-numbers`) — upload Excel (cols: AWB Number, Invoice Number, Status, Paid Date) → marks AWB as Invoiced/Paid. UI button on `/arc/invoices/created`.
+2. **Multi-Receiver Payment per AWB** — `GET/POST /api/orders/{oid}/payments`, `DELETE /api/payment-receipts/{rid}`. Multiple partial payments per AWB; auto-marks Paid when total_paid≥grand_total; reverts to Invoiced on receipt delete. UI modal accessible via "Pembayaran" button.
+3. **Activity Log** — middleware auto-records all mutating API calls. Admin page `/arc/activity-log` filters by date/module/action. Endpoint `GET /api/activity-logs`.
+4. **RBAC Phase A (matrix)** — module × action permission table (`GET /api/rbac/matrix`, `POST /api/rbac/update`). Admin page `/arc/rbac`. Administrator bypass enforced (POST update for admin returns 400).
+5. **Recurring Expense (Cost Automatic)** — CRUD at `/arc/recurring-expenses`. `POST /api/recurring-expenses/run-due` creates expense + journal + notification + advances next_due. Supports monthly/weekly/daily frequency.
+6. **In-App NotificationBell** — sidebar bell with unread badge. `GET /api/notifications`, mark-read endpoints. Auto-refreshes every 60s.
+- Code cleanups: removed dead-code branch in run-due notifications; added log_activity to payment receipt delete.
+- Test report: `/app/test_reports/iteration_19.json` — 28/28 backend pytest pass, full UI verification.
+
+## Latest (2026-06-30) — Batch 1 of 9-item enhancement: Export, Edit Selling, PPN verify
 ## Latest (2026-06-30) — Batch 1 of 9-item enhancement: Export, Edit Selling, PPN verify
 1. **Export Open AWB** — `GET /api/orders/export/open?start_date=&end_date=` returns xlsx with import-compatible headers (Sheet "DATA ALL BASE", 34 columns matching `_HEADER_ALIAS`). Frontend button at OrdersList header. Use case: bulk edit offline → re-import.
 2. **Edit Selling allowed for Reconciled status** — `PATCH /api/orders/{oid}/extended` previously locked to Open-only; now allows Open + Reconciled. Auto-recompute totals (including addons), auto re-post `sales_accrued` journal when amounts change.
