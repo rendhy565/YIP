@@ -1,6 +1,16 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-06-30) — Iteration 20: BUG FIX + 4 user-requested adjustments
+**P0 BUG FIX**: Tombol Cancel invoice tercetak tidak berfungsi → root cause: `window.confirm()` di-suppress browser. Diganti dengan **custom Card modal** `[data-testid=cancel-invoice-modal]` di `/app/frontend/src/pages/InvoicesCreated.js`.
+
+**User feedback adjustments**:
+- **(3)** `GET /api/invoices/import-numbers-template` — endpoint baru download Excel template (2 sheet: Import Invoice + Petunjuk). UI tombol "Download Template Excel" di dalam modal Import Invoice No.
+- **(5)** Per-user permission matrix (BUKAN per-role): expand `Users.js` edit modal → matrix N modul × 6 aksi (View/Create/Edit/Delete/Import/Export). Checkbox `[data-testid=perm-{module}-{action}]`. Backend `User` model now has `permission_actions: {module: {view,create,edit,delete,import,export}}` field. Sidebar link `/arc/rbac` DIHAPUS (route masih ada tapi tak di-link).
+- **(8)** Multi-Receiver Payment **dipindah dari Invoice Tercetak ke Pembayaran (Closing)**: tombol "Multi-Bayar" di setiap row /arc/payments, modal lengkap dengan form (Tanggal/Nominal/Metode/Ref/Catatan) + riwayat pembayaran + auto-mark Paid saat lunas. Tombol "Pembayaran" di /arc/invoices/created DIHAPUS.
+
+**Testing**: `/app/test_reports/iteration_20.json` — 11/11 backend pytest pass + UI flow verified via Playwright. Zero action items.
+
 ## Latest (2026-06-30) — Item #9 COMPLETE: Export FPK (Faktur Pajak Excel)
 - **Endpoint**: `POST /api/invoices/export-fpk` body `{invoice_ids: [...]}` → returns xlsx
 - **Template**: `/app/backend/templates/template_fpk.xlsx` (user-provided "TEMPLATE XML FPK EMR 25 Juni 26.xlsx")
