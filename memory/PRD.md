@@ -1,6 +1,31 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-06-30) — Iteration 23: Granular Per-Feature Permissions COMPLETE
+**Feature**: User feedback: "permission harus lebih spesifik. misalkan di daftar AWB siapa yang boleh klik tombol terima, tombol POD, add cost dll".
+
+**Implementation**:
+- **MODULE_FEATURES catalog** (server.py): 20 modul × N fitur spesifik per modul (total ~80 fitur). Setiap fitur punya `key` + `label` Indonesia. Contoh: `orders_list` (8 fitur): receive, pod, edit_receive, edit_pod, view_cost, drop, delete, export_open. `invoices_created` (6 fitur): cancel, import_numbers, export_fpk, export_ar, bulk_print, save_po_number. dll.
+- **Endpoint baru**: `GET /api/rbac/module-features` (replaces old RBAC matrix endpoints which are now removed/404).
+- **Per-user storage**: `User.permission_actions = {module_key: {feature_key: bool}}`. Backend `POST/PUT /api/users` normalisasi & validasi struktur.
+- **Admin auto-merge**: setiap login + /auth/me, admin's `permission_actions` di-merge dengan missing modules/features (handles drift saat ada penambahan fitur). Admin juga di-set per-fitur (sesuai user request — no auto-bypass).
+- **Startup assertion**: prevent drift antara MODULES list & MODULE_FEATURES catalog.
+
+**Frontend**:
+- **`useCan(module, feature)` hook** (`src/lib/useCan.js`): reads from auth context.
+- **Users.js**: accordion expandable per modul → checkbox `[data-testid=perm-{module}-{feature}]` per fitur, dengan tombol "Aktifkan Semua / Matikan Semua / Reset ke Default Role".
+- **Button gating** applied (hide-completely behavior):
+  - `OrdersList.js`: receive/pod/edit_receive/edit_pod/view_cost/drop/delete/export_open
+  - `Recap.js`: edit_selling/reconcile/export + costs.add
+  - `Invoices.js`: invoices.create
+  - `InvoicesCreated.js`: cancel/import_numbers/export_fpk/export_ar/bulk_print/save_po_number
+  - `Payments.js`: mark_paid/mark_paid_bulk/multi_payment/delete_receipt
+  - `FixedCosts.js`: create/edit/delete/import_bkk
+  - `PanjarKerja.js`: petty_cash_create/petty_cash_settle/petty_cash_delete
+- **Deleted**: `RoleMatrix.js` + route `/arc/rbac` (per user request "hapus total file & route-nya").
+
+**Testing**: `/app/test_reports/iteration_23.json` → 16/16 backend pytest + UI gating verified end-to-end (created finance_test_rbac with selective perms → comparing visible buttons in /arc/invoices/created vs admin confirmed hide behavior works). ZERO critical issues.
+
 ## Latest (2026-06-30) — Iteration 21: BUG FIX Edit AWB Selling (Charter mode)
 **P0 BUG**: User report "mana sudah bisa ubah selling?" — Modal Edit AWB di `/arc/recap` hanya punya Tarif/KG × Qty(KG), tidak bisa edit selling untuk AWB charter (qty=0, tariff=0, tapi total_tariff>0). 
 **FIX**: Tambah toggle **Per-Kg ↔ Charter (Lump Sum)** di modal Edit AWB (`Recap.js`):
