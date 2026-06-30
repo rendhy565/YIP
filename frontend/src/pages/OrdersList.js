@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Select, Input, Table, Th, Td, StatusBadge, Label, Button } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
-import { Trash2, MinusCircle, PackageCheck, X, Search } from "lucide-react";
+import { Trash2, MinusCircle, PackageCheck, X, Search, Download } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { toast } from "sonner";
 import FilterPresets from "../components/FilterPresets";
@@ -181,7 +181,32 @@ export default function OrdersList() {
 
   return (
     <div data-testid="orders-list-page">
-      <PageHeader title="Daftar AWB" subtitle="Semua order. Tombol 'Terima Barang' untuk catat tanggal terima + biaya tambahan." />
+      <PageHeader
+        title="Daftar AWB"
+        subtitle="Semua order. Tombol 'Terima Barang' untuk catat tanggal terima + biaya tambahan."
+        action={
+          <Button
+            data-testid="export-open-awb-btn"
+            variant="secondary"
+            onClick={async () => {
+              try {
+                const url = `${process.env.REACT_APP_BACKEND_URL}/api/orders/export/open`;
+                const token = localStorage.getItem("tms_token");
+                const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+                if (!resp.ok) throw new Error("Export gagal");
+                const blob = await resp.blob();
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `Open_AWB_${new Date().toISOString().slice(0,10)}.xlsx`;
+                link.click();
+                URL.revokeObjectURL(link.href);
+              } catch (e) { alert("Export gagal: " + e.message); }
+            }}
+          >
+            <Download size={14}/> Export Open AWB
+          </Button>
+        }
+      />
 
       <Card className="p-4 mb-5">
         <FilterPresets

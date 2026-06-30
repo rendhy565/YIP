@@ -1,5 +1,11 @@
 # PRD — ARC TMS Business Suite
 
+## Latest (2026-06-30) — Batch 1 of 9-item enhancement: Export, Edit Selling, PPN verify
+1. **Export Open AWB** — `GET /api/orders/export/open?start_date=&end_date=` returns xlsx with import-compatible headers (Sheet "DATA ALL BASE", 34 columns matching `_HEADER_ALIAS`). Frontend button at OrdersList header. Use case: bulk edit offline → re-import.
+2. **Edit Selling allowed for Reconciled status** — `PATCH /api/orders/{oid}/extended` previously locked to Open-only; now allows Open + Reconciled. Auto-recompute totals (including addons), auto re-post `sales_accrued` journal when amounts change.
+3. **PPN explicit** — added explicit comment in `create_awb_order`: `tax_amount = total_tariff × tax_percentage / 100`. Addons (polis/asuransi/SPSI/forklift) NEVER taxed. grand_total = total_tariff + tax_amount + addons.
+- Backlog from this session: Items #2 (Cost Automatic), #3 (Import Invoice Number), #4 (Activity Log), #5 (RBAC Fase A), #8 (Multi-receiver Payment), #9 (PPN format - waiting on user spec).
+
 ## Latest update (2026-06-29) — 6-point Expense module enhancement
 1. **P&L date range**: replace month picker → start_date/end_date pickers. Backend `/api/reports/profit-loss?start_date=&end_date=` supported.
 2. **Sub-Expense in P&L**: rincian per-kategori (COGS-typed & Operating Expense) ditampilkan inline di dalam Ringkasan card (di bawah waterfall) sebagai chip kompak.

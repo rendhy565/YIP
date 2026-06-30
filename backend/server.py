@@ -1153,6 +1153,8 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
         qty_kg_val = data.qty_kg
         tariff_val = data.tariff_per_kg
     tax_amt = round(total * data.tax_percentage / 100, 2)
+    # NOTE: PPN dihitung HANYA dari total_tariff (selling). Addons receive (polis/asuransi/spsi/forklift)
+    # ditambahkan ke grand_total tapi TIDAK kena PPN. Lihat /api/orders/{oid}/receive untuk addons logic.
     # AWB number: manual takes precedence; check uniqueness
     awb_no = (data.awb_number or "").strip() or await next_awb_number()
     if data.awb_number:
@@ -3908,6 +3910,8 @@ class AwbExtendedUpdate(BaseModel):
     insurance_enabled: Optional[bool] = None
     polis_amount: Optional[float] = None
     insurance_amount: Optional[float] = None
+    is_charter: Optional[bool] = None
+    charter_amount: Optional[float] = None
     pickup_date: Optional[str] = None  # YYYY-MM-DD
 
 @app.patch("/api/orders/{oid}/extended")
@@ -3918,8 +3922,11 @@ async def patch_awb_extended(oid: str, data: AwbExtendedUpdate, user: dict = Dep
     o = await db.awb_orders.find_one({"_id": _oid(oid)})
     if not o:
         raise HTTPException(404, "Order tidak ditemukan")
-    if user["role"] != "administrator" and o.get("status") not in ("Open", None):
-        raise HTTPException(403, f"Hanya AWB Open yang dapat di-edit (status saat ini: {o.get('status')})")
+    if user["role"] != "administrator" and o.get("status") not in ("Open", "Reconciled", None):
+        raise HTTPException(403, f"Hanya AWB Open/Reconciled yang dapat di-edit (status saat ini: {o.get('status')})")
+    # Cannot edit if already invoiced
+    if o.get("status") in ("Invoiced", "Paid"):
+        raise HTTPException(403, f"AWB sudah {o.get('status')} — tidak dapat di-edit")
     # AWB number uniqueness if changed
     if "awb_number" in upd and upd["awb_number"] and upd["awb_number"] != o.get("awb_number"):
         if await db.awb_orders.find_one({"awb_number": upd["awb_number"], "_id": {"$ne": _oid(oid)}}):
@@ -3932,18 +3939,43 @@ async def patch_awb_extended(oid: str, data: AwbExtendedUpdate, user: dict = Dep
         except Exception:
             raise HTTPException(400, "pickup_date harus YYYY-MM-DD")
         upd.pop("pickup_date", None)
-    # Recalculate totals when tariff/qty/tax changes
-    if any(k in upd for k in ("tariff_per_kg", "qty_kg", "tax_percentage")):
-        tariff = float(upd.get("tariff_per_kg", o.get("tariff_per_kg") or 0))
-        qty = float(upd.get("qty_kg", o.get("qty_kg") or 0))
+    # Recalculate totals when tariff/qty/tax changes — PPN dihitung HANYA dari total_tariff (selling),
+    # addons (polis/asuransi/spsi/forklift) TIDAK kena PPN tapi tetap menambah grand_total
+    if any(k in upd for k in ("tariff_per_kg", "qty_kg", "tax_percentage", "charter_amount")):
+        is_charter = bool(upd.get("is_charter", o.get("is_charter")))
+        if is_charter:
+            charter_amt = float(upd.get("charter_amount", o.get("charter_amount") or 0))
+            total = round(charter_amt, 2)
+        else:
+            tariff = float(upd.get("tariff_per_kg", o.get("tariff_per_kg") or 0))
+            qty = float(upd.get("qty_kg", o.get("qty_kg") or 0))
+            total = round(tariff * qty, 2)
         pct = float(upd.get("tax_percentage", o.get("tax_percentage") or 0))
-        total = round(tariff * qty, 2)
-        tax_amt = round(total * pct / 100, 2)
+        tax_amt = round(total * pct / 100, 2)  # PPN from selling only
+        addons_total = float(o.get("addons_total") or 0)
         upd["total_tariff"] = total
         upd["tax_amount"] = tax_amt
-        upd["grand_total"] = round(total + tax_amt, 2)
+        upd["grand_total"] = round(total + tax_amt + addons_total, 2)  # excl PPN on addons
     if upd:
+        upd["updated_at"] = datetime.now(timezone.utc)
+        upd["updated_by"] = user["id"]
         await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
+        # Re-post journal if AWB has accrued sales (Reconciled status)
+        if o.get("status") == "Reconciled" and any(k in upd for k in ("total_tariff", "tax_amount")):
+            await db.journal_entries.delete_many({"reference_type": "sales_accrued", "reference_id": oid})
+            try:
+                new_doc = await db.awb_orders.find_one({"_id": _oid(oid)})
+                await post_journal(
+                    date=new_doc.get("reconciled_at") or new_doc.get("created_at"),
+                    description=f"Sales Accrual (edited) - {new_doc['awb_number']}",
+                    lines=[
+                        {"account_code": "1290", "debit": new_doc["total_tariff"], "credit": 0, "memo": new_doc["awb_number"]},
+                        {"account_code": "2390", "debit": 0, "credit": new_doc["total_tariff"], "memo": new_doc["awb_number"]},
+                    ],
+                    reference_type="sales_accrued", reference_id=oid, posted_by=user["id"],
+                )
+            except HTTPException:
+                pass
     return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
 
 # ---------------------------------------------------------------------------
@@ -7306,3 +7338,142 @@ async def import_bkk_excel(
         except Exception as e:
             summary["errors"].append({"row": ridx, "message": str(e)[:200]})
     return summary
+
+
+# ===========================================================================
+# Export Open AWB to Excel (format identical to import → can be re-imported)
+# ===========================================================================
+@app.get("/api/orders/export/open")
+async def export_open_awb_excel(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(require_role("operation", "finance", "administrator")),
+):
+    """Export all Open AWBs to Excel in IMPORT-compatible format.
+    Use case: user can edit fields offline and re-import via the same import endpoint.
+    """
+    q = {"status": "Open"}
+    if start_date and end_date:
+        try:
+            sy, sm, sd = [int(x) for x in start_date.split("-")]
+            ey, em, ed = [int(x) for x in end_date.split("-")]
+            q["created_at"] = {
+                "$gte": datetime(sy, sm, sd, tzinfo=timezone.utc),
+                "$lte": datetime(ey, em, ed, 23, 59, 59, tzinfo=timezone.utc),
+            }
+        except Exception:
+            raise HTTPException(400, "Format date harus YYYY-MM-DD")
+
+    awbs = await db.awb_orders.find(q).sort("created_at", -1).to_list(50000)
+
+    # Build customer name lookup
+    cust_ids = [a["customer_id"] for a in awbs if a.get("customer_id")]
+    cust_map = {}
+    if cust_ids:
+        async for c in db.customers.find({"_id": {"$in": cust_ids}}):
+            cust_map[c["_id"]] = c
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "DATA ALL BASE"
+
+    # Headers EXACTLY match import aliases (so re-import works seamlessly)
+    headers = [
+        "No.", "No. WO", "Bulan", "Tgl. Pick Up", "No AWB", "Customer", "Customer Name",
+        "Tujuan", "City", "Wilayah", "Item", "Tarif/Kg", "Kg", "Selling", "PPN", "INV+PPN",
+        "Vendor", "Tipe Armada", "Jenis Armada", "Biaya Ops", "Uang Jalan (Lintas)", "T. Biaya Ops",
+        "Kategori Cust", "Dalam/Luar Kota", "Cashback", "Total Tagihan", "PPh 2%", "Selling Net",
+        "No. Inv", "Tgl. Inv", "Status Penagihan", "Status Pembayaran", "Tgl. Bayar", "Ket.",
+    ]
+    from openpyxl.styles import Font, PatternFill, Alignment
+    header_font = Font(bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+    for col_idx, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # Sum existing vendor costs per AWB for "Biaya Ops" / "Uang Jalan (Lintas)" columns
+    all_awb_ids = [a["_id"] for a in awbs]
+    costs_by_awb: dict = {}
+    if all_awb_ids:
+        async for c in db.awb_costs.find({"awb_id": {"$in": all_awb_ids}}):
+            costs_by_awb.setdefault(c["awb_id"], []).append(c)
+
+    def _sum_cost(awb_id, category):
+        return sum(float(c.get("amount") or 0) for c in costs_by_awb.get(awb_id, []) if c.get("cost_category") == category)
+
+    def _bulan_id(d):
+        if not d:
+            return ""
+        months = ["", "JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGS", "SEP", "OKT", "NOV", "DES"]
+        return months[d.month] + "-" + str(d.year)[-2:]
+
+    for idx, a in enumerate(awbs, 1):
+        cust = cust_map.get(a.get("customer_id"))
+        cust_short = (cust or {}).get("short_name") or ""
+        cust_name = (cust or {}).get("name") or ""
+        pickup = a.get("created_at")
+        biaya_vendor = _sum_cost(a["_id"], "Vendor")
+        biaya_ops    = _sum_cost(a["_id"], "Operational")
+        uang_jalan   = _sum_cost(a["_id"], "Lintas")
+        total_biaya  = biaya_vendor + biaya_ops + uang_jalan
+        row = [
+            idx,                                    # No.
+            a.get("wo_number") or "",               # No. WO
+            _bulan_id(pickup),                       # Bulan
+            pickup.strftime("%Y-%m-%d") if pickup else "",  # Tgl. Pick Up
+            a.get("awb_number") or "",              # No AWB
+            cust_short,                              # Customer (short)
+            cust_name,                               # Customer Name
+            a.get("destination") or "",              # Tujuan
+            a.get("destination_city") or "",         # City
+            a.get("region") or "",                   # Wilayah
+            a.get("item_description") or "",         # Item
+            "",                                      # Tarif/Kg (pricing_desc, free text)
+            a.get("qty_kg") or 0,                    # Kg
+            a.get("total_tariff") or 0,              # Selling
+            a.get("tax_amount") or 0,                # PPN
+            a.get("grand_total") or 0,               # INV+PPN
+            "",                                      # Vendor (TODO if needed)
+            a.get("armada_type") or "",              # Tipe Armada
+            a.get("fleet_type") or "",               # Jenis Armada
+            biaya_ops,                               # Biaya Ops
+            uang_jalan,                              # Uang Jalan (Lintas)
+            total_biaya,                             # T. Biaya Ops
+            (cust or {}).get("category") or "",      # Kategori Cust
+            "Dalam Kota" if a.get("intracity") else "Luar Kota",
+            a.get("cashback_amount") or 0,           # Cashback
+            a.get("grand_total") or 0,               # Total Tagihan
+            a.get("pph_final") or 0,                 # PPh 2%
+            (float(a.get("grand_total") or 0) - float(a.get("pph_final") or 0)),  # Selling Net
+            a.get("external_invoice_number") or "",  # No. Inv
+            a.get("invoice_date").strftime("%Y-%m-%d") if a.get("invoice_date") else "",
+            "Belum INV",                             # Status Penagihan (Open = belum INV)
+            "Belum Bayar",                           # Status Pembayaran
+            a.get("paid_at").strftime("%Y-%m-%d") if a.get("paid_at") else "",
+            a.get("notes") or "",                    # Ket.
+        ]
+        for col_idx, val in enumerate(row, 1):
+            ws.cell(row=idx + 1, column=col_idx, value=val)
+
+    # Column widths
+    widths = [5, 12, 9, 12, 18, 14, 24, 18, 12, 12, 18, 12, 8, 14, 12, 14, 18, 12, 12, 12, 14, 14, 12, 12, 10, 14, 10, 14, 14, 12, 14, 14, 12, 20]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+    # Freeze header
+    ws.freeze_panes = "A2"
+
+    # Write to bytes
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    fname = f"Open_AWB_{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
