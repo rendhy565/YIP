@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, X, Trash2, FileSignature, MessageCircle, Edit2, ChevronDown, ChevronRight } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import { useCan } from "../lib/useCan";
 
 function todayStr() {
   const d = new Date();
@@ -48,6 +49,10 @@ function sendWA(po) {
 }
 
 export default function PurchaseOrders() {
+  const canCreate = useCan("purchase_orders", "create");
+  const canEditItem = useCan("purchase_orders", "edit_item");
+  const canDelete = useCan("purchase_orders", "delete");
+  const canSendWA = useCan("purchase_orders", "send_wa");
   const { user } = useAuth();
   const isAdmin = user?.role === "administrator";
   const [rows, setRows] = useState([]);
@@ -145,7 +150,7 @@ export default function PurchaseOrders() {
       <PageHeader
         title="PO / Surat Perintah Vendor (Manifest)"
         subtitle="Surat perintah ke vendor — multi-row per origin/destination. Harga & AWB bisa diisi nanti. Klik WA untuk kirim schedule ke vendor."
-        action={<Button data-testid="add-po-btn" onClick={() => { setForm({ ...emptyForm, po_date: todayStr(), items: [{ ...emptyItem }] }); setShow(true); }}><Plus size={16}/> Buat PO</Button>}
+        action={canCreate ? <Button data-testid="add-po-btn" onClick={() => { setForm({ ...emptyForm, po_date: todayStr(), items: [{ ...emptyItem }] }); setShow(true); }}><Plus size={16}/> Buat PO</Button> : null}
       />
 
       <Card className="p-5 bg-blue-50 border-blue-200 mb-5">
@@ -179,11 +184,13 @@ export default function PurchaseOrders() {
                   <Td className="text-right font-semibold">{r.total_amount > 0 ? fmtIDR(r.total_amount) : <span className="text-slate-400">— belum ada harga —</span>}</Td>
                   <Td className="text-right whitespace-nowrap">
                     <div className="flex gap-1 justify-end">
-                      <button data-testid={`wa-po-${r.number}`} onClick={() => sendWA(r)} title="Kirim WA ke vendor" className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200 inline-flex items-center gap-1">
-                        <MessageCircle size={11}/> Kirim WA
-                      </button>
-                      {(isAdmin || user?.role === "operation") && (
-                        <button onClick={() => del(r)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={12}/></button>
+                      {canSendWA && (
+                        <button data-testid={`wa-po-${r.number}`} onClick={() => sendWA(r)} title="Kirim WA ke vendor" className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200 inline-flex items-center gap-1">
+                          <MessageCircle size={11}/> Kirim WA
+                        </button>
+                      )}
+                      {canDelete && (
+                        <button data-testid={`delete-po-${r.number}`} onClick={() => del(r)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={12}/></button>
                       )}
                     </div>
                   </Td>
@@ -226,9 +233,11 @@ export default function PurchaseOrders() {
                                   ) : <span className="text-amber-600 italic">isi nanti</span>}
                                 </td>
                                 <td className="px-2 py-1.5 text-right">
-                                  <button data-testid={`edit-item-${r.number}-${idx}`} onClick={() => openEditItem(r, idx)} className="p-1 rounded hover:bg-blue-50 text-blue-700" title="Edit baris">
-                                    <Edit2 size={11}/>
-                                  </button>
+                                  {canEditItem && (
+                                    <button data-testid={`edit-item-${r.number}-${idx}`} onClick={() => openEditItem(r, idx)} className="p-1 rounded hover:bg-blue-50 text-blue-700" title="Edit baris">
+                                      <Edit2 size={11}/>
+                                    </button>
+                                  )}
                                 </td>
                               </tr>
                             ))}

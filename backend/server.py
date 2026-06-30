@@ -149,6 +149,7 @@ MODULES = [
     {"key": "contracts", "label": "Master Kontrak", "default_roles": ["operation", "finance"]},
     {"key": "pnl", "label": "Laporan Laba Rugi", "default_roles": ["operation", "finance"]},
     {"key": "settings", "label": "Pengaturan", "default_roles": ["operation", "finance"]},
+    {"key": "purchase_orders", "label": "PO / Surat Perintah Vendor", "default_roles": ["operation", "finance"]},
     {"key": "user_management", "label": "User Management", "default_roles": []},
     # ---- Optional modules (toggled globally via feature flags). Permission per-user is still required. ----
     {"key": "accounting", "label": "Akunting (PSAK)", "default_roles": ["finance"], "is_feature": True},
@@ -224,6 +225,13 @@ MODULE_FEATURES: dict = {
         ("create", "Tambah Kategori"),
         ("edit", "Edit Kategori"),
         ("delete", "Hapus Kategori"),
+    ],
+    "purchase_orders": [
+        ("create", "Buat PO"),
+        ("edit_item", "Edit Item PO"),
+        ("delete", "Hapus PO"),
+        ("send_wa", "Kirim WA ke Vendor"),
+        ("print", "Cetak / Print PO"),
     ],
     "customers": [
         ("create", "Tambah Customer"),

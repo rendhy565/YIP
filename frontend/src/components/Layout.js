@@ -26,7 +26,7 @@ const NAV = [
   { to: "/costs", label: "Plotting Biaya", icon: Coins, perm: "costs" },
   { to: "/accrue", label: "Settle Hutang Vendor", icon: Wallet, perm: "accrue" },
   { to: "/panjar", label: "Panjar Kerja", icon: Wallet, perm: "*" },
-  { to: "/purchase-orders", label: "PO / Surat Perintah Vendor", icon: FileText, perm: "*" },
+  { to: "/purchase-orders", label: "PO / Surat Perintah Vendor", icon: FileText, perm: "purchase_orders" },
   { to: "/fixed-costs", label: "Expense", icon: Banknote, perm: "fixed_costs" },
 
   { type: "section", label: "Master & Laporan" },
