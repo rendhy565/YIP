@@ -5,11 +5,13 @@ import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../compon
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
+import { useCan } from "../lib/useCan";
 import { FilePlus2, CheckSquare, Square, FileSignature, FileText, ArrowRight, Search, X, Layers, Trash2 } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
 export default function Invoices() {
+  const canCreate = useCan("invoices", "create");
   const { user } = useAuth();
   const [reconciled, setReconciled] = useState([]);
   const [customers, setCustomers] = useState([]);
@@ -163,9 +165,11 @@ export default function Invoices() {
               <h3 className="font-bold">AWB Reconciled — Siap Dibuat Invoice</h3>
               <span className="text-xs text-slate-500 ml-2">{filtered.length} baris</span>
               <div className="ml-auto">
+              {canCreate && (
                 <Button data-testid="bulk-create-invoice-btn" onClick={openBulkPopup} disabled={filtered.length === 0}>
                   <Layers size={14}/> Bulk Create Invoice ({selectedRec.size || filtered.length})
                 </Button>
+              )}
               </div>
             </div>
             <Table>
@@ -192,9 +196,11 @@ export default function Invoices() {
                     <Td className="font-mono text-xs">{r.origin} → {r.destination}</Td>
                     <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
                     <Td className="text-right">
-                      <Button data-testid={`create-invoice-${r.id}`} onClick={() => createInvoice(r.id)}>
-                        <FilePlus2 size={14}/> Buat
-                      </Button>
+                      {canCreate && (
+                        <Button data-testid={`create-invoice-${r.id}`} onClick={() => createInvoice(r.id)}>
+                          <FilePlus2 size={14}/> Buat
+                        </Button>
+                      )}
                     </Td>
                   </tr>
                 ))}

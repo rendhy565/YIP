@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../compon
 import { fmtIDR, fmtDate, currentMonth, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X, Banknote, Receipt, Copy, ChevronDown, Check, Search, Upload, FileSpreadsheet, AlertCircle } from "lucide-react";
+import { useCan } from "../lib/useCan";
 
 const POSTING_BADGE = {
   cogs:    { label: "COGS",    cls: "text-emerald-700 bg-emerald-50 border-emerald-200" },
@@ -140,6 +141,10 @@ function CategoryCombobox({ value, onChange, categories, onCategoryCreated }) {
 
 // ---------- Main page ----------
 export default function FixedCosts() {
+  const canCreate = useCan("fixed_costs", "create");
+  const canEdit = useCan("fixed_costs", "edit");
+  const canDelete = useCan("fixed_costs", "delete");
+  const canImportBkk = useCan("fixed_costs", "import_bkk");
   const [rows, setRows] = useState([]);
   const [categories, setCategories] = useState([]);
   // Default date range = current month
@@ -160,10 +165,9 @@ export default function FixedCosts() {
   const [editingId, setEditingId] = useState(null);  // null = create mode, id = edit mode
   const [form, setForm] = useState({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) });
 
-  // Permission check (finance & administrator can edit/delete)
-  const { user: authUser } = useAuth();
-  const userRole = authUser?.role || "";
-  const canEdit = userRole === "finance" || userRole === "administrator";
+  // Permission check (granular per feature via useCan)
+  // const { user: authUser } = useAuth(); // deprecated — useCan reads from auth context directly
+  // legacy canEdit overridden by useCan("fixed_costs","edit") at top of function
 
   const load = () => api.get("/fixed-costs", { params: { start_date: startDate, end_date: endDate } }).then((r) => setRows(r.data));
   const loadCategories = () => api.get("/expense-categories").then((r) => setCategories(r.data));
@@ -303,18 +307,20 @@ export default function FixedCosts() {
         subtitle="Biaya operasional bulanan. Kategori 'Operation' masuk COGS (mempengaruhi Gross Margin); kategori lain masuk Expense (di bawah Gross Margin)."
         action={
           <div className="flex flex-wrap gap-2">
-            {canEdit && (
-              <>
-                <Button data-testid="import-bkk-btn" variant="secondary" onClick={openImportDialog}>
-                  <Upload size={16}/> Import BKK Excel
-                </Button>
-                <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
-                  <Copy size={16}/> Salin ke Bulan Berikutnya
-                </Button>
-                <Button data-testid="add-fixed-cost-btn" onClick={() => { setEditingId(null); setForm({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) }); setOpen(true); }}>
-                  <Plus size={16}/> Tambah Expense
-                </Button>
-              </>
+            {canImportBkk && (
+              <Button data-testid="import-bkk-btn" variant="secondary" onClick={openImportDialog}>
+                <Upload size={16}/> Import BKK Excel
+              </Button>
+            )}
+            {canCreate && (
+              <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
+                <Copy size={16}/> Salin ke Bulan Berikutnya
+              </Button>
+            )}
+            {canCreate && (
+              <Button data-testid="add-fixed-cost-btn" onClick={() => { setEditingId(null); setForm({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) }); setOpen(true); }}>
+                <Plus size={16}/> Tambah Expense
+              </Button>
             )}
           </div>
         }
@@ -393,12 +399,16 @@ export default function FixedCosts() {
                   <Td className="text-slate-700 text-sm">{r.description || "-"}</Td>
                   <Td className="text-right font-mono font-semibold">{fmtIDR(r.amount)}</Td>
                   <Td className="text-right">
-                    {canEdit && (
+                    {(canEdit || canDelete) && (
                       <div className="inline-flex gap-1">
-                        <button data-testid={`edit-expense-${r.id}`} onClick={() => openEdit(r)} title="Edit expense" className="p-1.5 rounded hover:bg-blue-50 text-blue-600">
-                          <Banknote size={14}/>
-                        </button>
-                        <button data-testid={`delete-expense-${r.id}`} onClick={() => del(r.id)} title="Hapus expense" className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
+                        {canEdit && (
+                          <button data-testid={`edit-expense-${r.id}`} onClick={() => openEdit(r)} title="Edit expense" className="p-1.5 rounded hover:bg-blue-50 text-blue-600">
+                            <Banknote size={14}/>
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button data-testid={`delete-expense-${r.id}`} onClick={() => del(r.id)} title="Hapus expense" className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={14}/></button>
+                        )}
                       </div>
                     )}
                   </Td>

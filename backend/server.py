@@ -158,6 +158,115 @@ MODULES = [
 ]
 MODULE_KEYS = [m["key"] for m in MODULES]
 
+# ---------------------------------------------------------------------------
+# MODULE_FEATURES: granular per-button permissions (per modul, per fitur spesifik)
+# Structure: {module_key: [(feature_key, label), ...]}
+# Used by Users.js permission matrix + useCan() hook in frontend
+# ---------------------------------------------------------------------------
+MODULE_FEATURES: dict = {
+    "orders_input": [
+        ("create", "Tambah AWB Baru"),
+    ],
+    "orders_list": [
+        ("receive", "Tombol Terima Barang"),
+        ("pod", "Tombol POD"),
+        ("edit_receive", "Edit Data Terima"),
+        ("edit_pod", "Edit Data POD"),
+        ("view_cost", "Lihat & Tambah Cost"),
+        ("drop", "Drop AWB"),
+        ("delete", "Hapus AWB"),
+        ("export_open", "Export Open AWB"),
+    ],
+    "recap": [
+        ("edit_selling", "Edit Selling / Data AWB"),
+        ("reconcile", "Reconcile AWB"),
+        ("delete", "Hapus AWB"),
+        ("export", "Export Recap"),
+    ],
+    "invoices": [
+        ("create", "Buat Invoice"),
+        ("delete_draft", "Hapus Draft Invoice"),
+    ],
+    "invoices_created": [
+        ("cancel", "Cancel Invoice Tercetak"),
+        ("import_numbers", "Import Invoice No (Mark Status)"),
+        ("export_fpk", "Export FPK (Faktur Pajak)"),
+        ("export_ar", "Export Report AR"),
+        ("bulk_print", "Bulk Print / Save PDF"),
+        ("save_po_number", "Simpan PO Number"),
+    ],
+    "payments": [
+        ("mark_paid", "Mark Paid (Single)"),
+        ("mark_paid_bulk", "Mark Paid (Bulk)"),
+        ("multi_payment", "Multi-Bayar (Partial)"),
+        ("delete_receipt", "Hapus Receipt Pembayaran"),
+    ],
+    "costs": [
+        ("add", "Tambah Cost Item"),
+        ("edit", "Edit Cost Item"),
+        ("delete", "Hapus Cost Item"),
+    ],
+    "accrue": [
+        ("settle", "Settle Hutang Vendor"),
+        ("delete_settlement", "Hapus Settlement"),
+    ],
+    "fixed_costs": [
+        ("create", "Tambah Expense"),
+        ("edit", "Edit Expense"),
+        ("delete", "Hapus Expense"),
+        ("import_bkk", "Import BKK Excel"),
+        ("petty_cash_create", "Tambah Panjar Kerja"),
+        ("petty_cash_settle", "Settlement Panjar"),
+        ("petty_cash_delete", "Hapus Panjar"),
+    ],
+    "expense_categories": [
+        ("create", "Tambah Kategori"),
+        ("edit", "Edit Kategori"),
+        ("delete", "Hapus Kategori"),
+    ],
+    "customers": [
+        ("create", "Tambah Customer"),
+        ("edit", "Edit Customer"),
+        ("delete", "Hapus Customer"),
+    ],
+    "contracts": [
+        ("create", "Buat Kontrak"),
+        ("edit", "Edit Kontrak"),
+        ("delete", "Hapus Kontrak"),
+    ],
+    "pnl": [
+        ("export", "Export Laporan P&L"),
+    ],
+    "settings": [
+        ("edit", "Edit Settings"),
+    ],
+    "user_management": [
+        ("create", "Tambah User"),
+        ("edit", "Edit User"),
+        ("delete", "Hapus User"),
+        ("change_password", "Ubah Password User"),
+        ("edit_permissions", "Edit Permission User"),
+    ],
+    "accounting": [
+        ("view_journal", "Lihat Jurnal"),
+        ("post_journal", "Post Jurnal Manual"),
+        ("delete_journal", "Hapus Jurnal"),
+    ],
+    "tax": [
+        ("file_ppn", "File SPT PPN"),
+        ("export_efaktur", "Export e-Faktur"),
+    ],
+}
+# Modules without granular features get a single "access" feature so admin can still toggle
+for _m in MODULES:
+    if _m["key"] not in MODULE_FEATURES:
+        MODULE_FEATURES[_m["key"]] = [("access", "Akses Modul")]
+
+def all_features_dict() -> dict:
+    """Return {module_key: {feature_key: True}} for ALL modules & features. Used for admin defaults."""
+    return {mk: {fk: True for (fk, _) in flist} for mk, flist in MODULE_FEATURES.items()}
+
+
 def default_permissions(role: str) -> List[str]:
     if role == "administrator":
         return list(MODULE_KEYS)
@@ -1017,6 +1126,11 @@ async def login(data: LoginIn):
         raise HTTPException(status_code=403, detail="User dinonaktifkan oleh administrator")
     token = create_access_token(str(user["_id"]), user["username"], user["role"])
     perms = user.get("permissions") or default_permissions(user["role"])
+    # Auto-seed admin permission_actions with ALL features ON if empty (first login bootstrap)
+    pa = user.get("permission_actions") or {}
+    if user["role"] == "administrator" and not pa:
+        pa = all_features_dict()
+        await db.users.update_one({"_id": user["_id"]}, {"$set": {"permission_actions": pa}})
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -1026,7 +1140,7 @@ async def login(data: LoginIn):
             "role": user["role"],
             "full_name": user.get("full_name"),
             "permissions": perms,
-            "permission_actions": user.get("permission_actions") or {},
+            "permission_actions": pa,
             "active": user.get("active", True),
         },
     }
@@ -1034,13 +1148,17 @@ async def login(data: LoginIn):
 @app.get("/api/auth/me", response_model=UserOut)
 async def me(user: dict = Depends(get_current_user)):
     perms = user.get("permissions") or default_permissions(user["role"])
+    pa = user.get("permission_actions") or {}
+    if user["role"] == "administrator" and not pa:
+        pa = all_features_dict()
+        await db.users.update_one({"_id": _oid(user["id"])}, {"$set": {"permission_actions": pa}})
     return UserOut(
         id=user["id"],
         username=user["username"],
         role=user["role"],
         full_name=user.get("full_name"),
         permissions=perms,
-        permission_actions=user.get("permission_actions") or None,
+        permission_actions=pa or None,
         active=user.get("active", True),
     )
 
@@ -3157,13 +3275,14 @@ async def create_user(data: UserCreateIn, user: dict = Depends(require_role("adm
     invalid = [p for p in perms if p not in MODULE_KEYS]
     if invalid:
         raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid)}")
-    # Normalize permission_actions: only allow valid modules + actions
+    # Normalize permission_actions: {module: {feature_key: bool}} — only allow valid module + feature combinations
     pa = {}
     if data.permission_actions:
-        for mk, acts in data.permission_actions.items():
-            if mk not in MODULE_KEYS or not isinstance(acts, dict):
+        for mk, feats in data.permission_actions.items():
+            if mk not in MODULE_KEYS or not isinstance(feats, dict):
                 continue
-            pa[mk] = {a: bool(acts.get(a, False)) for a in ("view", "create", "edit", "delete", "import", "export")}
+            valid_keys = {fk for (fk, _) in MODULE_FEATURES.get(mk, [])}
+            pa[mk] = {fk: bool(feats.get(fk, False)) for fk in valid_keys}
     doc = {
         "username": uname,
         "password_hash": hash_password(data.password),
@@ -3205,10 +3324,11 @@ async def update_user(uid: str, data: UserUpdateIn, user: dict = Depends(require
         updates["permissions"] = data.permissions
     if data.permission_actions is not None:
         pa = {}
-        for mk, acts in (data.permission_actions or {}).items():
-            if mk not in MODULE_KEYS or not isinstance(acts, dict):
+        for mk, feats in (data.permission_actions or {}).items():
+            if mk not in MODULE_KEYS or not isinstance(feats, dict):
                 continue
-            pa[mk] = {a: bool(acts.get(a, False)) for a in ("view", "create", "edit", "delete", "import", "export")}
+            valid_keys = {fk for (fk, _) in MODULE_FEATURES.get(mk, [])}
+            pa[mk] = {fk: bool(feats.get(fk, False)) for fk in valid_keys}
         updates["permission_actions"] = pa
     if data.active is not None:
         if target.get("role") == "administrator" and data.active is False:
@@ -8117,47 +8237,23 @@ async def run_due_recurring_expenses(user: dict = Depends(require_role("finance"
 
 
 # ===========================================================================
-# Item #5: RBAC Fase A — module × action permission matrix
+# RBAC: Per-User Granular Feature Permissions
+# Endpoint exposes MODULE_FEATURES catalog so frontend can render matrix UI
+# and resolve user.permission_actions[module][feature] = bool
 # ===========================================================================
-RBAC_ACTIONS = ["view", "create", "edit", "delete", "import", "export"]
-
-class PermissionUpdate(BaseModel):
-    role: str
-    permissions: dict  # {module_key: {view: bool, create: bool, edit: bool, delete: bool, import: bool, export: bool}}
-
-@app.get("/api/rbac/matrix")
-async def rbac_matrix(user: dict = Depends(require_role("administrator"))):
-    """Return current permission matrix for all roles × modules × actions."""
-    docs = await db.role_permissions.find({}).to_list(500)
-    matrix = {}
-    for d in docs:
-        matrix.setdefault(d["role"], {})[d["module"]] = {a: bool(d.get(a, False)) for a in RBAC_ACTIONS}
-    return {"modules": [{"key": m["key"], "label": m["label"]} for m in MODULES], "actions": RBAC_ACTIONS, "matrix": matrix}
-
-@app.post("/api/rbac/update")
-async def rbac_update(data: PermissionUpdate, user: dict = Depends(require_role("administrator"))):
-    if data.role == "administrator":
-        raise HTTPException(400, "Role administrator memiliki akses penuh dan tidak dapat dikonfigurasi")
-    now = datetime.now(timezone.utc)
-    for module, actions in data.permissions.items():
-        payload = {a: bool(actions.get(a, False)) for a in RBAC_ACTIONS}
-        payload["updated_at"] = now
-        await db.role_permissions.update_one(
-            {"role": data.role, "module": module},
-            {"$set": payload, "$setOnInsert": {"created_at": now}},
-            upsert=True,
-        )
-    await log_activity(user, "update", "rbac", None, f"Updated permissions for role '{data.role}'")
-    return {"ok": True}
-
-@app.get("/api/rbac/my-permissions")
-async def my_permissions(user: dict = Depends(get_current_user)):
-    """Return effective permissions for current user (used by frontend to gate UI)."""
-    if user["role"] == "administrator":
-        return {"role": "administrator", "is_admin": True, "permissions": {m["key"]: {a: True for a in RBAC_ACTIONS} for m in MODULES}}
-    docs = await db.role_permissions.find({"role": user["role"]}).to_list(200)
-    perms = {d["module"]: {a: bool(d.get(a, False)) for a in RBAC_ACTIONS} for d in docs}
-    return {"role": user["role"], "is_admin": False, "permissions": perms}
+@app.get("/api/rbac/module-features")
+async def rbac_module_features(user: dict = Depends(get_current_user)):
+    """Return per-module list of granular features for permission matrix."""
+    out = []
+    for m in MODULES:
+        features = MODULE_FEATURES.get(m["key"], [])
+        out.append({
+            "key": m["key"],
+            "label": m["label"],
+            "is_feature_flag": bool(m.get("is_feature")),
+            "features": [{"key": fk, "label": flabel} for (fk, flabel) in features],
+        })
+    return {"modules": out}
 
 
 # ===========================================================================

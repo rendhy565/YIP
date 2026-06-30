@@ -4,6 +4,7 @@ import { Card, PageHeader, Button, Input, Label, Table, Th, Td, StatusBadge } fr
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { BadgeDollarSign, CheckCircle2, CheckSquare, Square, X, Search, Plus, Trash2 } from "lucide-react";
+import { useCan } from "../lib/useCan";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -13,6 +14,10 @@ function todayStr() {
 }
 
 export default function Payments() {
+  const canMarkPaid = useCan("payments", "mark_paid");
+  const canMarkPaidBulk = useCan("payments", "mark_paid_bulk");
+  const canMultiPayment = useCan("payments", "multi_payment");
+  const canDeleteReceipt = useCan("payments", "delete_receipt");
   const [rows, setRows] = useState([]);
   const [selected, setSelected] = useState(new Set());
   const [showModal, setShowModal] = useState(null); // "single" / "bulk"
@@ -144,9 +149,11 @@ export default function Payments() {
                 <div className="font-mono font-bold text-purple-900">{fmtIDR(selectedTotal)} · {selected.size} AWB</div>
               </div>
             )}
-            <Button data-testid="bulk-mark-paid-btn" variant="success" onClick={openBulk} disabled={selected.size === 0}>
-              <CheckCircle2 size={14}/> Bulk Mark Paid ({selected.size})
-            </Button>
+            {canMarkPaidBulk && (
+              <Button data-testid="bulk-mark-paid-btn" variant="success" onClick={openBulk} disabled={selected.size === 0}>
+                <CheckCircle2 size={14}/> Bulk Mark Paid ({selected.size})
+              </Button>
+            )}
           </div>
         </div>
       </Card>
@@ -206,12 +213,16 @@ export default function Payments() {
                 <Td><StatusBadge status={r.status}/></Td>
                 <Td className="text-right">
                   <div className="inline-flex gap-1 justify-end">
-                    <Button data-testid={`multi-payment-${r.id}`} variant="secondary" onClick={() => setMultiAwb(r)} className="!bg-amber-50 !text-amber-800 hover:!bg-amber-100 !border-amber-200">
-                      <BadgeDollarSign size={14}/> Multi-Bayar
-                    </Button>
-                    <Button data-testid={`mark-paid-${r.id}`} variant="success" onClick={() => openSingle(r)}>
-                      <CheckCircle2 size={14}/> Mark Paid
-                    </Button>
+                    {canMultiPayment && (
+                      <Button data-testid={`multi-payment-${r.id}`} variant="secondary" onClick={() => setMultiAwb(r)} className="!bg-amber-50 !text-amber-800 hover:!bg-amber-100 !border-amber-200">
+                        <BadgeDollarSign size={14}/> Multi-Bayar
+                      </Button>
+                    )}
+                    {canMarkPaid && (
+                      <Button data-testid={`mark-paid-${r.id}`} variant="success" onClick={() => openSingle(r)}>
+                        <CheckCircle2 size={14}/> Mark Paid
+                      </Button>
+                    )}
                   </div>
                 </Td>
               </tr>
@@ -312,7 +323,9 @@ export default function Payments() {
                     <Td className="text-xs font-mono">{p.reference_no || "-"}</Td>
                     <Td className="text-xs text-slate-600">{p.notes || "-"}</Td>
                     <Td className="text-right">
-                      <button data-testid={`mp-del-${p.id}`} onClick={() => delPayment(p.id)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Trash2 size={12}/></button>
+                      {canDeleteReceipt && (
+                        <button data-testid={`mp-del-${p.id}`} onClick={() => delPayment(p.id)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Trash2 size={12}/></button>
+                      )}
                     </Td>
                   </tr>
                 ))}

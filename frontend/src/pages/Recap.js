@@ -8,6 +8,7 @@ import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircl
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 import CostListModal from "../components/CostListModal";
+import { useCan } from "../lib/useCan";
 
 function todayStr() {
   const d = new Date();
@@ -15,6 +16,10 @@ function todayStr() {
 }
 
 export default function Recap() {
+  const canEditSelling = useCan("recap", "edit_selling");
+  const canReconcile = useCan("recap", "reconcile");
+  const canExport = useCan("recap", "export");
+  const canAddCost = useCan("costs", "add");
   const [openRows, setOpenRows] = useState([]);
   const [reconciledRows, setReconciledRows] = useState([]);
   const [costMap, setCostMap] = useState({}); // awb_id -> totalCost
@@ -305,25 +310,29 @@ export default function Recap() {
             </Select>
           </div>
           <div className="ml-auto flex gap-2">
-            <Button data-testid="export-report-ar-btn" variant="secondary" onClick={async () => {
-              try {
-                const params = {};
-                if (month) params.month = month;
-                if (customerId) params.customer_id = customerId;
-                const r = await api.get("/exports/report-ar", { params, responseType: "blob" });
-                const url = window.URL.createObjectURL(new Blob([r.data]));
-                const a = document.createElement("a"); a.href = url;
-                a.download = `REPORT_AR_${month || "ALL"}.xlsx`;
-                document.body.appendChild(a); a.click(); a.remove();
-                window.URL.revokeObjectURL(url);
-                toast.success("Report AR ter-export");
-              } catch (e) { toast.error(errMsg(e)); }
-            }}>
-              <FileSpreadsheet size={16}/> Export Report AR
-            </Button>
-            <Button data-testid="reconcile-selected-btn" onClick={reconcileSelected} disabled={readyRows.length === 0}>
-              <Download size={16}/> Reconcile {selected.size > 0 ? `(${selected.size} dipilih)` : `(${readyRows.length} ready)`}
-            </Button>
+            {canExport && (
+              <Button data-testid="export-report-ar-btn" variant="secondary" onClick={async () => {
+                try {
+                  const params = {};
+                  if (month) params.month = month;
+                  if (customerId) params.customer_id = customerId;
+                  const r = await api.get("/exports/report-ar", { params, responseType: "blob" });
+                  const url = window.URL.createObjectURL(new Blob([r.data]));
+                  const a = document.createElement("a"); a.href = url;
+                  a.download = `REPORT_AR_${month || "ALL"}.xlsx`;
+                  document.body.appendChild(a); a.click(); a.remove();
+                  window.URL.revokeObjectURL(url);
+                  toast.success("Report AR ter-export");
+                } catch (e) { toast.error(errMsg(e)); }
+              }}>
+                <FileSpreadsheet size={16}/> Export Report AR
+              </Button>
+            )}
+            {canReconcile && (
+              <Button data-testid="reconcile-selected-btn" onClick={reconcileSelected} disabled={readyRows.length === 0}>
+                <Download size={16}/> Reconcile {selected.size > 0 ? `(${selected.size} dipilih)` : `(${readyRows.length} ready)`}
+              </Button>
+            )}
           </div>
         </div>
       </Card>
@@ -357,12 +366,16 @@ export default function Recap() {
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
                 <Td className="text-right whitespace-nowrap">
                   <div className="flex gap-1 justify-end">
-                    <button data-testid={`plot-cost-btn-${r.awb_number}`} onClick={() => openCost(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-amber-100 text-amber-800 hover:bg-amber-200 inline-flex items-center gap-1">
-                      <Coins size={11}/> Plot Biaya
-                    </button>
-                    <button data-testid={`edit-btn-${r.awb_number}`} onClick={() => openEdit(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-slate-100 text-slate-700 hover:bg-slate-200 inline-flex items-center gap-1">
-                      <Edit3 size={11}/> Edit
-                    </button>
+                    {canAddCost && (
+                      <button data-testid={`plot-cost-btn-${r.awb_number}`} onClick={() => openCost(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-amber-100 text-amber-800 hover:bg-amber-200 inline-flex items-center gap-1">
+                        <Coins size={11}/> Plot Biaya
+                      </button>
+                    )}
+                    {canEditSelling && (
+                      <button data-testid={`edit-btn-${r.awb_number}`} onClick={() => openEdit(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-slate-100 text-slate-700 hover:bg-slate-200 inline-flex items-center gap-1">
+                        <Edit3 size={11}/> Edit
+                      </button>
+                    )}
                   </div>
                 </Td>
               </tr>
@@ -425,12 +438,16 @@ export default function Recap() {
                 <Td className={`text-right font-bold ${r._margin >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{fmtIDR(r._margin)}</Td>
                 <Td className="text-right whitespace-nowrap">
                   <div className="flex gap-1 justify-end">
-                    <button data-testid={`plot-more-cost-${r.awb_number}`} onClick={() => openCost(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-amber-50 text-amber-800 hover:bg-amber-100 inline-flex items-center gap-1">
-                      <Coins size={11}/> + Cost
-                    </button>
-                    <button data-testid={`edit-ready-btn-${r.awb_number}`} onClick={() => openEdit(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-slate-100 text-slate-700 hover:bg-slate-200 inline-flex items-center gap-1">
-                      <Edit3 size={11}/> Edit
-                    </button>
+                    {canAddCost && (
+                      <button data-testid={`plot-more-cost-${r.awb_number}`} onClick={() => openCost(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-amber-50 text-amber-800 hover:bg-amber-100 inline-flex items-center gap-1">
+                        <Coins size={11}/> + Cost
+                      </button>
+                    )}
+                    {canEditSelling && (
+                      <button data-testid={`edit-ready-btn-${r.awb_number}`} onClick={() => openEdit(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-slate-100 text-slate-700 hover:bg-slate-200 inline-flex items-center gap-1">
+                        <Edit3 size={11}/> Edit
+                      </button>
+                    )}
                   </div>
                 </Td>
               </tr>

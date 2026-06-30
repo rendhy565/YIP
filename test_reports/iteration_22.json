@@ -1,0 +1,52 @@
+{
+  "summary": "Iteration 22 — Backend pytest 12/16 PASSED. CRITICAL BUG discovered: `invoices_created` module is defined in MODULE_FEATURES but MISSING from MODULES list (server.py line 137-158). Consequence: (a) GET /api/rbac/module-features returns only 19 modules instead of expected 20 — `invoices_created` is absent; (b) POST/PUT /api/users normalization silently DROPS any permission_actions for `invoices_created` because the normalizer enforces `mk in MODULE_KEYS`; (c) the Users.js edit-user accordion does NOT show a row for `Invoice Tercetak / invoices_created` at all (visually verified — Users page Permission column shows e.g. `12/19`, accordion footer reads `1 dari 19 modul aktif`). Therefore admin cannot configure granular Cancel/Export FPK/Export AR/Bulk Print/Import Numbers/Save PO permissions in UI. Admin's auto-seeded permission_actions DOES include invoices_created (because all_features_dict iterates MODULE_FEATURES) — so InvoicesCreated.js useCan() calls still work for admin only via in-memory seed. But non-admin users have no way to receive these flags. Old RBAC endpoints (/matrix, /update, /my-permissions) correctly return 404. /arc/rbac route doesn't 404 — it silently falls through to /arc dashboard (no NotFound page). Frontend Users.js modal verified with accordion + per-module 'SEMUA OFF' toggles + 'Aktifkan/Matikan Semua' + 'Reset ke Default Role' buttons rendered.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/rbac/module-features + POST/PUT /api/users", "issue": "invoices_created module missing from MODULES list (server.py:137-158). Catalog returns 19 modules, not 20. Permission normalizer drops invoices_created entries because mk not in MODULE_KEYS. Admin can never grant/revoke per-button perms for Cancel/Export FPK/Export AR/Bulk Print/Import Numbers/Save PO Number on non-admin users. UI confirms: edit-user modal accordion shows 19 rows, no `Invoice Tercetak` row.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "/api/users (admin row)", "issue": "Admin's permissions array shows 18/19 in UI (not 19/19). Likely seed gap: existing admin doc was created before some module (probably `hr` or `user_management`) was added to MODULE_KEYS, and login auto-seed only updates permission_actions, not permissions array. Recommend back-fill: if user.role=='administrator' on /auth/me, ensure permissions = MODULE_KEYS too."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Users.js edit modal accordion", "issue": "`Invoice Tercetak (invoices_created)` row absent — direct consequence of backend MODULES list missing the key. Once backend fixed, accordion will auto-include it (loop in Users.js iterates over /api/rbac/module-features response).", "selector": "[data-testid^='perm-invoices_created-']", "priority": "CRITICAL"},
+      {"component": "Route /arc/rbac", "issue": "Removed route silently renders /arc dashboard layout — there's no NotFound page or redirect. Spec asked for 404 or redirect. Functional but breaks user expectation if a bookmarked link lands here.", "selector": "n/a", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Granular gating — InvoicesCreated buttons", "issue": "Cannot test the gating because the catalog endpoint doesn't expose invoices_created → admin cannot toggle features → user gating cannot be exercised in UI. Untestable until backend fix.", "affected_selectors": ["[data-testid^='perm-invoices_created-']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration22_granular_rbac.py",
+    "/app/test_reports/pytest/iteration22_results.xml",
+    "/app/test_reports/users_edit_modal.png"
+  ],
+  "action_items": [
+    "ADD `{\"key\": \"invoices_created\", \"label\": \"Invoice Tercetak\", \"default_roles\": [\"finance\"]}` to MODULES list in server.py (line ~141, after invoices). This single addition will: (a) make catalog return 20 modules, (b) allow POST/PUT /api/users to persist invoices_created.permission_actions, (c) make Users.js accordion render the row automatically, (d) enable admin to gate Cancel/Export FPK/Bulk Print etc. per user.",
+    "Optional: After adding the module, re-run admin auto-seed by clearing admin.permission_actions in DB OR ensure auto-seed re-fires when MODULE_FEATURES keys != stored keys (currently only fires when permission_actions is empty).",
+    "Optional: Back-fill admin.permissions to include ALL MODULE_KEYS on /auth/me (fix 18/19 → 19/19 cosmetic issue).",
+    "Optional: Add a catch-all NotFound route OR redirect /arc/rbac → /arc/users explicitly."
+  ],
+  "critical_code_review_comments": [
+    "server.py line 166-263: MODULE_FEATURES catalog drift from MODULES list is unenforced. Add a startup assertion: assert set(MODULE_FEATURES.keys()) == set(MODULE_KEYS), 'MODULE_FEATURES out of sync with MODULES'. This would have caught the invoices_created omission at boot time.",
+    "server.py line 261-263: `for _m in MODULES: if _m['key'] not in MODULE_FEATURES: MODULE_FEATURES[_m['key']] = [('access','Akses Modul')]` ensures MODULE_KEYS ⊆ MODULE_FEATURES, but NOT the reverse. The invoices_created entry sits orphaned in MODULE_FEATURES without ever being surfaced. Reverse check needed.",
+    "server.py line 1131-1133 + 1152-1154: admin auto-seed only fires when permission_actions is EMPTY. If a new feature is added later (or a module like invoices_created added to MODULES), existing admin won't get it. Consider merging missing keys instead of one-shot seed: pa = {**all_features_dict(), **pa} (or detect drift and re-seed missing modules).",
+    "server.py line 8443 total lines — splitting modules still flagged as backlog (iter20/21).",
+    "Frontend useCan(module, feature) — verify it returns true for admin even if a module is missing from the catalog (defensive fallback for administrators). Currently if invoices_created is not surfaced, frontend gating logic must rely on admin's pa[invoices_created] being seeded, which works today but is fragile."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration22_granular_rbac.py"
+  ],
+  "success_rate": {
+    "backend": "75% (12/16 pytest) — 4 failures all caused by the single invoices_created omission",
+    "frontend": "n/a (gating untestable until backend fix; UI matrix structure verified, accordion + counts + Aktifkan/Matikan Semua + Reset ke Default Role buttons all render correctly)"
+  },
+  "test_credentials": "admin/admin123, finance/finance123, operation/operation123",
+  "seed_data_creation": "Test created+deleted a temp user `test_rbac_<hex>` during POST normalization test (auto-cleaned). One leftover `test_rbac_056e4d` user exists in DB from earlier UI test session (visible in Users page). Safe to delete via /api/users/{id}.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Single line fix: add `{\"key\": \"invoices_created\", \"label\": \"Invoice Tercetak\", \"default_roles\": [\"finance\"]}` to MODULES list around line 141 of server.py. After fix, re-run `pytest /app/backend/tests/test_iteration22_granular_rbac.py -v` — all 16 should pass. Then UI gating tests can proceed: create test user with invoices_created.cancel=false → cancel button hidden, etc. All other rbac flows (orders_list 8 features, payments 4, fixed_costs 7, recap 4, invoices 2) are working correctly per pytest (12/16 passed including all of those). Admin auto-seed verified: /auth/me returns >=19 modules with orders_list having all 8 features=true. Old RBAC endpoints all return 404 (confirmed). useCan() hook + Users.js accordion structure are correct — they will pick up invoices_created automatically once it's added to MODULES.",
+  "rca of the issue": "ROOT CAUSE: server.py defines two parallel data structures — MODULES list (line 137-158) and MODULE_FEATURES dict (line 166-259). The granular feature catalog (MODULE_FEATURES) includes `invoices_created` with 6 feature keys, but the master MODULES list never includes a top-level entry with key=`invoices_created`. Consequence chain: (1) MODULE_KEYS = [m['key'] for m in MODULES] is missing 'invoices_created'; (2) GET /api/rbac/module-features iterates `for m in MODULES` so the response omits invoices_created entirely (19 modules instead of 20); (3) POST/PUT /api/users normalizer line 3282 / 3328: `if mk not in MODULE_KEYS: continue` silently drops any invoices_created entries from incoming payloads; (4) frontend Users.js accordion is data-driven by the catalog response → no row rendered for invoices_created; (5) admin auto-seed `all_features_dict()` iterates MODULE_FEATURES.items() so the admin gets a seeded invoices_created.* = True dict, but no other user can ever receive it. REPRODUCTION: GET /api/rbac/module-features → response has 19 modules; POST /api/users with `permission_actions: {invoices_created: {cancel: true}}` → response shows no `invoices_created` key in the created user's permission_actions; visually open the Edit User modal in /arc/users → accordion shows 19 rows, footer reads `X dari 19 modul aktif`, no row labeled `Invoice Tercetak`. MITIGATION: Add `{'key': 'invoices_created', 'label': 'Invoice Tercetak', 'default_roles': ['finance']}` to the MODULES list (one-line change), and ideally add a startup assertion `assert set(MODULE_FEATURES.keys()) == set(MODULE_KEYS)` to prevent future drift."
+}

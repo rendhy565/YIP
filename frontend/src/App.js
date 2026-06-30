@@ -22,7 +22,6 @@ import FixedCosts from "./pages/FixedCosts";
 import ExpenseCategories from "./pages/ExpenseCategories";
 import RecurringExpenses from "./pages/RecurringExpenses";
 import ActivityLog from "./pages/ActivityLog";
-import RoleMatrix from "./pages/RoleMatrix";
 import Settings from "./pages/Settings";
 import Users from "./pages/Users";
 // Accounting pages
@@ -96,7 +95,6 @@ export default function App() {
             <Route path="/expense-categories" element={<Protected roles={["finance","administrator"]}><Shell><ExpenseCategories /></Shell></Protected>} />
             <Route path="/recurring-expenses" element={<Protected roles={["finance","administrator"]}><Shell><RecurringExpenses /></Shell></Protected>} />
             <Route path="/activity-log" element={<Protected roles={["administrator"]}><Shell><ActivityLog /></Shell></Protected>} />
-            <Route path="/rbac" element={<Protected roles={["administrator"]}><Shell><RoleMatrix /></Shell></Protected>} />
             <Route path="/pnl" element={<Protected><Shell><ProfitLoss /></Shell></Protected>} />
             <Route path="/users" element={<Protected roles={["administrator"]}><Shell><Users /></Shell></Protected>} />
             <Route path="/settings" element={<Protected><Shell><Settings /></Shell></Protected>} />

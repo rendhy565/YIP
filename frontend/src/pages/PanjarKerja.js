@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, X, Wallet, CheckCircle2, Trash2, History } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import { useCan } from "../lib/useCan";
 
 function todayStr() {
   const d = new Date();
@@ -15,6 +16,9 @@ function todayStr() {
 const empty = { recipient_name: "", purpose: "", amount: "", advance_date: todayStr(), notes: "" };
 
 export default function PanjarKerja() {
+  const canCreate = useCan("fixed_costs", "petty_cash_create");
+  const canSettle = useCan("fixed_costs", "petty_cash_settle");
+  const canDelete = useCan("fixed_costs", "petty_cash_delete");
   const { user } = useAuth();
   const isAdmin = user?.role === "administrator";
   const [rows, setRows] = useState([]);
@@ -135,7 +139,7 @@ export default function PanjarKerja() {
       <PageHeader
         title="Panjar Kerja"
         subtitle="Kas operasional ke staff/driver. Saat settle, breakdown per AWB → otomatis jadi cost di AWB ybs."
-        action={<Button data-testid="add-panjar-btn" onClick={() => { setForm(empty); setShowAdd(true); }}><Plus size={16}/> Buat Panjar</Button>}
+        action={canCreate ? <Button data-testid="add-panjar-btn" onClick={() => { setForm(empty); setShowAdd(true); }}><Plus size={16}/> Buat Panjar</Button> : null}
       />
 
       <Card className="p-5 mb-5 bg-amber-50 border-amber-200">
@@ -204,13 +208,13 @@ export default function PanjarKerja() {
                         <History size={11}/> History ({r.settle_history.length})
                       </button>
                     )}
-                    {r.status === "Open" && (
+                    {canSettle && r.status === "Open" && (
                       <button data-testid={`settle-panjar-${r.number}`} onClick={() => openSettle(r)} className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200 inline-flex items-center gap-1">
                         <CheckCircle2 size={11}/> Settle
                       </button>
                     )}
-                    {isAdmin && (
-                      <button onClick={() => del(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={12}/></button>
+                    {canDelete && (
+                      <button data-testid={`delete-panjar-${r.number}`} onClick={() => del(r.id)} className="p-1.5 rounded hover:bg-red-50 text-red-600"><Trash2 size={12}/></button>
                     )}
                   </div>
                 </Td>

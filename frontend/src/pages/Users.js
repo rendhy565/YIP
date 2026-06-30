@@ -4,7 +4,7 @@ import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from ".
 import { errMsg, fmtDate } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
-import { Plus, Trash2, X, KeyRound, Pencil, ShieldCheck, User } from "lucide-react";
+import { Plus, Trash2, X, KeyRound, Pencil, ShieldCheck, User, ChevronDown, ChevronRight } from "lucide-react";
 
 const ROLE_BADGES = {
   administrator: "bg-rose-100 text-rose-800 border-rose-200",
@@ -12,36 +12,33 @@ const ROLE_BADGES = {
   finance: "bg-emerald-100 text-emerald-800 border-emerald-200",
 };
 
-const ACTIONS = ["view", "create", "edit", "delete", "import", "export"];
-const ACTION_LABELS = { view: "Lihat", create: "Tambah", edit: "Edit", delete: "Hapus", import: "Import", export: "Export" };
-
 const newForm = () => ({ username: "", password: "", full_name: "", role: "operation", permissions: [], permission_actions: {} });
 
 export default function Users() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState([]);
-  const [modules, setModules] = useState([]);
+  const [modules, setModules] = useState([]);        // legacy: [{key,label}]
+  const [moduleFeatures, setModuleFeatures] = useState([]); // [{key,label,features:[{key,label}]}]
   const [openCreate, setOpenCreate] = useState(false);
-  const [openEdit, setOpenEdit] = useState(null); // user obj or null
-  const [openPw, setOpenPw] = useState(null);     // user obj or null
+  const [openEdit, setOpenEdit] = useState(null);
+  const [openPw, setOpenPw] = useState(null);
   const [form, setForm] = useState(newForm());
   const [newPw, setNewPw] = useState("");
+  const [expandedModules, setExpandedModules] = useState({});
 
   const load = () => api.get("/users").then((r) => setUsers(r.data));
   useEffect(() => {
     api.get("/modules").then((r) => setModules(r.data));
+    api.get("/rbac/module-features").then((r) => setModuleFeatures(r.data.modules || []));
     load();
   }, []);
 
-  const toggleAction = (moduleKey, action) => {
+  const toggleFeature = (moduleKey, featKey) => {
     setForm((f) => {
-      const cur = f.permission_actions?.[moduleKey]?.[action] || false;
-      const next = {
-        ...f.permission_actions,
-        [moduleKey]: { ...(f.permission_actions?.[moduleKey] || {}), [action]: !cur },
-      };
-      // Auto-sync: if any action enabled → ensure module is in permissions list
-      const anyOn = ACTIONS.some((a) => next[moduleKey]?.[a]);
+      const cur = f.permission_actions?.[moduleKey]?.[featKey] || false;
+      const moduleObj = { ...(f.permission_actions?.[moduleKey] || {}), [featKey]: !cur };
+      const next = { ...f.permission_actions, [moduleKey]: moduleObj };
+      const anyOn = Object.values(moduleObj).some(Boolean);
       const perms = anyOn
         ? (f.permissions.includes(moduleKey) ? f.permissions : [...f.permissions, moduleKey])
         : f.permissions.filter((p) => p !== moduleKey);
@@ -49,10 +46,21 @@ export default function Users() {
     });
   };
 
-  const toggleAllActionsForModule = (moduleKey, val) => {
+  const toggleAllAcrossModules = (val) => {
     setForm((f) => {
-      const obj = {};
-      ACTIONS.forEach((a) => { obj[a] = val; });
+      const next = {};
+      const perms = [];
+      moduleFeatures.forEach((m) => {
+        next[m.key] = Object.fromEntries(m.features.map((ft) => [ft.key, val]));
+        if (val) perms.push(m.key);
+      });
+      return { ...f, permission_actions: next, permissions: perms };
+    });
+  };
+
+  const toggleAllForModule = (moduleKey, featKeys, val) => {
+    setForm((f) => {
+      const obj = Object.fromEntries(featKeys.map((k) => [k, val]));
       const next = { ...f.permission_actions, [moduleKey]: obj };
       const perms = val
         ? (f.permissions.includes(moduleKey) ? f.permissions : [...f.permissions, moduleKey])
@@ -62,17 +70,24 @@ export default function Users() {
   };
 
   const applyRoleDefaults = (role) => {
-    const def = modules.filter((m) => m.default_roles.includes(role) || role === "administrator").map((m) => m.key);
-    const all = role === "administrator" ? modules.map((m) => m.key) : def;
-    // For administrator: all actions ON for all modules. For other roles: view only for allowed modules.
-    const pa = {};
-    if (role === "administrator") {
-      modules.forEach((m) => { pa[m.key] = Object.fromEntries(ACTIONS.map((a) => [a, true])); });
-    } else {
-      all.forEach((k) => { pa[k] = { view: true, create: false, edit: false, delete: false, import: false, export: false }; });
-    }
-    setForm((f) => ({ ...f, role, permissions: all, permission_actions: pa }));
+    // Bootstrap defaults: administrator gets ALL features; others get only modules they can access by default with all features off (admin must configure)
+    const next = {};
+    const perms = [];
+    moduleFeatures.forEach((m) => {
+      // Default-permitted modules per role come from /api/modules legacy (m.default_roles missing here),
+      // so we use legacy `modules` list to filter.
+      const moduleMeta = modules.find((x) => x.key === m.key);
+      const accessible = role === "administrator" || (moduleMeta && (moduleMeta.default_roles || []).includes(role));
+      const val = role === "administrator" ? true : false;
+      if (accessible) {
+        next[m.key] = Object.fromEntries(m.features.map((ft) => [ft.key, val]));
+        if (accessible) perms.push(m.key);
+      }
+    });
+    setForm((f) => ({ ...f, role, permission_actions: next, permissions: perms }));
   };
+
+  const toggleModuleExpand = (k) => setExpandedModules((s) => ({ ...s, [k]: !s[k] }));
 
   const submitCreate = async (e) => {
     e.preventDefault();
@@ -239,61 +254,71 @@ export default function Users() {
               </div>
 
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <Label>Permission Detail (per-Aksi per-Modul)</Label>
-                  <button type="button" onClick={() => applyRoleDefaults(form.role)} className="text-[11px] font-bold uppercase tracking-wider text-blue-700 hover:underline">
-                    Reset ke Default Role
-                  </button>
+                <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                  <Label className="!mb-0">Permission Detail (per Fitur Spesifik)</Label>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => toggleAllAcrossModules(true)} className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 hover:underline">Aktifkan Semua</button>
+                    <span className="text-slate-300">|</span>
+                    <button type="button" onClick={() => toggleAllAcrossModules(false)} className="text-[11px] font-bold uppercase tracking-wider text-rose-700 hover:underline">Matikan Semua</button>
+                    <span className="text-slate-300">|</span>
+                    <button type="button" onClick={() => applyRoleDefaults(form.role)} className="text-[11px] font-bold uppercase tracking-wider text-blue-700 hover:underline">Reset ke Default Role</button>
+                  </div>
                 </div>
-                <div className="border border-slate-200 rounded overflow-x-auto bg-white">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
-                      <tr>
-                        <th className="text-left px-2 py-2 font-bold text-[10px] uppercase text-slate-600">Modul</th>
-                        {ACTIONS.map((a) => (
-                          <th key={a} className="text-center px-1 py-2 font-bold text-[10px] uppercase text-slate-600" title={ACTION_LABELS[a]}>{a}</th>
-                        ))}
-                        <th className="text-center px-1 py-2 font-bold text-[10px] uppercase text-slate-600">All</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {modules.map((m) => {
-                        const acts = form.permission_actions?.[m.key] || {};
-                        const allOn = ACTIONS.every((a) => acts[a]);
-                        return (
-                          <tr key={m.key} className="border-b border-slate-100 hover:bg-slate-50/50">
-                            <td className="px-2 py-1.5">
-                              <div className="font-semibold text-slate-800">{m.label}</div>
-                              <div className="text-[9px] text-slate-400 font-mono">{m.key}</div>
-                            </td>
-                            {ACTIONS.map((a) => {
-                              const on = !!acts[a];
-                              return (
-                                <td key={a} className="text-center px-1 py-1.5">
-                                  <input
-                                    type="checkbox"
-                                    data-testid={`perm-${m.key}-${a}`}
-                                    checked={on}
-                                    onChange={() => toggleAction(m.key, a)}
-                                    className="rounded border-slate-400 h-4 w-4 cursor-pointer"
-                                  />
-                                </td>
-                              );
-                            })}
-                            <td className="text-center px-1 py-1.5">
-                              <button type="button" onClick={() => toggleAllActionsForModule(m.key, !allOn)} className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${allOn ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                                {allOn ? "OFF" : "ON"}
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                <div className="border border-slate-200 rounded bg-white overflow-hidden">
+                  {moduleFeatures.map((m) => {
+                    const acts = form.permission_actions?.[m.key] || {};
+                    const featKeys = m.features.map((f) => f.key);
+                    const onCount = featKeys.filter((k) => acts[k]).length;
+                    const allOn = onCount === featKeys.length && featKeys.length > 0;
+                    const isOpen = !!expandedModules[m.key];
+                    return (
+                      <div key={m.key} className="border-b border-slate-200 last:border-b-0">
+                        <div className="flex items-center justify-between px-3 py-2 bg-slate-50 hover:bg-slate-100">
+                          <button type="button" onClick={() => toggleModuleExpand(m.key)} className="flex items-center gap-2 flex-1 text-left">
+                            {isOpen ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
+                            <div>
+                              <div className="font-semibold text-sm text-slate-800">{m.label}</div>
+                              <div className="text-[10px] text-slate-400 font-mono">{m.key} · {onCount}/{featKeys.length} fitur aktif</div>
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleAllForModule(m.key, featKeys, !allOn)}
+                            className={`text-[10px] uppercase font-bold px-2 py-1 rounded ${allOn ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                          >{allOn ? "Semua ON" : "Semua OFF"}</button>
+                        </div>
+                        {isOpen && (
+                          <div className="px-3 py-2 bg-white">
+                            {m.features.length === 0 ? (
+                              <div className="text-[11px] text-slate-400 italic">Tidak ada fitur granular untuk modul ini.</div>
+                            ) : (
+                              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                                {m.features.map((ft) => (
+                                  <label key={ft.key} className="flex items-start gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      data-testid={`perm-${m.key}-${ft.key}`}
+                                      checked={!!acts[ft.key]}
+                                      onChange={() => toggleFeature(m.key, ft.key)}
+                                      className="mt-0.5 rounded border-slate-400 h-3.5 w-3.5"
+                                    />
+                                    <div>
+                                      <div className="text-[12px] font-medium text-slate-800 leading-tight">{ft.label}</div>
+                                      <div className="text-[9px] text-slate-400 font-mono">{ft.key}</div>
+                                    </div>
+                                  </label>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-2">
-                  {Object.entries(form.permission_actions || {}).filter(([, v]) => Object.values(v || {}).some(Boolean)).length} dari {modules.length} modul aktif
-                  · {ACTIONS.length} aksi tersedia per modul: <span className="font-mono">{ACTIONS.join(", ")}</span>
+                  {Object.entries(form.permission_actions || {}).filter(([, v]) => Object.values(v || {}).some(Boolean)).length} dari {moduleFeatures.length} modul aktif
+                  · klik panah ▶ untuk expand fitur per modul
                 </div>
               </div>
               </div>

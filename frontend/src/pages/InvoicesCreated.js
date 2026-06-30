@@ -5,10 +5,17 @@ import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBa
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save } from "lucide-react";
+import { useCan } from "../lib/useCan";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
 export default function InvoicesCreated() {
+  const canCancel = useCan("invoices_created", "cancel");
+  const canImportNumbers = useCan("invoices_created", "import_numbers");
+  const canExportFpk = useCan("invoices_created", "export_fpk");
+  const canExportAr = useCan("invoices_created", "export_ar");
+  const canBulkPrint = useCan("invoices_created", "bulk_print");
+  const canSavePoNumber = useCan("invoices_created", "save_po_number");
   const [invoices, setInvoices] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [q, setQ] = useState("");
@@ -221,8 +228,12 @@ export default function InvoicesCreated() {
         subtitle="Filter, print, export, dan import invoice yang sudah dibuat."
         action={
           <div className="flex gap-2 flex-wrap">
-            <Button data-testid="import-invoice-no-btn" variant="secondary" onClick={() => { setShowInvNoImport(true); setInvNoFile(null); setInvNoResult(null); }}><Upload size={16}/> Import Invoice No (Mark Status)</Button>
-            <Button variant="secondary" onClick={() => setShowImport(true)}><Upload size={16}/> Import PO Number</Button>
+            {canImportNumbers && (
+              <Button data-testid="import-invoice-no-btn" variant="secondary" onClick={() => { setShowInvNoImport(true); setInvNoFile(null); setInvNoResult(null); }}><Upload size={16}/> Import Invoice No (Mark Status)</Button>
+            )}
+            {canSavePoNumber && (
+              <Button variant="secondary" onClick={() => setShowImport(true)}><Upload size={16}/> Import PO Number</Button>
+            )}
             <Link to="/invoices">
               <Button variant="secondary"><FileText size={16}/> Ke Pembuatan Invoice</Button>
             </Link>
@@ -271,18 +282,26 @@ export default function InvoicesCreated() {
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <h3 className="font-bold inline-flex items-center gap-2"><FileText size={16} className="text-purple-700"/> Daftar Invoice</h3>
           <div className="ml-auto flex gap-2 flex-wrap">
-            <Button data-testid="import-po-btn" variant="secondary" onClick={() => setShowImport(true)}>
-              <Upload size={14}/> Import PO Number
-            </Button>
-            <Button data-testid="export-report-ar-from-invoices-btn" variant="secondary" onClick={exportReportAr}>
-              <FileSpreadsheet size={14}/> Export REPORT AR (filter)
-            </Button>
-            <Button data-testid="export-fpk-btn" variant="secondary" onClick={exportFpk} className="!bg-amber-50 !text-amber-900 hover:!bg-amber-100 !border-amber-300">
-              <FileSpreadsheet size={14}/> Export FPK (Faktur Pajak)
-            </Button>
-            <Button data-testid="bulk-print-pdf-btn" variant="secondary" onClick={bulkPrint}>
-              <Printer size={14}/> Print to PDF ({selected.size || filtered.length})
-            </Button>
+            {canSavePoNumber && (
+              <Button data-testid="import-po-btn" variant="secondary" onClick={() => setShowImport(true)}>
+                <Upload size={14}/> Import PO Number
+              </Button>
+            )}
+            {canExportAr && (
+              <Button data-testid="export-report-ar-from-invoices-btn" variant="secondary" onClick={exportReportAr}>
+                <FileSpreadsheet size={14}/> Export REPORT AR (filter)
+              </Button>
+            )}
+            {canExportFpk && (
+              <Button data-testid="export-fpk-btn" variant="secondary" onClick={exportFpk} className="!bg-amber-50 !text-amber-900 hover:!bg-amber-100 !border-amber-300">
+                <FileSpreadsheet size={14}/> Export FPK (Faktur Pajak)
+              </Button>
+            )}
+            {canBulkPrint && (
+              <Button data-testid="bulk-print-pdf-btn" variant="secondary" onClick={bulkPrint}>
+                <Printer size={14}/> Print to PDF ({selected.size || filtered.length})
+              </Button>
+            )}
           </div>
         </div>
         <Table>
@@ -311,9 +330,10 @@ export default function InvoicesCreated() {
                       value={poEdit[i.id] || ""}
                       onChange={(e) => setPoEdit({ ...poEdit, [i.id]: e.target.value })}
                       placeholder="No. PO"
+                      disabled={!canSavePoNumber}
                       className="!h-8 !text-xs !w-28"
                     />
-                    {(poEdit[i.id] || "") !== (i.po_number || "") && (
+                    {canSavePoNumber && (poEdit[i.id] || "") !== (i.po_number || "") && (
                       <button data-testid={`save-po-${i.id}`} onClick={() => savePoNumber(i.id)} disabled={savingPo[i.id]} title="Simpan No PO" className="p-1 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200">
                         <Save size={12}/>
                       </button>
@@ -351,7 +371,7 @@ export default function InvoicesCreated() {
                     >
                       <Printer size={14}/> {i.print_count > 0 ? `Cetak Ulang (${i.print_count}x)` : "Cetak"}
                     </Button>
-                    {i.awb_status !== "Paid" && (
+                    {canCancel && i.awb_status !== "Paid" && (
                       <Button variant="secondary" data-testid={`cancel-invoice-${i.id}`} onClick={() => cancelInvoice(i)} className="!bg-rose-50 !text-rose-700 hover:!bg-rose-100 !border-rose-200">
                         <X size={14}/> Cancel
                       </Button>

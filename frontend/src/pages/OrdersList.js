@@ -4,6 +4,7 @@ import { Card, PageHeader, Select, Input, Table, Th, Td, StatusBadge, Label, But
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { Trash2, MinusCircle, PackageCheck, X, Search, Download } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import { useCan } from "../lib/useCan";
 import { toast } from "sonner";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
@@ -19,7 +20,7 @@ const MODES = ["Air", "Trucking", "Konsul"];
 
 export default function OrdersList() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "administrator";
+  // const isAdmin = user?.role === "administrator"; // deprecated: use useCan() granular checks
 
   const [rows, setRows] = useState([]);
   const [status, setStatus] = useState("");
@@ -179,12 +180,23 @@ export default function OrdersList() {
 
   const openCostList = (r) => setCostFor(r);
 
+  // Granular per-feature permissions
+  const canReceive = useCan("orders_list", "receive");
+  const canPod = useCan("orders_list", "pod");
+  const canEditReceive = useCan("orders_list", "edit_receive");
+  const canEditPod = useCan("orders_list", "edit_pod");
+  const canViewCost = useCan("orders_list", "view_cost");
+  const canDrop = useCan("orders_list", "drop");
+  const canDelete = useCan("orders_list", "delete");
+  const canExportOpen = useCan("orders_list", "export_open");
+
   return (
     <div data-testid="orders-list-page">
       <PageHeader
         title="Daftar AWB"
         subtitle="Semua order. Tombol 'Terima Barang' untuk catat tanggal terima + biaya tambahan."
         action={
+          canExportOpen && (
           <Button
             data-testid="export-open-awb-btn"
             variant="secondary"
@@ -205,6 +217,7 @@ export default function OrdersList() {
           >
             <Download size={14}/> Export Open AWB
           </Button>
+          )
         }
       />
 
@@ -261,16 +274,24 @@ export default function OrdersList() {
                 <Td className="text-slate-600 text-xs">{fmtDate(r.created_at)}</Td>
                 <Td className="text-slate-600 text-xs">
                   {r.received_at ? (
-                    <button data-testid={`edit-receive-${r.awb_number}`} onClick={() => openReceive(r)} className="inline-flex items-center gap-1 text-emerald-700 font-semibold hover:underline" title="Klik untuk edit data terima">
-                      <PackageCheck size={11}/> {fmtDate(r.received_at)}
-                    </button>
+                    canEditReceive ? (
+                      <button data-testid={`edit-receive-${r.awb_number}`} onClick={() => openReceive(r)} className="inline-flex items-center gap-1 text-emerald-700 font-semibold hover:underline" title="Klik untuk edit data terima">
+                        <PackageCheck size={11}/> {fmtDate(r.received_at)}
+                      </button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold"><PackageCheck size={11}/> {fmtDate(r.received_at)}</span>
+                    )
                   ) : <span className="text-slate-400">—</span>}
                 </Td>
                 <Td className="text-slate-600 text-xs">
                   {r.pod_received_at ? (
-                    <button data-testid={`edit-pod-${r.awb_number}`} onClick={() => openPod(r)} className="inline-flex items-center gap-1 text-blue-700 font-semibold hover:underline" title="Klik untuk edit POD">
-                      <PackageCheck size={11}/> {fmtDate(r.pod_received_at)}
-                    </button>
+                    canEditPod ? (
+                      <button data-testid={`edit-pod-${r.awb_number}`} onClick={() => openPod(r)} className="inline-flex items-center gap-1 text-blue-700 font-semibold hover:underline" title="Klik untuk edit POD">
+                        <PackageCheck size={11}/> {fmtDate(r.pod_received_at)}
+                      </button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-blue-700 font-semibold"><PackageCheck size={11}/> {fmtDate(r.pod_received_at)}</span>
+                    )
                   ) : <span className="text-slate-400">—</span>}
                 </Td>
                 <Td>{r.customer_name || "-"}</Td>
@@ -279,20 +300,24 @@ export default function OrdersList() {
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
                 <Td className="text-right">
                   {r._total_cost > 0 ? (
-                    <button
-                      data-testid={`view-cost-${r.awb_number}`}
-                      onClick={() => openCostList(r)}
-                      title="Klik untuk lihat / hapus rincian cost"
-                      className="font-mono font-bold text-rose-700 hover:underline cursor-pointer"
-                    >
-                      {fmtIDR(r._total_cost)}
-                    </button>
+                    canViewCost ? (
+                      <button
+                        data-testid={`view-cost-${r.awb_number}`}
+                        onClick={() => openCostList(r)}
+                        title="Klik untuk lihat / hapus rincian cost"
+                        className="font-mono font-bold text-rose-700 hover:underline cursor-pointer"
+                      >
+                        {fmtIDR(r._total_cost)}
+                      </button>
+                    ) : (
+                      <span className="font-mono font-bold text-rose-700">{fmtIDR(r._total_cost)}</span>
+                    )
                   ) : <span className="text-slate-400">—</span>}
                 </Td>
                 <Td><StatusBadge status={r.status} /></Td>
                 <Td className="text-right">
                   <div className="flex gap-1 justify-end whitespace-nowrap">
-                    {!r.received_at && r.status !== "Drop" && (
+                    {canReceive && !r.received_at && r.status !== "Drop" && (
                       <button
                         data-testid={`receive-btn-${r.awb_number}`}
                         onClick={() => openReceive(r)}
@@ -300,7 +325,7 @@ export default function OrdersList() {
                         className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200 inline-flex items-center gap-1"
                       ><PackageCheck size={11}/> Terima</button>
                     )}
-                    {r.received_at && r.status !== "Drop" && (
+                    {canPod && r.received_at && r.status !== "Drop" && (
                       <button
                         data-testid={`pod-btn-${r.awb_number}`}
                         onClick={() => openPod(r)}
@@ -308,12 +333,12 @@ export default function OrdersList() {
                         className={`px-2 py-1 text-[10px] uppercase font-bold rounded inline-flex items-center gap-1 ${r.pod_received_at ? "bg-blue-50 text-blue-700 hover:bg-blue-100" : "bg-blue-100 text-blue-800 hover:bg-blue-200"}`}
                       ><PackageCheck size={11}/> {r.pod_received_at ? "Update POD" : "Terima POD"}</button>
                     )}
-                    {r.status !== "Drop" && (
+                    {canDrop && r.status !== "Drop" && (
                       <button data-testid={`drop-order-btn-${r.awb_number}`} onClick={() => dropOrder(r)} title="Drop AWB"
                         className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-amber-100 text-amber-800 hover:bg-amber-200 inline-flex items-center gap-1"
                       ><MinusCircle size={11}/> Drop</button>
                     )}
-                    {isAdmin && (
+                    {canDelete && (
                       <button data-testid={`delete-order-btn-${r.awb_number}`} onClick={() => deleteOrder(r)} title="Hapus permanen"
                         className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-rose-100 text-rose-800 hover:bg-rose-200 inline-flex items-center gap-1"
                       ><Trash2 size={11}/> Hapus</button>
