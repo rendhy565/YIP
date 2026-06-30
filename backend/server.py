@@ -281,6 +281,19 @@ def all_features_dict() -> dict:
     return {mk: {fk: True for (fk, _) in flist} for mk, flist in MODULE_FEATURES.items()}
 
 
+def derive_permissions_from_actions(pa: dict) -> List[str]:
+    """Derive `permissions` (module-level access list) from `permission_actions`.
+    A module is included only if ≥1 feature in it is True. This makes permissions a
+    derived/computed value driven by the granular feature toggles."""
+    if not pa or not isinstance(pa, dict):
+        return []
+    out = []
+    for mk, feats in pa.items():
+        if isinstance(feats, dict) and any(bool(v) for v in feats.values()):
+            out.append(mk)
+    return out
+
+
 def default_permissions(role: str) -> List[str]:
     if role == "administrator":
         return list(MODULE_KEYS)
@@ -1139,8 +1152,6 @@ async def login(data: LoginIn):
     if user.get("active") is False:
         raise HTTPException(status_code=403, detail="User dinonaktifkan oleh administrator")
     token = create_access_token(str(user["_id"]), user["username"], user["role"])
-    perms = user.get("permissions") or default_permissions(user["role"])
-    # Auto-seed/merge admin permission_actions with ALL features ON (handles drift when new modules added)
     pa = user.get("permission_actions") or {}
     if user["role"] == "administrator":
         all_feats = all_features_dict()
@@ -1154,12 +1165,13 @@ async def login(data: LoginIn):
                     if fk not in pa[mk]:
                         pa[mk][fk] = True
                         drift = True
-        # Also back-fill permissions array for admin
-        if set(perms) != set(MODULE_KEYS):
-            perms = list(MODULE_KEYS)
-            drift = True
         if drift:
-            await db.users.update_one({"_id": user["_id"]}, {"$set": {"permission_actions": pa, "permissions": perms}})
+            await db.users.update_one({"_id": user["_id"]}, {"$set": {"permission_actions": pa}})
+    # ALWAYS derive permissions array from permission_actions (granular truth)
+    perms = derive_permissions_from_actions(pa)
+    # Only fall back to default_permissions for legacy users that have NO permission_actions at all
+    if not pa and not user.get("permission_actions"):
+        perms = user.get("permissions") or default_permissions(user["role"])
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -1176,7 +1188,6 @@ async def login(data: LoginIn):
 
 @app.get("/api/auth/me", response_model=UserOut)
 async def me(user: dict = Depends(get_current_user)):
-    perms = user.get("permissions") or default_permissions(user["role"])
     pa = user.get("permission_actions") or {}
     if user["role"] == "administrator":
         all_feats = all_features_dict()
@@ -1190,11 +1201,11 @@ async def me(user: dict = Depends(get_current_user)):
                     if fk not in pa[mk]:
                         pa[mk][fk] = True
                         drift = True
-        if set(perms) != set(MODULE_KEYS):
-            perms = list(MODULE_KEYS)
-            drift = True
         if drift:
-            await db.users.update_one({"_id": _oid(user["id"])}, {"$set": {"permission_actions": pa, "permissions": perms}})
+            await db.users.update_one({"_id": _oid(user["id"])}, {"$set": {"permission_actions": pa}})
+    perms = derive_permissions_from_actions(pa)
+    if not pa and not user.get("permission_actions"):
+        perms = user.get("permissions") or default_permissions(user["role"])
     return UserOut(
         id=user["id"],
         username=user["username"],
@@ -3326,12 +3337,16 @@ async def create_user(data: UserCreateIn, user: dict = Depends(require_role("adm
                 continue
             valid_keys = {fk for (fk, _) in MODULE_FEATURES.get(mk, [])}
             pa[mk] = {fk: bool(feats.get(fk, False)) for fk in valid_keys}
+    # ALWAYS derive permissions from permission_actions (single source of truth)
+    # If pa is empty and admin sent permissions explicitly, fall back to that (legacy compat)
+    derived_perms = derive_permissions_from_actions(pa)
+    final_perms = derived_perms if pa else (data.permissions if data.permissions is not None else default_permissions(data.role))
     doc = {
         "username": uname,
         "password_hash": hash_password(data.password),
         "role": data.role,
         "full_name": data.full_name or uname,
-        "permissions": perms,
+        "permissions": final_perms,
         "permission_actions": pa,
         "active": True,
         "created_at": datetime.now(timezone.utc),
@@ -3373,6 +3388,9 @@ async def update_user(uid: str, data: UserUpdateIn, user: dict = Depends(require
             valid_keys = {fk for (fk, _) in MODULE_FEATURES.get(mk, [])}
             pa[mk] = {fk: bool(feats.get(fk, False)) for fk in valid_keys}
         updates["permission_actions"] = pa
+        # ALWAYS auto-derive permissions array from permission_actions (single source of truth).
+        # This OVERRIDES any explicit permissions array sent by frontend.
+        updates["permissions"] = derive_permissions_from_actions(pa)
     if data.active is not None:
         if target.get("role") == "administrator" and data.active is False:
             admin_count = await db.users.count_documents({"role": "administrator", "active": {"$ne": False}})

@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 25 — Derived permissions bug fix VERIFIED end-to-end. Created 12 new pytest cases in test_iteration25_derived_permissions.py + ran 28 regression tests from iter22 & iter24. Result: 40/40 passed. Frontend UI verification via Playwright: (1) test_alvinda (role=operation, only 2 modules in permission_actions all features=false) sees ONLY 'Dashboard' in sidebar (1 link). Bug fix confirmed. (2) admin sees 30 sidebar links including all feature-gated items (Accounting/HR/Tax/Asset/Bank Recon, Panjar, Analitik, PO, Expense) plus User Management, Activity Log, Import Excel. (3) Legacy operation user (empty permission_actions in DB, stored permissions array) sees 12 sidebar items via fallback path — backward compat preserved. Backend POST/PUT /api/users correctly DERIVES `permissions` from `permission_actions` (single source of truth); explicitly sending stale permissions=['recap','invoices'] is overridden by derived []. /auth/login & /auth/me both derive on read; legacy users with empty pa fall back to stored permissions. NO regressions detected in iter22 (16/16) or iter24 (12/12) suites.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/orders", "issue": "Endpoint requires only authentication (get_current_user), no permission check. A user with orders_list permission_actions all=false can still call GET /api/orders successfully. Gating is FRONTEND-ONLY via Protected route. Not a regression from this iteration but a pre-existing hardening opportunity. Recommend adding require_permission('orders_list') decorator on backend endpoints for defense-in-depth."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration25_derived_permissions.py",
+    "/app/backend/tests/test_iteration22_granular_rbac.py",
+    "/app/backend/tests/test_iteration24_purchase_orders_rbac.py",
+    "/app/test_reports/pytest/iteration25_results.xml"
+  ],
+  "action_items": [
+    "(Optional/Hardening) Add require_permission('orders_list') and similar on backend GET endpoints so direct API calls also gated, not just frontend Protected route.",
+    "(Optional) Delete test_alvinda seed user from staging DB now that bug fix is verified (per request note)."
+  ],
+  "critical_code_review_comments": [
+    "derive_permissions_from_actions() (server.py:284-294) is the single source of truth — called consistently on POST/PUT/login/me. Clean pattern.",
+    "PUT /api/users (server.py:3382 & 3393): if BOTH `permissions` and `permission_actions` are sent, line 3382 first sets updates['permissions']=data.permissions then 3393 OVERRIDES with derived. The override wins (good), but the intermediate write is dead code — consider removing the permissions assignment at 3382 when permission_actions is also present, for clarity.",
+    "Layout.js hasPerm() (line 70-83) — admin auto-bypass correctly removed; admin is gated purely by their auto-seeded permission_actions. Consistent with user's design choice.",
+    "Layout.js NAV (line 65-66): Only Activity Log + Import Excel retain perm:'*' (admin-only), Dashboard has no perm — looks correct.",
+    "Backward-compat fallback in /auth/me & /auth/login: legacy users with empty pa keep their stored permissions array. operation/finance seed users still work as before. Validated by test_me_legacy_user_no_pa_falls_back."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration25_derived_permissions.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (40/40 pytest passed — 12 new + 16 iter22 + 12 iter24)",
+    "frontend": "100% (sidebar gating verified for test_alvinda=1 link, admin=30 links, operation=12 links)"
+  },
+  "test_credentials": "admin/admin123, finance/finance123, operation/operation123, test_alvinda/test123",
+  "seed_data_creation": "Test users created during pytest run are auto-cleaned via fixture teardown. test_alvinda preserved per main agent request (can be deleted after sign-off).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Derived permissions architecture: permission_actions is the source of truth; permissions array auto-derived on every read (POST/PUT users, /auth/login, /auth/me). To verify any RBAC change: (1) create a temp user with explicit permission_actions, (2) login as that user, (3) check sidebar matches expected modules. Backend test scaffold in test_iteration25_derived_permissions.py uses pytest fixtures for cleanup — copy this pattern. NOTE: Backend API endpoints themselves are NOT permission-gated (only frontend Protected route + sidebar gates). This is the next hardening opportunity. test_alvinda is a manual seed user; do not rely on it in regression tests, use pytest-created TEST_ users instead.",
+  "rca of the issue": "Original bug RCA confirmed correct per E1's analysis: (1) Layout.hasPerm had admin auto-bypass which contradicted user's choice; (2) Sidebar items used perm:'*' bypassing all gating; (3) Users.js applyRoleDefaults polluted permissions array even for false features; (4) Backend POST/PUT didn't auto-derive. Fix at all 4 layers (frontend hasPerm/NAV, Users.js applyRoleDefaults, backend POST/PUT, backend /auth/me & /auth/login) makes permission_actions the single source of truth. Verified via pytest (12/12 new) and Playwright sidebar inspection."
+}

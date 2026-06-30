@@ -25,12 +25,12 @@ const NAV = [
   { type: "section", label: "Biaya" },
   { to: "/costs", label: "Plotting Biaya", icon: Coins, perm: "costs" },
   { to: "/accrue", label: "Settle Hutang Vendor", icon: Wallet, perm: "accrue" },
-  { to: "/panjar", label: "Panjar Kerja", icon: Wallet, perm: "*" },
+  { to: "/panjar", label: "Panjar Kerja", icon: Wallet, perm: "fixed_costs" },
   { to: "/purchase-orders", label: "PO / Surat Perintah Vendor", icon: FileText, perm: "purchase_orders" },
   { to: "/fixed-costs", label: "Expense", icon: Banknote, perm: "fixed_costs" },
 
   { type: "section", label: "Master & Laporan" },
-  { to: "/analytics", label: "Dashboard Analitik", icon: BarChart3, perm: "*" },
+  { to: "/analytics", label: "Dashboard Analitik", icon: BarChart3, perm: "pnl" },
   { to: "/customers", label: "Customer", icon: Users, perm: "customers" },
   { to: "/contracts", label: "Perjanjian Rate", icon: ClipboardCheck, perm: "contracts" },
   { to: "/expense-categories", label: "Master Kategori Expense", icon: Banknote, perm: "expense_categories" },
@@ -38,26 +38,26 @@ const NAV = [
   { to: "/pnl", label: "Laba Rugi (Order)", icon: TrendingUp, perm: "pnl" },
 
   { type: "section", label: "Akunting (PSAK)", feature: "accounting" },
-  { to: "/accounting/coa", label: "Bagan Akun", icon: BookOpen, perm: "*", feature: "accounting" },
-  { to: "/accounting/journal", label: "Jurnal Umum", icon: BookText, perm: "*", feature: "accounting" },
-  { to: "/accounting/ledger", label: "Buku Besar", icon: Library, perm: "*", feature: "accounting" },
-  { to: "/accounting/trial-balance", label: "Neraca Saldo", icon: Scale, perm: "*", feature: "accounting" },
-  { to: "/accounting/balance-sheet", label: "Neraca", icon: Building, perm: "*", feature: "accounting" },
-  { to: "/accounting/income-statement", label: "Laporan Laba Rugi", icon: TrendingUp, perm: "*", feature: "accounting" },
-  { to: "/accounting/cash-flow", label: "Arus Kas", icon: LineChart, perm: "*", feature: "accounting" },
-  { to: "/accounting/opening-closing", label: "Saldo Awal & Tutup Buku", icon: Lock, perm: "*", feature: "accounting" },
+  { to: "/accounting/coa", label: "Bagan Akun", icon: BookOpen, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/journal", label: "Jurnal Umum", icon: BookText, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/ledger", label: "Buku Besar", icon: Library, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/trial-balance", label: "Neraca Saldo", icon: Scale, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/balance-sheet", label: "Neraca", icon: Building, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/income-statement", label: "Laporan Laba Rugi", icon: TrendingUp, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/cash-flow", label: "Arus Kas", icon: LineChart, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/opening-closing", label: "Saldo Awal & Tutup Buku", icon: Lock, perm: "accounting", feature: "accounting" },
 
   { type: "section", label: "HR & Payroll", feature: "hr" },
-  { to: "/hr", label: "Karyawan & Gaji", icon: UserCog, perm: "*", feature: "hr" },
+  { to: "/hr", label: "Karyawan & Gaji", icon: UserCog, perm: "hr", feature: "hr" },
 
   { type: "section", label: "Perpajakan", feature: "tax" },
-  { to: "/tax", label: "PPN & PPh", icon: Percent, perm: "*", feature: "tax" },
+  { to: "/tax", label: "PPN & PPh", icon: Percent, perm: "tax", feature: "tax" },
 
   { type: "section", label: "Aset Tetap", feature: "asset" },
-  { to: "/assets", label: "Aset & Depresiasi", icon: Briefcase, perm: "*", feature: "asset" },
+  { to: "/assets", label: "Aset & Depresiasi", icon: Briefcase, perm: "asset", feature: "asset" },
 
   { type: "section", label: "Bank Reconciliation", feature: "bank_recon" },
-  { to: "/bank-recon", label: "Rekonsiliasi Bank", icon: GitMerge, perm: "*", feature: "bank_recon" },
+  { to: "/bank-recon", label: "Rekonsiliasi Bank", icon: GitMerge, perm: "bank_recon", feature: "bank_recon" },
 
   { type: "section", label: "Sistem" },
   { to: "/settings", label: "Pengaturan", icon: SettingsIcon, perm: "settings" },
@@ -69,19 +69,26 @@ const NAV = [
 
 function hasPerm(user, perm) {
   if (!user) return false;
-  if (user.role === "administrator") return true;
   if (perm === "*") return true;
-  return Array.isArray(user.permissions) && user.permissions.includes(perm);
+  // Granular: only show menu if user has AT LEAST ONE feature enabled in this module
+  // (admin gets auto-seeded with all features=true at login, so admin also driven by permission_actions)
+  const pa = user.permission_actions || {};
+  const moduleObj = pa[perm];
+  if (moduleObj && Object.values(moduleObj).some(Boolean)) return true;
+  // Backward-compat: fall back to legacy permissions array only if permission_actions is entirely empty for this user
+  if (!user.permission_actions || Object.keys(user.permission_actions).length === 0) {
+    return Array.isArray(user.permissions) && user.permissions.includes(perm);
+  }
+  return false;
 }
 
 // Feature modules require BOTH the global feature flag to be on AND the user to
-// have the matching permission key in their `permissions` array (admin bypasses).
+// have any feature enabled in their permission_actions for that module.
 function canAccessFeature(user, featureKey, flags) {
   if (!featureKey) return true;
   if (!flags[featureKey]) return false;
   if (!user) return false;
-  if (user.role === "administrator") return true;
-  return Array.isArray(user.permissions) && user.permissions.includes(featureKey);
+  return hasPerm(user, featureKey);
 }
 
 export default function Layout({ children }) {

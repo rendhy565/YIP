@@ -70,21 +70,21 @@ export default function Users() {
   };
 
   const applyRoleDefaults = (role) => {
-    // Bootstrap defaults: administrator gets ALL features; others get only modules they can access by default with all features off (admin must configure)
+    // Build permission_actions defaults:
+    // - administrator: all features ON for all modules
+    // - other roles: leave all features OFF (admin must explicitly grant)
+    // `permissions` array is DERIVED from permission_actions (only modules with ≥1 feature ON)
     const next = {};
-    const perms = [];
     moduleFeatures.forEach((m) => {
-      // Default-permitted modules per role come from /api/modules legacy (m.default_roles missing here),
-      // so we use legacy `modules` list to filter.
       const moduleMeta = modules.find((x) => x.key === m.key);
       const accessible = role === "administrator" || (moduleMeta && (moduleMeta.default_roles || []).includes(role));
-      const val = role === "administrator" ? true : false;
+      const val = role === "administrator";
       if (accessible) {
         next[m.key] = Object.fromEntries(m.features.map((ft) => [ft.key, val]));
-        if (accessible) perms.push(m.key);
       }
     });
-    setForm((f) => ({ ...f, role, permission_actions: next, permissions: perms }));
+    const derivedPerms = Object.entries(next).filter(([, v]) => Object.values(v).some(Boolean)).map(([k]) => k);
+    setForm((f) => ({ ...f, role, permission_actions: next, permissions: derivedPerms }));
   };
 
   const toggleModuleExpand = (k) => setExpandedModules((s) => ({ ...s, [k]: !s[k] }));
