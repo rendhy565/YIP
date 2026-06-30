@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 21 — verified Edit AWB selling fix (charter vs per-kg) end-to-end. Backend: 6/6 pytest pass. Frontend: Per-Kg and Charter save flows + auto-detect charter on re-open all verified with live PATCH response capture. Regression iter20 pytest: 11/11 pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration21_edit_selling.py",
+    "/app/test_reports/pytest/iteration21_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Recap.js openEdit() line 170 auto-detect heuristic (looksCharter = total_tariff>0 && qty_kg==0 && tariff_per_kg==0) works, but if a future user-edit ever zeros out tariff and qty while leaving total_tariff stale before the recompute path runs, the modal could mis-classify. Safer to rely solely on r.is_charter once backend reliably sets it; the qty/tariff fallback should be a one-time migration-only hint.",
+    "Recap.js saveEdit() line 213 deletes payload.charter_amount when switching to per-kg, but does NOT explicitly send is_charter=false to overwrite a previously charter document. Server merges via raw model_dump (only non-None), so passing is_charter=false (boolean) is honored — verified by Playwright test. Just call out as a footgun if pydantic strictness ever changes.",
+    "server.py line 4057-4071 recompute block uses raw `o.get('addons_total')` rather than recalculating from polis/insurance/spsi/forklift component fields. If addons_total drifts (e.g. polis_amount changed but addons_total not updated), grand_total will be wrong. Consider recomputing addons_total from components in the PATCH path too.",
+    "AwbExtendedUpdate (line 4023-4027) accepts insurance_enabled, polis_amount, insurance_amount but the recompute block never recalculates addons_total when these change — only the /receive endpoint updates addons_total. So editing polis via /extended silently drops to old addons_total. Recommend either: (a) reject these fields in /extended, or (b) recompute addons_total when any addon field is in payload.",
+    "server.py grew to 8347 lines — splitting modules already flagged in iter20. No regression but no progress either."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration21_edit_selling.py"
+  ],
+  "success_rate": {"backend": "100% (6/6 iter21 + 11/11 iter20 regression)", "frontend": "100% (Per-Kg save, Charter save, toggle, live total compute, auto-detect on re-open all verified)"},
+  "test_credentials": "admin/admin123",
+  "seed_data_creation": "Created ~14 TEST-EDIT-* AWBs during pytest + Playwright runs (all Open status, FTL service, customer=TEST_IT14_Customer2_a3d05e). Frontend test saved tariff edits on 2 of them (TEST-EDIT-3BD043EC → Rp 55.500 per-kg, TEST-EDIT-1AEFC2E4 → Rp 83.250 charter). Leftover: 14 Open TEST-EDIT-* AWBs on the Recap page — visible in screenshot. Safe to leave; main agent can bulk delete or hide if desired.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "BUG FIX VERIFIED end-to-end. Backend PATCH /api/orders/{id}/extended with is_charter=true + charter_amount=75000 + tax_percentage=11 returns total_tariff=75000, tax_amount=8250, grand_total=83250 (verified live via Playwright network capture). Per-Kg path: tariff=10000 + qty=5 + tax=11 returns total_tariff=50000, tax_amount=5500, grand_total=55500. Auto-detect charter VERIFIED: after saving a per-kg AWB to charter mode, re-opening the Edit modal shows [data-testid=edit-mode-charter] with class bg-amber-600 text-white (active state) AND [data-testid=edit-charter-amount] pre-filled with the saved 75000. Live total computation works: amber section header shows 'TOTAL SELLING + PPN: Rp 55.500' for per-kg and 'Rp 83.250' for charter (visible in /app/test_reports/edit_modal_perkg.png and edit_modal_charter.png). Addons NOT taxed verified by test_polis_does_not_affect_tax_amount: polis=15000 + total_tariff=80000 + pct=11 → tax=8800 (NOT 88000*0.11). Reconciled re-post verified by TestReconciledRePost — sales_accrued journal is recreated with new total_tariff after edit. Test credentials valid. /api/orders POST requires customer_id, item_description, goods_content, koli_count>=1, koli_qty_per, valid service literal (LCL/FCL/LTL/FTL/AIR/Lumpsum). /api/orders/{oid}/receive requires work_type in ('Kirim Barang','Dismantle Barang','Relokasi Barang') and mode in ('Air','Trucking','Konsul'). Use these for any future test seeding.",
+  "rca of the issue": "ORIGINAL BUG: Edit AWB modal didn't expose is_charter / charter_amount fields — only tariff/qty, so charter AWBs showed 0/0 in those fields and saving overwrote charter_amount with 0. FIX (verified working): Recap.js openEdit() now auto-detects charter via (is_charter || (total_tariff>0 && qty_kg==0 && tariff_per_kg==0)) and pre-fills charter_amount. Modal shows toggle [edit-mode-perkg / edit-mode-charter] inside the amber selling section; conditional input rendering shows Tarif/KG+Qty(KG) in per-kg mode or Selling Total(IDR) in charter mode. saveEdit() always sends is_charter; when charter, forces tariff_per_kg=0 and qty_kg=0 and parses charter_amount; when per-kg, deletes charter_amount from payload. Backend PATCH /api/orders/{oid}/extended (server.py line 4057-4071) honors is_charter flag to choose recompute path (charter_amount as total vs tariff*qty), computes tax_amount = total * pct / 100 (selling only, not addons), and grand_total = total + tax + addons_total. Reconciled AWBs re-post sales_accrued journal automatically (line 4077-4091)."
+}

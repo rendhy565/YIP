@@ -166,6 +166,8 @@ export default function Recap() {
 
   const openEdit = (r) => {
     const isoDate = r.created_at ? new Date(r.created_at).toISOString().slice(0, 10) : todayStr();
+    // Auto-detect charter mode: if qty_kg==0 and total_tariff>0, this is charter
+    const looksCharter = r.is_charter || (!!r.total_tariff && (!r.qty_kg || r.qty_kg === 0) && (!r.tariff_per_kg || r.tariff_per_kg === 0));
     setEditRow(r);
     setEditForm({
       awb_number: r.awb_number || "",
@@ -179,6 +181,8 @@ export default function Recap() {
       status_pengiriman: r.status_pengiriman || "",
       item_description: r.item_description || "",
       goods_content: r.goods_content || "",
+      is_charter: looksCharter,
+      charter_amount: r.charter_amount ?? (looksCharter ? (r.total_tariff ?? "") : ""),
       tariff_per_kg: r.tariff_per_kg ?? "",
       qty_kg: r.qty_kg ?? "",
       tax_percentage: r.tax_percentage ?? "",
@@ -195,6 +199,19 @@ export default function Recap() {
     setSaving(true);
     try {
       const payload = { ...editForm };
+      // Always send is_charter so backend knows which calc path
+      payload.is_charter = !!payload.is_charter;
+      if (payload.is_charter) {
+        // Charter mode: ensure tariff_per_kg & qty_kg = 0; charter_amount is the selling
+        payload.tariff_per_kg = 0;
+        payload.qty_kg = 0;
+        if (payload.charter_amount !== "" && payload.charter_amount !== null) {
+          payload.charter_amount = parseFloat(payload.charter_amount);
+        }
+      } else {
+        // Per-kg mode: drop charter_amount so it doesn't override
+        delete payload.charter_amount;
+      }
       ["tariff_per_kg", "qty_kg", "tax_percentage"].forEach((k) => {
         if (payload[k] !== "" && payload[k] !== null) payload[k] = parseFloat(payload[k]);
       });
@@ -514,9 +531,44 @@ export default function Recap() {
               </div>
               <div className="md:col-span-3"><Label>Item</Label><Input value={editForm.item_description} onChange={(e) => setEditForm({ ...editForm, item_description: e.target.value })}/></div>
               <div className="md:col-span-3"><Label>Isi Barang</Label><Input value={editForm.goods_content} onChange={(e) => setEditForm({ ...editForm, goods_content: e.target.value })}/></div>
-              <div><Label>Tarif/Kg</Label><Input type="number" step="0.01" value={editForm.tariff_per_kg} onChange={(e) => setEditForm({ ...editForm, tariff_per_kg: e.target.value })}/></div>
-              <div><Label>Qty (Kg)</Label><Input type="number" step="0.01" value={editForm.qty_kg} onChange={(e) => setEditForm({ ...editForm, qty_kg: e.target.value })}/></div>
-              <div><Label>PPN %</Label><Input type="number" step="0.01" value={editForm.tax_percentage} onChange={(e) => setEditForm({ ...editForm, tax_percentage: e.target.value })}/></div>
+
+              {/* SELLING SECTION — Charter vs Per-Kg */}
+              <div className="md:col-span-3 border border-amber-200 bg-amber-50 rounded p-3 -mb-1">
+                <div className="flex items-center gap-3 mb-3">
+                  <Label className="!mb-0 font-bold !text-amber-900">Selling (Harga Jual)</Label>
+                  <div className="inline-flex rounded border border-amber-300 overflow-hidden text-xs font-bold">
+                    <button type="button" data-testid="edit-mode-perkg" onClick={() => setEditForm({ ...editForm, is_charter: false })} className={`px-3 py-1 ${!editForm.is_charter ? "bg-amber-600 text-white" : "bg-white text-amber-800"}`}>Per-Kg</button>
+                    <button type="button" data-testid="edit-mode-charter" onClick={() => setEditForm({ ...editForm, is_charter: true })} className={`px-3 py-1 ${editForm.is_charter ? "bg-amber-600 text-white" : "bg-white text-amber-800"}`}>Charter (Lump Sum)</button>
+                  </div>
+                  {(() => {
+                    const tariff = parseFloat(editForm.tariff_per_kg) || 0;
+                    const qty = parseFloat(editForm.qty_kg) || 0;
+                    const subtotal = editForm.is_charter ? (parseFloat(editForm.charter_amount) || 0) : tariff * qty;
+                    const pct = parseFloat(editForm.tax_percentage) || 0;
+                    const ppn = subtotal * pct / 100;
+                    return (
+                      <div className="ml-auto text-right">
+                        <div className="text-[10px] uppercase text-amber-700 font-bold">Total Selling + PPN</div>
+                        <div className="font-mono font-black text-amber-900">{fmtIDR(subtotal + ppn)}</div>
+                      </div>
+                    );
+                  })()}
+                </div>
+                {editForm.is_charter ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div><Label>Selling Total (IDR) *</Label><Input data-testid="edit-charter-amount" type="number" step="0.01" value={editForm.charter_amount} onChange={(e) => setEditForm({ ...editForm, charter_amount: e.target.value })} placeholder="contoh: 28000"/></div>
+                    <div><Label>PPN %</Label><Input type="number" step="0.01" value={editForm.tax_percentage} onChange={(e) => setEditForm({ ...editForm, tax_percentage: e.target.value })}/></div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div><Label>Tarif/Kg *</Label><Input data-testid="edit-tariff" type="number" step="0.01" value={editForm.tariff_per_kg} onChange={(e) => setEditForm({ ...editForm, tariff_per_kg: e.target.value })}/></div>
+                    <div><Label>Qty (Kg) *</Label><Input data-testid="edit-qty" type="number" step="0.01" value={editForm.qty_kg} onChange={(e) => setEditForm({ ...editForm, qty_kg: e.target.value })}/></div>
+                    <div><Label>PPN %</Label><Input type="number" step="0.01" value={editForm.tax_percentage} onChange={(e) => setEditForm({ ...editForm, tax_percentage: e.target.value })}/></div>
+                  </div>
+                )}
+                <p className="text-[10px] text-amber-800 mt-2">PPN dihitung dari Selling saja. Addons (asuransi, polis, SPSI, forklift) TIDAK kena PPN.</p>
+              </div>
+
               <div><Label>Koli</Label><Input type="number" value={editForm.koli_count} onChange={(e) => setEditForm({ ...editForm, koli_count: e.target.value })}/></div>
               <div><Label>Isi/Koli</Label><Input value={editForm.koli_qty_per} onChange={(e) => setEditForm({ ...editForm, koli_qty_per: e.target.value })}/></div>
               <div><Label>Armada</Label><Input value={editForm.armada} onChange={(e) => setEditForm({ ...editForm, armada: e.target.value })}/></div>
