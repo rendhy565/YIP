@@ -139,6 +139,7 @@ MODULES = [
     {"key": "orders_list", "label": "Daftar AWB", "default_roles": ["operation", "finance"]},
     {"key": "recap", "label": "Rekap & Rekonsiliasi", "default_roles": ["operation"]},
     {"key": "invoices", "label": "Invoice", "default_roles": ["operation", "finance"]},
+    {"key": "invoices_created", "label": "Invoice Tercetak", "default_roles": ["finance"]},
     {"key": "payments", "label": "Pembayaran", "default_roles": ["finance"]},
     {"key": "costs", "label": "Plotting Biaya", "default_roles": ["operation", "finance"]},
     {"key": "accrue", "label": "Settle Hutang Vendor", "default_roles": ["finance"]},
@@ -261,6 +262,11 @@ MODULE_FEATURES: dict = {
 for _m in MODULES:
     if _m["key"] not in MODULE_FEATURES:
         MODULE_FEATURES[_m["key"]] = [("access", "Akses Modul")]
+
+# Sanity: catch drift between MODULES list and MODULE_FEATURES catalog at startup
+_orphan_features = set(MODULE_FEATURES.keys()) - set(MODULE_KEYS)
+if _orphan_features:
+    raise RuntimeError(f"MODULE_FEATURES contains modules not in MODULES list: {_orphan_features}. Add them to MODULES or remove from MODULE_FEATURES.")
 
 def all_features_dict() -> dict:
     """Return {module_key: {feature_key: True}} for ALL modules & features. Used for admin defaults."""
@@ -1126,11 +1132,26 @@ async def login(data: LoginIn):
         raise HTTPException(status_code=403, detail="User dinonaktifkan oleh administrator")
     token = create_access_token(str(user["_id"]), user["username"], user["role"])
     perms = user.get("permissions") or default_permissions(user["role"])
-    # Auto-seed admin permission_actions with ALL features ON if empty (first login bootstrap)
+    # Auto-seed/merge admin permission_actions with ALL features ON (handles drift when new modules added)
     pa = user.get("permission_actions") or {}
-    if user["role"] == "administrator" and not pa:
-        pa = all_features_dict()
-        await db.users.update_one({"_id": user["_id"]}, {"$set": {"permission_actions": pa}})
+    if user["role"] == "administrator":
+        all_feats = all_features_dict()
+        drift = False
+        for mk, feats in all_feats.items():
+            if mk not in pa:
+                pa[mk] = feats
+                drift = True
+            else:
+                for fk in feats:
+                    if fk not in pa[mk]:
+                        pa[mk][fk] = True
+                        drift = True
+        # Also back-fill permissions array for admin
+        if set(perms) != set(MODULE_KEYS):
+            perms = list(MODULE_KEYS)
+            drift = True
+        if drift:
+            await db.users.update_one({"_id": user["_id"]}, {"$set": {"permission_actions": pa, "permissions": perms}})
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -1149,9 +1170,23 @@ async def login(data: LoginIn):
 async def me(user: dict = Depends(get_current_user)):
     perms = user.get("permissions") or default_permissions(user["role"])
     pa = user.get("permission_actions") or {}
-    if user["role"] == "administrator" and not pa:
-        pa = all_features_dict()
-        await db.users.update_one({"_id": _oid(user["id"])}, {"$set": {"permission_actions": pa}})
+    if user["role"] == "administrator":
+        all_feats = all_features_dict()
+        drift = False
+        for mk, feats in all_feats.items():
+            if mk not in pa:
+                pa[mk] = feats
+                drift = True
+            else:
+                for fk in feats:
+                    if fk not in pa[mk]:
+                        pa[mk][fk] = True
+                        drift = True
+        if set(perms) != set(MODULE_KEYS):
+            perms = list(MODULE_KEYS)
+            drift = True
+        if drift:
+            await db.users.update_one({"_id": _oid(user["id"])}, {"$set": {"permission_actions": pa, "permissions": perms}})
     return UserOut(
         id=user["id"],
         username=user["username"],
