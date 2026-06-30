@@ -44,10 +44,24 @@ import PanjarKerja from "./pages/PanjarKerja";
 import InvoicesCreated from "./pages/InvoicesCreated";
 import PurchaseOrders from "./pages/PurchaseOrders";
 
-function Protected({ children, roles }) {
+function Protected({ children, roles, module }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
-  if (user.role === "administrator") return children;
+  // Granular permission check: if `module` is provided, allow access when user has
+  // at least one feature enabled in their permission_actions for that module.
+  // This makes Protected route guard consistent with sidebar gating.
+  if (module) {
+    const pa = user.permission_actions || {};
+    const moduleObj = pa[module];
+    const hasAny = moduleObj && Object.values(moduleObj).some(Boolean);
+    if (hasAny) return children;
+    // Backward-compat: legacy users (no permission_actions at all) fall back to roles[]
+    if (!user.permission_actions || Object.keys(user.permission_actions).length === 0) {
+      if (!roles || roles.includes(user.role)) return children;
+    }
+    return <Navigate to="/" replace />;
+  }
+  // Legacy role-based check (used by routes that have no module mapping)
   if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
   return children;
 }
@@ -79,46 +93,46 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<Protected><Shell><Dashboard /></Shell></Protected>} />
-            <Route path="/orders/new" element={<Protected roles={["operation"]}><Shell><OrderInput /></Shell></Protected>} />
-            <Route path="/orders" element={<Protected><Shell><OrdersList /></Shell></Protected>} />
-            <Route path="/customers" element={<Protected><Shell><Customers /></Shell></Protected>} />
-            <Route path="/contracts" element={<Protected><Shell><Contracts /></Shell></Protected>} />
-            <Route path="/costs" element={<Protected><Shell><Costs /></Shell></Protected>} />
-            <Route path="/accrue" element={<Protected roles={["finance"]}><Shell><AccrueSettlement /></Shell></Protected>} />
-            <Route path="/recap" element={<Protected roles={["operation"]}><Shell><Recap /></Shell></Protected>} />
-            <Route path="/invoices" element={<Protected><Shell><Invoices /></Shell></Protected>} />
-            <Route path="/invoices/created" element={<Protected><Shell><InvoicesCreated /></Shell></Protected>} />
-            <Route path="/invoices/:id/print" element={<Protected><InvoicePrint /></Protected>} />
-            <Route path="/invoices/print-bulk" element={<Protected><InvoicePrintBulk /></Protected>} />
-            <Route path="/payments" element={<Protected roles={["finance"]}><Shell><Payments /></Shell></Protected>} />
-            <Route path="/fixed-costs" element={<Protected roles={["finance"]}><Shell><FixedCosts /></Shell></Protected>} />
-            <Route path="/expense-categories" element={<Protected roles={["finance","administrator"]}><Shell><ExpenseCategories /></Shell></Protected>} />
-            <Route path="/recurring-expenses" element={<Protected roles={["finance","administrator"]}><Shell><RecurringExpenses /></Shell></Protected>} />
+            <Route path="/orders/new" element={<Protected module="orders_input"><Shell><OrderInput /></Shell></Protected>} />
+            <Route path="/orders" element={<Protected module="orders_list"><Shell><OrdersList /></Shell></Protected>} />
+            <Route path="/customers" element={<Protected module="customers"><Shell><Customers /></Shell></Protected>} />
+            <Route path="/contracts" element={<Protected module="contracts"><Shell><Contracts /></Shell></Protected>} />
+            <Route path="/costs" element={<Protected module="costs"><Shell><Costs /></Shell></Protected>} />
+            <Route path="/accrue" element={<Protected module="accrue"><Shell><AccrueSettlement /></Shell></Protected>} />
+            <Route path="/recap" element={<Protected module="recap"><Shell><Recap /></Shell></Protected>} />
+            <Route path="/invoices" element={<Protected module="invoices"><Shell><Invoices /></Shell></Protected>} />
+            <Route path="/invoices/created" element={<Protected module="invoices_created"><Shell><InvoicesCreated /></Shell></Protected>} />
+            <Route path="/invoices/:id/print" element={<Protected module="invoices_created"><InvoicePrint /></Protected>} />
+            <Route path="/invoices/print-bulk" element={<Protected module="invoices_created"><InvoicePrintBulk /></Protected>} />
+            <Route path="/payments" element={<Protected module="payments"><Shell><Payments /></Shell></Protected>} />
+            <Route path="/fixed-costs" element={<Protected module="fixed_costs"><Shell><FixedCosts /></Shell></Protected>} />
+            <Route path="/expense-categories" element={<Protected module="expense_categories"><Shell><ExpenseCategories /></Shell></Protected>} />
+            <Route path="/recurring-expenses" element={<Protected module="fixed_costs"><Shell><RecurringExpenses /></Shell></Protected>} />
             <Route path="/activity-log" element={<Protected roles={["administrator"]}><Shell><ActivityLog /></Shell></Protected>} />
-            <Route path="/pnl" element={<Protected><Shell><ProfitLoss /></Shell></Protected>} />
-            <Route path="/users" element={<Protected roles={["administrator"]}><Shell><Users /></Shell></Protected>} />
-            <Route path="/settings" element={<Protected><Shell><Settings /></Shell></Protected>} />
+            <Route path="/pnl" element={<Protected module="pnl"><Shell><ProfitLoss /></Shell></Protected>} />
+            <Route path="/users" element={<Protected module="user_management"><Shell><Users /></Shell></Protected>} />
+            <Route path="/settings" element={<Protected module="settings"><Shell><Settings /></Shell></Protected>} />
 
-            {/* Accounting (gated by feature flag "accounting") */}
-            <Route path="/accounting/coa" element={<Protected><FeatureGate feature="accounting"><Shell><ChartOfAccounts /></Shell></FeatureGate></Protected>} />
-            <Route path="/accounting/journal" element={<Protected><FeatureGate feature="accounting"><Shell><JournalUmum /></Shell></FeatureGate></Protected>} />
-            <Route path="/accounting/ledger" element={<Protected><FeatureGate feature="accounting"><Shell><BukuBesar /></Shell></FeatureGate></Protected>} />
-            <Route path="/accounting/trial-balance" element={<Protected><FeatureGate feature="accounting"><Shell><NeracaSaldo /></Shell></FeatureGate></Protected>} />
-            <Route path="/accounting/balance-sheet" element={<Protected><FeatureGate feature="accounting"><Shell><Neraca /></Shell></FeatureGate></Protected>} />
-            <Route path="/accounting/income-statement" element={<Protected><FeatureGate feature="accounting"><Shell><LaporanLabaRugi /></Shell></FeatureGate></Protected>} />
-            <Route path="/accounting/cash-flow" element={<Protected><FeatureGate feature="accounting"><Shell><LaporanArusKas /></Shell></FeatureGate></Protected>} />
-            <Route path="/accounting/opening-closing" element={<Protected><FeatureGate feature="accounting"><Shell><SaldoAwal /></Shell></FeatureGate></Protected>} />
+            {/* Accounting (gated by feature flag "accounting" + accounting module perm) */}
+            <Route path="/accounting/coa" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><ChartOfAccounts /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/journal" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><JournalUmum /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/ledger" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><BukuBesar /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/trial-balance" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><NeracaSaldo /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/balance-sheet" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><Neraca /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/income-statement" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><LaporanLabaRugi /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/cash-flow" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><LaporanArusKas /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/opening-closing" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><SaldoAwal /></Shell></FeatureGate></Protected>} />
 
             {/* Optional modules */}
-            <Route path="/hr" element={<Protected><FeatureGate feature="hr"><Shell><HrPayroll /></Shell></FeatureGate></Protected>} />
-            <Route path="/tax" element={<Protected><FeatureGate feature="tax"><Shell><TaxModule /></Shell></FeatureGate></Protected>} />
-            <Route path="/assets" element={<Protected><FeatureGate feature="asset"><Shell><AssetModule /></Shell></FeatureGate></Protected>} />
-            <Route path="/bank-recon" element={<Protected roles={["finance"]}><FeatureGate feature="bank_recon"><Shell><BankReconciliation /></Shell></FeatureGate></Protected>} />
+            <Route path="/hr" element={<Protected module="hr"><FeatureGate feature="hr"><Shell><HrPayroll /></Shell></FeatureGate></Protected>} />
+            <Route path="/tax" element={<Protected module="tax"><FeatureGate feature="tax"><Shell><TaxModule /></Shell></FeatureGate></Protected>} />
+            <Route path="/assets" element={<Protected module="asset"><FeatureGate feature="asset"><Shell><AssetModule /></Shell></FeatureGate></Protected>} />
+            <Route path="/bank-recon" element={<Protected module="bank_recon"><FeatureGate feature="bank_recon"><Shell><BankReconciliation /></Shell></FeatureGate></Protected>} />
 
             <Route path="/import" element={<Protected roles={["administrator"]}><Shell><ImportExcel /></Shell></Protected>} />
-            <Route path="/analytics" element={<Protected><Shell><AnalyticsDashboard /></Shell></Protected>} />
-            <Route path="/panjar" element={<Protected><Shell><PanjarKerja /></Shell></Protected>} />
-            <Route path="/purchase-orders" element={<Protected><Shell><PurchaseOrders /></Shell></Protected>} />
+            <Route path="/analytics" element={<Protected module="pnl"><Shell><AnalyticsDashboard /></Shell></Protected>} />
+            <Route path="/panjar" element={<Protected module="fixed_costs"><Shell><PanjarKerja /></Shell></Protected>} />
+            <Route path="/purchase-orders" element={<Protected module="purchase_orders"><Shell><PurchaseOrders /></Shell></Protected>} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

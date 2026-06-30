@@ -1,0 +1,43 @@
+{
+  "summary": "Iteration 26 — Bug fix VERIFIED: Operation role with granular permission_actions can now access Pembayaran, Settle Hutang Vendor, Cost Automatic, Master Kategori Expense and Recurring Expenses pages. Created 18 new pytest cases in test_iteration26_role_relax.py — all 18 pass. Ran 40 regression tests (iter22/24/25) — 39 pass + 1 skipped (test_alvinda was deleted in prior iteration). Playwright UI verification: test_op_perm logged in and navigated to all 5 routes successfully (5/5 access OK, none redirect to dashboard). Sidebar shows the expected 7 entries (Dashboard + Pembayaran + Settle Hutang Vendor + Panjar Kerja + Expense + Master Kategori Expense + Cost Automatic) and correctly hides Daftar AWB / Invoice / Recap. Admin login still accesses all 5 routes (5/5 PASS). NOTE: review_request quoted endpoints `/api/payments?status_v=Invoiced`, `/api/accrue/list`, `/api/payments/single`, `/api/accrue/{id}/settle` do NOT exist in server.py — the actual endpoints powering these pages are `/api/orders?status_v=Invoiced`, `/api/costs?payment_type=Accrue`, `/api/orders/{id}/mark-paid`, `/api/costs/{id}/settle`. The fix still applies because those endpoints had their role guards relaxed. Tests were updated to use the real paths.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET/POST orders/costs", "issue": "Backend uses coarse role guard `require_role('operation','finance','administrator')` after relaxation; per-feature enforcement (e.g. only allow POST mark-paid if payments.mark_paid=true) is NOT enforced server-side. Feature-level gating is UI-only via useCan. P2 hardening — same gap flagged in iter25."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard (test_op_perm)", "issues": ["'Pintasan Cepat' section still renders Input AWB Baru / Rekap & Excel / Invoice / Laba Rugi quicklinks even when the user has no permission_actions for those modules. Clicking will redirect to / since Protected guard catches it, but the shortcut card itself should be hidden for cleaner UX. Cosmetic, not blocking."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration26_role_relax.py",
+    "/app/test_reports/pytest/iteration26_results.xml"
+  ],
+  "action_items": [
+    "(Cosmetic) In Dashboard.js, hide Pintasan Cepat quicklink cards whose target module isn't in user.permission_actions with at least one feature true. Currently shows Input AWB, Rekap, Invoice, Laba Rugi to test_op_perm even though those routes redirect them away.",
+    "(P2 Hardening, deferred) Add per-feature backend enforcement (require_feature('payments.mark_paid') etc) so direct curl with operation token cannot perform actions the UI hides."
+  ],
+  "critical_code_review_comments": [
+    "Protected component (App.js:47-67) correctly prioritises module-based check then falls back to roles for legacy users. Logic is clean and matches sidebar gating.",
+    "Backend require_role relaxation correctly opens reads/writes to all 3 roles, but the *granular* gating (only users with mark_paid=true) is not enforced backend-side. Acceptable per main agent note, but documented gap.",
+    "Review_request quoted incorrect endpoint paths — frontend pages call /api/orders and /api/costs not /api/payments and /api/accrue. Suggests E1 may have looked at older route names. Tests now reflect the real endpoints.",
+    "Dashboard.js still shows quicklink cards to modules the user lacks permission for. Minor UX issue."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration26_role_relax.py (new)"
+  ],
+  "success_rate": {
+    "backend": "100% (18/18 new + 39/40 regression — 1 skip is intentional test_alvinda cleanup)",
+    "frontend": "100% (5/5 routes accessible for test_op_perm; 5/5 for admin; sidebar gating matches expected)"
+  },
+  "test_credentials": "admin/admin123, finance/finance123, operation/operation123, test_op_perm/test123",
+  "seed_data_creation": "test_op_perm user already existed (id=6a44112e850f7b1639a84814). Backend tests create TEST_ prefixed temp users with auto-cleanup; expense_categories tests create + delete via PUT/DELETE in same test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Permission model: permission_actions is source of truth — frontend Protected (App.js:47) gates routes by checking ≥1 true feature in user.permission_actions[module] (fallback to legacy roles[] for empty pa users). Backend require_role is now (operation,finance,administrator) for 22 shared endpoints — feature-level enforcement is still UI-only. To validate any new module: (1) create temp user with explicit permission_actions, (2) ensure App.js route uses module= prop, (3) ensure underlying endpoint require_role includes 'operation'. Real endpoint mappings: Payments page→/api/orders + /api/orders/{id}/mark-paid + /api/payments/bulk-mark-paid; Accrue→/api/costs + /api/costs/{id}/settle.",
+  "rca of the issue": "Original RCA confirmed: (1) App.js Protected guard used role-only check which 403'd operation users with granular perms; (2) ~22 backend endpoints (mark-paid, settle, fixed-costs CRUD, expense-categories CRUD, recurring-expenses CRUD) had require_role('finance') or require_role('finance','administrator'). Fix: Protected now takes module= prop and checks permission_actions[module] has ≥1 truthy feature. Backend require_role relaxed to include 'operation'. After fix, test_op_perm with payments/accrue/fixed_costs/expense_categories features set true → all 5 GET endpoints return 200, all 5 POST/PUT/DELETE return non-403. UI sidebar via useCan still filters per-feature. Verified end-to-end via pytest (18/18) + Playwright (5/5 routes load)."
+}

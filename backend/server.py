@@ -1610,7 +1610,7 @@ async def create_cost(data: CostIn, user: dict = Depends(get_current_user)):
     return serialize(new)
 
 @app.post("/api/costs/{cid}/settle")
-async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depends(require_role("finance"))):
+async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depends(require_role("operation", "finance", "administrator"))):
     cost = await db.awb_costs.find_one({"_id": _oid(cid)})
     if not cost:
         raise HTTPException(404, "Biaya tidak ditemukan")
@@ -2175,7 +2175,7 @@ async def cancel_invoice(iid: str, user: dict = Depends(require_role("operation"
 # Payments (Module 6)
 # ---------------------------------------------------------------------------
 @app.post("/api/orders/{oid}/mark-paid")
-async def mark_paid(oid: str, data: MarkPaidIn = MarkPaidIn(), user: dict = Depends(require_role("finance"))):
+async def mark_paid(oid: str, data: MarkPaidIn = MarkPaidIn(), user: dict = Depends(require_role("operation", "finance", "administrator"))):
     o = await db.awb_orders.find_one({"_id": _oid(oid)})
     if not o:
         raise HTTPException(404, "Order tidak ditemukan")
@@ -2303,7 +2303,7 @@ async def receive_pod_awb(oid: str, data: AwbPodIn = AwbPodIn(), user: dict = De
     return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
 
 @app.post("/api/payments/bulk-mark-paid")
-async def bulk_mark_paid(data: BulkMarkPaidIn, user: dict = Depends(require_role("finance"))):
+async def bulk_mark_paid(data: BulkMarkPaidIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     cash_acc = data.cash_account_code or "1101"
     acc = await get_account(cash_acc)
     if not acc or not acc.get("is_cash"):
@@ -2378,7 +2378,7 @@ async def list_expense_categories(include_usage: bool = False, user: dict = Depe
     return out
 
 @app.post("/api/expense-categories")
-async def create_expense_category_ep(data: ExpenseCategoryIn, user: dict = Depends(require_role("finance"))):
+async def create_expense_category_ep(data: ExpenseCategoryIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await create_expense_category(data.name, posting_type=data.posting_type or "expense", user_id=user["id"])
     return serialize(doc)
 
@@ -2387,7 +2387,7 @@ class ExpenseCategoryUpdate(BaseModel):
     posting_type: Optional[str] = None  # 'cogs' or 'expense'
 
 @app.put("/api/expense-categories/{cid}")
-async def update_expense_category(cid: str, data: ExpenseCategoryUpdate, user: dict = Depends(require_role("finance"))):
+async def update_expense_category(cid: str, data: ExpenseCategoryUpdate, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await db.expense_categories.find_one({"_id": _oid(cid)})
     if not doc:
         raise HTTPException(404, "Kategori tidak ditemukan")
@@ -2430,7 +2430,7 @@ async def update_expense_category(cid: str, data: ExpenseCategoryUpdate, user: d
     return serialize(await db.expense_categories.find_one({"_id": _oid(cid)}))
 
 @app.delete("/api/expense-categories/{cid}")
-async def delete_expense_category(cid: str, user: dict = Depends(require_role("finance"))):
+async def delete_expense_category(cid: str, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await db.expense_categories.find_one({"_id": _oid(cid)})
     if not doc:
         raise HTTPException(404, "Kategori tidak ditemukan")
@@ -2459,7 +2459,7 @@ async def list_fixed_costs(
     return [serialize(d) for d in docs]
 
 @app.post("/api/fixed-costs")
-async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role("finance"))):
+async def create_fixed_cost(data: FixedCostIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     # Lookup category from db.expense_categories (replaces hardcoded list)
     cat = await get_expense_category(data.category)
     if not cat:
@@ -2531,7 +2531,7 @@ class FixedCostUpdate(BaseModel):
     expense_date: Optional[str] = None  # YYYY-MM-DD
 
 @app.put("/api/fixed-costs/{fid}")
-async def update_fixed_cost(fid: str, data: FixedCostUpdate, user: dict = Depends(require_role("finance"))):
+async def update_fixed_cost(fid: str, data: FixedCostUpdate, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await db.fixed_costs.find_one({"_id": _oid(fid)})
     if not doc:
         raise HTTPException(404, "Expense tidak ditemukan")
@@ -2584,7 +2584,7 @@ async def update_fixed_cost(fid: str, data: FixedCostUpdate, user: dict = Depend
     return serialize(new)
 
 @app.delete("/api/fixed-costs/{fid}")
-async def delete_fixed_cost(fid: str, user: dict = Depends(require_role("finance"))):
+async def delete_fixed_cost(fid: str, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await db.fixed_costs.find_one({"_id": _oid(fid)})
     if not doc:
         raise HTTPException(404, "Expense tidak ditemukan")
@@ -2942,7 +2942,7 @@ async def list_journal(
     return [serialize(d) for d in docs]
 
 @app.post("/api/journal")
-async def post_manual_journal(data: JournalEntryIn, user: dict = Depends(require_role("finance", "administrator"))):
+async def post_manual_journal(data: JournalEntryIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     d = data.date or datetime.now(timezone.utc)
     return await post_journal(
         date=d, description=data.description,
@@ -3441,7 +3441,7 @@ class CopyFixedCostIn(BaseModel):
     overwrite: bool = False  # if True, delete target month items before copying
 
 @app.post("/api/fixed-costs/copy")
-async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_role("finance"))):
+async def copy_fixed_costs(data: CopyFixedCostIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     for m in (data.source_month, data.target_month):
         try:
             y, mm = m.split("-")
@@ -5690,7 +5690,7 @@ async def create_cash_advance(data: CashAdvanceIn, user: dict = Depends(require_
     return serialize(await db.cash_advances.find_one({"_id": r.inserted_id}))
 
 @app.post("/api/cash-advances/{cid}/settle")
-async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = Depends(require_role("finance"))):
+async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     ca = await db.cash_advances.find_one({"_id": _oid(cid)})
     if not ca:
         raise HTTPException(404, "Panjar tidak ditemukan")
@@ -6395,7 +6395,7 @@ async def upload_invoice_logo(data: LogoUploadIn, user: dict = Depends(require_r
 
 # --- Reclass Paid vendor cost back to Accrue (revisi salah post) -----------
 @app.post("/api/costs/{cid}/reclass-to-accrue")
-async def reclass_cost_to_accrue(cid: str, user: dict = Depends(require_role("finance"))):
+async def reclass_cost_to_accrue(cid: str, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     cost = await db.awb_costs.find_one({"_id": _oid(cid)})
     if not cost:
         raise HTTPException(404, "Biaya tidak ditemukan")
@@ -7249,7 +7249,7 @@ def _bkk_parse_recipient(desc: str) -> Optional[str]:
 async def import_bkk_excel(
     file: UploadFile = File(...),
     dry_run: bool = False,
-    user: dict = Depends(require_role("finance", "administrator")),
+    user: dict = Depends(require_role("operation", "finance", "administrator")),
 ):
     """Import BKK (Bukti Kas Keluar) Excel file.
     Rules:
@@ -7840,7 +7840,7 @@ async def import_invoice_numbers_template(user: dict = Depends(require_role("fin
 async def import_invoice_numbers(
     file: UploadFile = File(...),
     dry_run: bool = False,
-    user: dict = Depends(require_role("finance", "administrator")),
+    user: dict = Depends(require_role("operation", "finance", "administrator")),
 ):
     """Import Excel with columns: Invoice Number, AWB Number, Status (Invoiced/Paid), Paid Date (optional YYYY-MM-DD).
     - Matches AWB by awb_number (case-insensitive)
@@ -7966,7 +7966,7 @@ async def list_payment_receipts(oid: str, user: dict = Depends(require_role("fin
     }
 
 @app.post("/api/orders/{oid}/payments")
-async def add_payment_receipt(oid: str, data: PaymentReceiptIn, user: dict = Depends(require_role("finance", "administrator"))):
+async def add_payment_receipt(oid: str, data: PaymentReceiptIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     awb = await db.awb_orders.find_one({"_id": _oid(oid)})
     if not awb:
         raise HTTPException(404, "AWB tidak ditemukan")
@@ -8023,7 +8023,7 @@ async def add_payment_receipt(oid: str, data: PaymentReceiptIn, user: dict = Dep
     }
 
 @app.delete("/api/payment-receipts/{rid}")
-async def delete_payment_receipt(rid: str, user: dict = Depends(require_role("finance", "administrator"))):
+async def delete_payment_receipt(rid: str, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await db.payment_receipts.find_one({"_id": _oid(rid)})
     if not doc:
         raise HTTPException(404, "Receipt tidak ditemukan")
@@ -8142,12 +8142,12 @@ def _compute_next_due(frequency: str, current_due: datetime, execute_day: Option
     return current_due + timedelta(days=30)
 
 @app.get("/api/recurring-expenses")
-async def list_recurring_expenses(user: dict = Depends(require_role("finance", "administrator"))):
+async def list_recurring_expenses(user: dict = Depends(require_role("operation", "finance", "administrator"))):
     docs = await db.recurring_expenses.find({}).sort("created_at", -1).to_list(500)
     return [serialize(d) for d in docs]
 
 @app.post("/api/recurring-expenses")
-async def create_recurring_expense(data: RecurringExpenseIn, user: dict = Depends(require_role("finance", "administrator"))):
+async def create_recurring_expense(data: RecurringExpenseIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     cat = await get_expense_category(data.category)
     if not cat:
         raise HTTPException(400, f"Kategori '{data.category}' tidak terdaftar")
@@ -8200,7 +8200,7 @@ class RecurringExpenseUpdate(BaseModel):
     end_date: Optional[str] = None
 
 @app.put("/api/recurring-expenses/{rid}")
-async def update_recurring_expense(rid: str, data: RecurringExpenseUpdate, user: dict = Depends(require_role("finance", "administrator"))):
+async def update_recurring_expense(rid: str, data: RecurringExpenseUpdate, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await db.recurring_expenses.find_one({"_id": _oid(rid)})
     if not doc:
         raise HTTPException(404, "Recurring expense tidak ditemukan")
@@ -8217,7 +8217,7 @@ async def update_recurring_expense(rid: str, data: RecurringExpenseUpdate, user:
     return serialize(await db.recurring_expenses.find_one({"_id": _oid(rid)}))
 
 @app.delete("/api/recurring-expenses/{rid}")
-async def delete_recurring_expense(rid: str, user: dict = Depends(require_role("finance", "administrator"))):
+async def delete_recurring_expense(rid: str, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     doc = await db.recurring_expenses.find_one({"_id": _oid(rid)})
     if not doc:
         raise HTTPException(404, "Recurring expense tidak ditemukan")
@@ -8226,7 +8226,7 @@ async def delete_recurring_expense(rid: str, user: dict = Depends(require_role("
     return {"ok": True}
 
 @app.post("/api/recurring-expenses/run-due")
-async def run_due_recurring_expenses(user: dict = Depends(require_role("finance", "administrator"))):
+async def run_due_recurring_expenses(user: dict = Depends(require_role("operation", "finance", "administrator"))):
     """Find all active recurring expenses with next_due <= today and create the actual expense.
     Returns count of expenses created and notifications sent. Can be called manually or via a cron job.
     """
