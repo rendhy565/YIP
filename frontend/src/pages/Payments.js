@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { BadgeDollarSign, CheckCircle2, CheckSquare, Square, X, Search } from "lucide-react";
+import { BadgeDollarSign, CheckCircle2, CheckSquare, Square, X, Search, Plus, Trash2 } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -24,6 +24,10 @@ export default function Payments() {
   const [customerId, setCustomerId] = useState("");
   const [customers, setCustomers] = useState([]);
   const [filterMode, setFilterMode] = useState("AND");
+  // Multi-receiver payment modal
+  const [multiAwb, setMultiAwb] = useState(null);
+  const [payments, setPayments] = useState({ receipts: [], grand_total: 0, total_paid: 0, remaining: 0, is_fully_paid: false });
+  const [newPay, setNewPay] = useState({ amount: "", payment_date: todayStr(), payment_method: "Transfer", reference_no: "", notes: "" });
 
   const load = () => {
     Promise.all([
@@ -33,6 +37,32 @@ export default function Payments() {
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (multiAwb?.id) {
+      api.get(`/orders/${multiAwb.id}/payments`).then((r) => setPayments(r.data)).catch(() => {});
+    }
+  }, [multiAwb]);
+
+  const addPayment = async () => {
+    if (!newPay.amount || parseFloat(newPay.amount) <= 0) { toast.error("Amount harus > 0"); return; }
+    try {
+      await api.post(`/orders/${multiAwb.id}/payments`, { ...newPay, amount: parseFloat(newPay.amount) });
+      toast.success("Pembayaran ditambahkan");
+      const r = await api.get(`/orders/${multiAwb.id}/payments`);
+      setPayments(r.data);
+      setNewPay({ amount: "", payment_date: todayStr(), payment_method: "Transfer", reference_no: "", notes: "" });
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const delPayment = async (rid) => {
+    if (!window.confirm("Hapus pembayaran ini?")) return;
+    try {
+      await api.delete(`/payment-receipts/${rid}`);
+      const r = await api.get(`/orders/${multiAwb.id}/payments`);
+      setPayments(r.data);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
 
   const filtered = useMemo(() => {
     const qStr = q.trim().toLowerCase();
@@ -175,9 +205,14 @@ export default function Payments() {
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
                 <Td><StatusBadge status={r.status}/></Td>
                 <Td className="text-right">
-                  <Button data-testid={`mark-paid-${r.id}`} variant="success" onClick={() => openSingle(r)}>
-                    <CheckCircle2 size={14}/> Mark Paid
-                  </Button>
+                  <div className="inline-flex gap-1 justify-end">
+                    <Button data-testid={`multi-payment-${r.id}`} variant="secondary" onClick={() => setMultiAwb(r)} className="!bg-amber-50 !text-amber-800 hover:!bg-amber-100 !border-amber-200">
+                      <BadgeDollarSign size={14}/> Multi-Bayar
+                    </Button>
+                    <Button data-testid={`mark-paid-${r.id}`} variant="success" onClick={() => openSingle(r)}>
+                      <CheckCircle2 size={14}/> Mark Paid
+                    </Button>
+                  </div>
                 </Td>
               </tr>
             ))}
@@ -216,6 +251,77 @@ export default function Payments() {
               <Button data-testid="confirm-mark-paid-btn" variant="success" onClick={showModal === "single" ? submitSingle : submitBulk} disabled={saving || !form.payment_invoice_number}>
                 <CheckCircle2 size={14}/> {saving ? "Memproses..." : "Tandai LUNAS"}
               </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+      {/* Multi-Receiver Payment Modal (multi partial payments per AWB) */}
+      {multiAwb && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="multi-payment-modal">
+          <Card className="w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h3 className="font-heading font-bold text-xl flex items-center gap-2"><BadgeDollarSign size={20}/> Multi-Bayar AWB {multiAwb.awb_number}</h3>
+                <p className="text-xs text-slate-500 mt-1">Catat pembayaran parsial (multi-receiver). AWB otomatis berstatus Paid saat total = grand_total.</p>
+              </div>
+              <button onClick={() => setMultiAwb(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="p-2 rounded bg-slate-50 border border-slate-200">
+                <div className="text-[10px] uppercase font-bold text-slate-500">Grand Total</div>
+                <div className="font-mono font-bold">{fmtIDR(payments.grand_total)}</div>
+              </div>
+              <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
+                <div className="text-[10px] uppercase font-bold text-emerald-700">Total Terbayar</div>
+                <div className="font-mono font-bold text-emerald-800">{fmtIDR(payments.total_paid)}</div>
+              </div>
+              <div className={`p-2 rounded border ${payments.is_fully_paid ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
+                <div className={`text-[10px] uppercase font-bold ${payments.is_fully_paid ? "text-emerald-700" : "text-amber-700"}`}>{payments.is_fully_paid ? "LUNAS" : "Sisa"}</div>
+                <div className="font-mono font-bold">{payments.is_fully_paid ? "PAID" : fmtIDR(payments.remaining)}</div>
+              </div>
+            </div>
+
+            <div className="border border-slate-200 rounded p-3 mb-3 bg-slate-50">
+              <div className="text-xs font-bold mb-2 text-slate-700">Tambah Pembayaran Baru</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div><Label className="!text-[10px]">Tanggal *</Label><Input data-testid="mp-date" type="date" value={newPay.payment_date} onChange={(e) => setNewPay({...newPay, payment_date: e.target.value})}/></div>
+                <div><Label className="!text-[10px]">Nominal (IDR) *</Label><Input data-testid="mp-amount" type="number" value={newPay.amount} onChange={(e) => setNewPay({...newPay, amount: e.target.value})} placeholder="0"/></div>
+                <div><Label className="!text-[10px]">Metode</Label>
+                  <select data-testid="mp-method" value={newPay.payment_method} onChange={(e) => setNewPay({...newPay, payment_method: e.target.value})} className="w-full px-2 py-2 border border-slate-300 rounded text-sm">
+                    <option>Transfer</option><option>Cash</option><option>Cek</option><option>Giro</option><option>Lainnya</option>
+                  </select>
+                </div>
+                <div><Label className="!text-[10px]">Ref/No. Bukti</Label><Input data-testid="mp-ref" value={newPay.reference_no} onChange={(e) => setNewPay({...newPay, reference_no: e.target.value})}/></div>
+              </div>
+              <div className="mt-2"><Label className="!text-[10px]">Catatan</Label><Input data-testid="mp-notes" value={newPay.notes} onChange={(e) => setNewPay({...newPay, notes: e.target.value})}/></div>
+              <div className="mt-2 text-right">
+                <Button data-testid="mp-add-btn" onClick={addPayment}><Plus size={14}/> Tambah Pembayaran</Button>
+              </div>
+            </div>
+
+            <div className="text-xs font-bold mb-2 text-slate-700">Riwayat Pembayaran ({(payments.receipts || []).length})</div>
+            <Table>
+              <thead><tr><Th>Tanggal</Th><Th className="text-right">Nominal</Th><Th>Metode</Th><Th>Ref</Th><Th>Catatan</Th><Th></Th></tr></thead>
+              <tbody>
+                {(payments.receipts || []).map((p) => (
+                  <tr key={p.id}>
+                    <Td className="text-xs font-mono">{fmtDate(p.payment_date)}</Td>
+                    <Td className="text-right font-mono font-semibold">{fmtIDR(p.amount)}</Td>
+                    <Td className="text-xs">{p.payment_method}</Td>
+                    <Td className="text-xs font-mono">{p.reference_no || "-"}</Td>
+                    <Td className="text-xs text-slate-600">{p.notes || "-"}</Td>
+                    <Td className="text-right">
+                      <button data-testid={`mp-del-${p.id}`} onClick={() => delPayment(p.id)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Trash2 size={12}/></button>
+                    </Td>
+                  </tr>
+                ))}
+                {(payments.receipts || []).length === 0 && <tr><Td colSpan={6} className="text-center text-xs text-slate-400 py-6">Belum ada pembayaran.</Td></tr>}
+              </tbody>
+            </Table>
+
+            <div className="flex justify-end pt-3 mt-3 border-t">
+              <Button variant="secondary" onClick={() => setMultiAwb(null)}>Tutup</Button>
             </div>
           </Card>
         </div>

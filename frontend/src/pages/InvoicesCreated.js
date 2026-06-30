@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save, BadgeDollarSign, Plus, Trash2 } from "lucide-react";
+import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -27,35 +27,9 @@ export default function InvoicesCreated() {
   const [invNoFile, setInvNoFile] = useState(null);
   const [invNoImporting, setInvNoImporting] = useState(false);
   const [invNoResult, setInvNoResult] = useState(null);
-  // Multi-receiver payment modal
-  const [paymentInv, setPaymentInv] = useState(null);
-  const [payments, setPayments] = useState({ receipts: [], grand_total: 0, total_paid: 0, remaining: 0 });
-  const [newPay, setNewPay] = useState({ amount: "", payment_date: new Date().toISOString().slice(0,10), payment_method: "Transfer", reference_no: "", notes: "" });
-  useEffect(() => {
-    if (paymentInv?.awb_id) {
-      api.get(`/orders/${paymentInv.awb_id}/payments`).then((r) => setPayments(r.data));
-    }
-  }, [paymentInv]);
-  const addPayment = async () => {
-    if (!newPay.amount || parseFloat(newPay.amount) <= 0) { toast.error("Amount harus > 0"); return; }
-    try {
-      await api.post(`/orders/${paymentInv.awb_id}/payments`, { ...newPay, amount: parseFloat(newPay.amount) });
-      toast.success("Pembayaran ditambahkan");
-      const r = await api.get(`/orders/${paymentInv.awb_id}/payments`);
-      setPayments(r.data);
-      setNewPay({ amount: "", payment_date: new Date().toISOString().slice(0,10), payment_method: "Transfer", reference_no: "", notes: "" });
-      load();  // refresh invoice list
-    } catch (e) { toast.error(errMsg(e)); }
-  };
-  const delPayment = async (rid) => {
-    if (!window.confirm("Hapus pembayaran ini?")) return;
-    try {
-      await api.delete(`/payment-receipts/${rid}`);
-      const r = await api.get(`/orders/${paymentInv.awb_id}/payments`);
-      setPayments(r.data);
-      load();
-    } catch (e) { toast.error(errMsg(e)); }
-  };
+  // Cancel confirmation modal
+  const [cancelInv, setCancelInv] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
 
 
   const COMPANY_OPTIONS = ["PT. Abirama Mitra Pradana", "PT. Abirama Mitra Pratama"];
@@ -133,20 +107,20 @@ export default function InvoicesCreated() {
     else setSelected(new Set(filtered.map((i) => i.id)));
   };
 
-  const cancelInvoice = async (inv) => {
-    if (!window.confirm(
-      `PERINGATAN: Membatalkan invoice ${inv.invoice_number}\n\n`+
-      `Efek:\n`+
-      `• AWB ${(inv.awb_numbers || [inv.awb_number]).join(", ")} kembali ke status RECONCILED (siap dibuat invoice ulang)\n`+
-      `• Jurnal Piutang & PPN dihapus (akunting dibalik)\n`+
-      `• Tidak bisa dilakukan jika sudah ada pembayaran (Paid)\n\n`+
-      `Lanjutkan?`
-    )) return;
+  const cancelInvoice = (inv) => {
+    setCancelInv(inv);
+  };
+
+  const confirmCancel = async () => {
+    if (!cancelInv) return;
+    setCancelling(true);
     try {
-      const r = await api.post(`/invoices/${inv.id}/cancel`);
+      const r = await api.post(`/invoices/${cancelInv.id}/cancel`);
       toast.success(`Invoice ${r.data.invoice_number} dibatalkan. ${r.data.awbs_reverted.length} AWB → Reconciled. ${r.data.journals_deleted} jurnal dihapus.`);
+      setCancelInv(null);
       load();
     } catch (e) { toast.error(errMsg(e)); }
+    finally { setCancelling(false); }
   };
 
   const handlePrint = async (inv) => {
@@ -378,14 +352,9 @@ export default function InvoicesCreated() {
                       <Printer size={14}/> {i.print_count > 0 ? `Cetak Ulang (${i.print_count}x)` : "Cetak"}
                     </Button>
                     {i.awb_status !== "Paid" && (
-                      <>
-                        <Button variant="secondary" data-testid={`payments-${i.id}`} onClick={() => setPaymentInv(i)} className="!bg-emerald-50 !text-emerald-700 hover:!bg-emerald-100 !border-emerald-200">
-                          <BadgeDollarSign size={14}/> Pembayaran
-                        </Button>
-                        <Button variant="secondary" data-testid={`cancel-invoice-${i.id}`} onClick={() => cancelInvoice(i)} className="!bg-rose-50 !text-rose-700 hover:!bg-rose-100 !border-rose-200">
-                          <X size={14}/> Cancel
-                        </Button>
-                      </>
+                      <Button variant="secondary" data-testid={`cancel-invoice-${i.id}`} onClick={() => cancelInvoice(i)} className="!bg-rose-50 !text-rose-700 hover:!bg-rose-100 !border-rose-200">
+                        <X size={14}/> Cancel
+                      </Button>
                     )}
                   </div>
                 </Td>
@@ -454,6 +423,18 @@ export default function InvoicesCreated() {
             </div>
 
             <div className="space-y-3">
+              <Button data-testid="download-invno-template-btn" variant="secondary" onClick={async () => {
+                try {
+                  const r = await api.get("/invoices/import-numbers-template", { responseType: "blob" });
+                  const url = window.URL.createObjectURL(new Blob([r.data]));
+                  const a = document.createElement("a"); a.href = url;
+                  a.download = "Template_Import_Invoice_Number.xlsx";
+                  document.body.appendChild(a); a.click(); a.remove();
+                  window.URL.revokeObjectURL(url);
+                  toast.success("Template terdownload");
+                } catch (e) { toast.error(errMsg(e)); }
+              }} className="w-full"><Download size={14}/> Download Template Excel</Button>
+
               <input
                 data-testid="inv-no-file-input"
                 type="file"
@@ -515,78 +496,41 @@ export default function InvoicesCreated() {
         </div>
       )}
 
-      {/* Multi-Receiver Payment Modal */}
-      {paymentInv && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-start justify-between mb-3">
-              <div>
-                <h3 className="font-heading font-bold text-xl flex items-center gap-2"><BadgeDollarSign size={20}/> Pembayaran AWB {payments.awb_number || paymentInv.awb_number}</h3>
-                <p className="text-xs text-slate-500 mt-1">Catat semua penerimaan pembayaran. AWB otomatis ber-status Paid saat total = grand_total.</p>
+      {/* Cancel Invoice Confirmation Modal */}
+      {cancelInv && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="cancel-invoice-modal">
+          <Card className="w-full max-w-md p-6">
+            <div className="flex items-start gap-3 mb-3">
+              <div className="h-10 w-10 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+                <X size={20}/>
               </div>
-              <button onClick={() => setPaymentInv(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 mb-3">
-              <div className="p-2 rounded bg-slate-50 border border-slate-200">
-                <div className="text-[10px] uppercase font-bold text-slate-500">Grand Total</div>
-                <div className="font-mono font-bold">{fmtIDR(payments.grand_total)}</div>
-              </div>
-              <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
-                <div className="text-[10px] uppercase font-bold text-emerald-700">Total Terbayar</div>
-                <div className="font-mono font-bold text-emerald-800">{fmtIDR(payments.total_paid)}</div>
-              </div>
-              <div className={`p-2 rounded border ${payments.is_fully_paid ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
-                <div className={`text-[10px] uppercase font-bold ${payments.is_fully_paid ? "text-emerald-700" : "text-amber-700"}`}>{payments.is_fully_paid ? "✓ LUNAS" : "Sisa"}</div>
-                <div className="font-mono font-bold">{payments.is_fully_paid ? "PAID" : fmtIDR(payments.remaining)}</div>
+              <div className="flex-1">
+                <h3 className="font-heading font-bold text-xl">Batalkan Invoice?</h3>
+                <p className="text-xs text-slate-500 mt-1">Aksi ini tidak dapat dibatalkan setelah konfirmasi.</p>
               </div>
             </div>
-
-            <div className="border border-slate-200 rounded p-3 mb-3 bg-slate-50">
-              <div className="text-xs font-bold mb-2 text-slate-700">Tambah Pembayaran Baru</div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div><Label className="!text-[10px]">Tanggal *</Label><Input type="date" value={newPay.payment_date} onChange={(e) => setNewPay({...newPay, payment_date: e.target.value})}/></div>
-                <div><Label className="!text-[10px]">Amount (IDR) *</Label><Input type="number" value={newPay.amount} onChange={(e) => setNewPay({...newPay, amount: e.target.value})} placeholder="0"/></div>
-                <div><Label className="!text-[10px]">Metode</Label>
-                  <select value={newPay.payment_method} onChange={(e) => setNewPay({...newPay, payment_method: e.target.value})} className="w-full px-2 py-2 border border-slate-300 rounded text-sm">
-                    <option>Transfer</option><option>Cash</option><option>Cek</option><option>Giro</option><option>Lainnya</option>
-                  </select>
-                </div>
-                <div><Label className="!text-[10px]">Ref/No. Bukti</Label><Input value={newPay.reference_no} onChange={(e) => setNewPay({...newPay, reference_no: e.target.value})}/></div>
-              </div>
-              <div className="mt-2"><Label className="!text-[10px]">Catatan</Label><Input value={newPay.notes} onChange={(e) => setNewPay({...newPay, notes: e.target.value})}/></div>
-              <div className="mt-2 text-right">
-                <Button data-testid="add-payment-btn" onClick={addPayment}><Plus size={14}/> Tambah Pembayaran</Button>
-              </div>
+            <div className="bg-rose-50 border border-rose-200 rounded p-3 text-xs space-y-1 mb-4">
+              <div><strong>Invoice:</strong> <span className="font-mono">{cancelInv.invoice_number}</span></div>
+              <div><strong>AWB:</strong> <span className="font-mono">{(cancelInv.awb_numbers || [cancelInv.awb_number]).join(", ")}</span></div>
+              <div><strong>Grand Total:</strong> {fmtIDR(cancelInv.grand_total)}</div>
             </div>
-
-            <div className="text-xs font-bold mb-2 text-slate-700">Riwayat Pembayaran ({(payments.receipts || []).length})</div>
-            <Table>
-              <thead><tr><Th>Tanggal</Th><Th className="text-right">Amount</Th><Th>Metode</Th><Th>Ref</Th><Th>Catatan</Th><Th></Th></tr></thead>
-              <tbody>
-                {(payments.receipts || []).map((p) => (
-                  <tr key={p.id}>
-                    <Td className="text-xs font-mono">{fmtDate(p.payment_date)}</Td>
-                    <Td className="text-right font-mono font-semibold">{fmtIDR(p.amount)}</Td>
-                    <Td className="text-xs">{p.payment_method}</Td>
-                    <Td className="text-xs font-mono">{p.reference_no || "-"}</Td>
-                    <Td className="text-xs text-slate-600">{p.notes || "-"}</Td>
-                    <Td className="text-right">
-                      <button onClick={() => delPayment(p.id)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Trash2 size={12}/></button>
-                    </Td>
-                  </tr>
-                ))}
-                {(payments.receipts || []).length === 0 && <tr><Td colSpan={6} className="text-center text-xs text-slate-400 py-6">Belum ada pembayaran.</Td></tr>}
-              </tbody>
-            </Table>
-
-            <div className="flex justify-end pt-3 mt-3 border-t">
-              <Button variant="secondary" onClick={() => setPaymentInv(null)}>Tutup</Button>
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-[11px] text-amber-900 mb-4">
+              <strong>Efek:</strong>
+              <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                <li>AWB kembali ke status <strong>RECONCILED</strong> (siap dibuat invoice ulang)</li>
+                <li>Jurnal Piutang &amp; PPN dihapus (akunting dibalik)</li>
+                <li>Tidak bisa dilakukan jika sudah ada pembayaran (Paid)</li>
+              </ul>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button variant="secondary" type="button" onClick={() => setCancelInv(null)} disabled={cancelling}>Batal</Button>
+              <Button data-testid="confirm-cancel-invoice-btn" onClick={confirmCancel} disabled={cancelling} className="!bg-rose-600 !text-white hover:!bg-rose-700 !border-rose-600">
+                <X size={14}/> {cancelling ? "Memproses..." : "Ya, Batalkan Invoice"}
+              </Button>
             </div>
           </Card>
         </div>
       )}
-
 
     </div>
   );

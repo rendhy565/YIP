@@ -12,7 +12,10 @@ const ROLE_BADGES = {
   finance: "bg-emerald-100 text-emerald-800 border-emerald-200",
 };
 
-const newForm = () => ({ username: "", password: "", full_name: "", role: "operation", permissions: [] });
+const ACTIONS = ["view", "create", "edit", "delete", "import", "export"];
+const ACTION_LABELS = { view: "Lihat", create: "Tambah", edit: "Edit", delete: "Hapus", import: "Import", export: "Export" };
+
+const newForm = () => ({ username: "", password: "", full_name: "", role: "operation", permissions: [], permission_actions: {} });
 
 export default function Users() {
   const { user: me } = useAuth();
@@ -30,19 +33,45 @@ export default function Users() {
     load();
   }, []);
 
-  const togglePerm = (key) => {
-    setForm((f) => ({
-      ...f,
-      permissions: f.permissions.includes(key)
-        ? f.permissions.filter((p) => p !== key)
-        : [...f.permissions, key],
-    }));
+  const toggleAction = (moduleKey, action) => {
+    setForm((f) => {
+      const cur = f.permission_actions?.[moduleKey]?.[action] || false;
+      const next = {
+        ...f.permission_actions,
+        [moduleKey]: { ...(f.permission_actions?.[moduleKey] || {}), [action]: !cur },
+      };
+      // Auto-sync: if any action enabled → ensure module is in permissions list
+      const anyOn = ACTIONS.some((a) => next[moduleKey]?.[a]);
+      const perms = anyOn
+        ? (f.permissions.includes(moduleKey) ? f.permissions : [...f.permissions, moduleKey])
+        : f.permissions.filter((p) => p !== moduleKey);
+      return { ...f, permission_actions: next, permissions: perms };
+    });
+  };
+
+  const toggleAllActionsForModule = (moduleKey, val) => {
+    setForm((f) => {
+      const obj = {};
+      ACTIONS.forEach((a) => { obj[a] = val; });
+      const next = { ...f.permission_actions, [moduleKey]: obj };
+      const perms = val
+        ? (f.permissions.includes(moduleKey) ? f.permissions : [...f.permissions, moduleKey])
+        : f.permissions.filter((p) => p !== moduleKey);
+      return { ...f, permission_actions: next, permissions: perms };
+    });
   };
 
   const applyRoleDefaults = (role) => {
     const def = modules.filter((m) => m.default_roles.includes(role) || role === "administrator").map((m) => m.key);
     const all = role === "administrator" ? modules.map((m) => m.key) : def;
-    setForm((f) => ({ ...f, role, permissions: all }));
+    // For administrator: all actions ON for all modules. For other roles: view only for allowed modules.
+    const pa = {};
+    if (role === "administrator") {
+      modules.forEach((m) => { pa[m.key] = Object.fromEntries(ACTIONS.map((a) => [a, true])); });
+    } else {
+      all.forEach((k) => { pa[k] = { view: true, create: false, edit: false, delete: false, import: false, export: false }; });
+    }
+    setForm((f) => ({ ...f, role, permissions: all, permission_actions: pa }));
   };
 
   const submitCreate = async (e) => {
@@ -61,6 +90,7 @@ export default function Users() {
         full_name: form.full_name,
         role: form.role,
         permissions: form.permissions,
+        permission_actions: form.permission_actions,
       });
       toast.success("User diperbarui");
       setOpenEdit(null); load();
@@ -146,7 +176,7 @@ export default function Users() {
                   <button
                     data-testid={`edit-user-${u.id}`}
                     title="Edit"
-                    onClick={() => { setForm({ username: u.username, password: "", full_name: u.full_name || "", role: u.role, permissions: u.permissions || [] }); setOpenEdit(u); }}
+                    onClick={() => { setForm({ username: u.username, password: "", full_name: u.full_name || "", role: u.role, permissions: u.permissions || [], permission_actions: u.permission_actions || {} }); setOpenEdit(u); }}
                     className="p-1.5 rounded hover:bg-slate-100 text-slate-600"
                   ><Pencil size={14}/></button>
                   <button
@@ -174,7 +204,7 @@ export default function Users() {
       {(openCreate || openEdit) && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 overflow-y-auto">
           <div className="min-h-full flex items-start justify-center p-4 py-8">
-            <Card className="w-full max-w-2xl flex flex-col max-h-[calc(100vh-4rem)]">
+            <Card className="w-full max-w-4xl flex flex-col max-h-[calc(100vh-4rem)]">
               <div className="flex items-start justify-between p-6 pb-3 border-b border-slate-200 shrink-0">
                 <h3 className="font-heading font-bold text-xl">{openCreate ? "Tambah User Baru" : `Edit User: ${openEdit?.username}`}</h3>
                 <button onClick={() => { setOpenCreate(false); setOpenEdit(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
@@ -210,29 +240,61 @@ export default function Users() {
 
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <Label>Permission Modul</Label>
+                  <Label>Permission Detail (per-Aksi per-Modul)</Label>
                   <button type="button" onClick={() => applyRoleDefaults(form.role)} className="text-[11px] font-bold uppercase tracking-wider text-blue-700 hover:underline">
                     Reset ke Default Role
                   </button>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 border border-slate-200 rounded p-3 bg-slate-50">
-                  {modules.map((m) => (
-                    <label key={m.key} className="flex items-center gap-2 p-2 rounded hover:bg-white cursor-pointer">
-                      <input
-                        type="checkbox"
-                        data-testid={`perm-${m.key}`}
-                        checked={form.permissions.includes(m.key)}
-                        onChange={() => togglePerm(m.key)}
-                        className="rounded border-slate-400"
-                      />
-                      <div className="flex-1">
-                        <div className="text-sm font-semibold text-slate-800">{m.label}</div>
-                        <div className="text-[10px] text-slate-500 font-mono">{m.key}</div>
-                      </div>
-                    </label>
-                  ))}
+                <div className="border border-slate-200 rounded overflow-x-auto bg-white">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
+                      <tr>
+                        <th className="text-left px-2 py-2 font-bold text-[10px] uppercase text-slate-600">Modul</th>
+                        {ACTIONS.map((a) => (
+                          <th key={a} className="text-center px-1 py-2 font-bold text-[10px] uppercase text-slate-600" title={ACTION_LABELS[a]}>{a}</th>
+                        ))}
+                        <th className="text-center px-1 py-2 font-bold text-[10px] uppercase text-slate-600">All</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {modules.map((m) => {
+                        const acts = form.permission_actions?.[m.key] || {};
+                        const allOn = ACTIONS.every((a) => acts[a]);
+                        return (
+                          <tr key={m.key} className="border-b border-slate-100 hover:bg-slate-50/50">
+                            <td className="px-2 py-1.5">
+                              <div className="font-semibold text-slate-800">{m.label}</div>
+                              <div className="text-[9px] text-slate-400 font-mono">{m.key}</div>
+                            </td>
+                            {ACTIONS.map((a) => {
+                              const on = !!acts[a];
+                              return (
+                                <td key={a} className="text-center px-1 py-1.5">
+                                  <input
+                                    type="checkbox"
+                                    data-testid={`perm-${m.key}-${a}`}
+                                    checked={on}
+                                    onChange={() => toggleAction(m.key, a)}
+                                    className="rounded border-slate-400 h-4 w-4 cursor-pointer"
+                                  />
+                                </td>
+                              );
+                            })}
+                            <td className="text-center px-1 py-1.5">
+                              <button type="button" onClick={() => toggleAllActionsForModule(m.key, !allOn)} className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${allOn ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                                {allOn ? "OFF" : "ON"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-                <div className="text-[11px] text-slate-500 mt-2">{form.permissions.length} dari {modules.length} modul aktif</div>
+                <div className="text-[11px] text-slate-500 mt-2">
+                  {Object.entries(form.permission_actions || {}).filter(([, v]) => Object.values(v || {}).some(Boolean)).length} dari {modules.length} modul aktif
+                  · {ACTIONS.length} aksi tersedia per modul: <span className="font-mono">{ACTIONS.join(", ")}</span>
+                </div>
               </div>
               </div>
 

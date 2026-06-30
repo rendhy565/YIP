@@ -176,6 +176,7 @@ class UserOut(BaseModel):
     role: str
     full_name: Optional[str] = None
     permissions: List[str] = []
+    permission_actions: Optional[dict] = None
     active: bool = True
 
 class UserCreateIn(BaseModel):
@@ -184,11 +185,13 @@ class UserCreateIn(BaseModel):
     full_name: Optional[str] = None
     role: str  # administrator | operation | finance
     permissions: Optional[List[str]] = None  # if None → use default_permissions(role)
+    permission_actions: Optional[dict] = None  # {module_key: {view,create,edit,delete,import,export: bool}}
 
 class UserUpdateIn(BaseModel):
     full_name: Optional[str] = None
     role: Optional[str] = None
     permissions: Optional[List[str]] = None
+    permission_actions: Optional[dict] = None
     active: Optional[bool] = None
 
 class PasswordResetIn(BaseModel):
@@ -1023,6 +1026,7 @@ async def login(data: LoginIn):
             "role": user["role"],
             "full_name": user.get("full_name"),
             "permissions": perms,
+            "permission_actions": user.get("permission_actions") or {},
             "active": user.get("active", True),
         },
     }
@@ -1036,6 +1040,7 @@ async def me(user: dict = Depends(get_current_user)):
         role=user["role"],
         full_name=user.get("full_name"),
         permissions=perms,
+        permission_actions=user.get("permission_actions") or None,
         active=user.get("active", True),
     )
 
@@ -3152,12 +3157,20 @@ async def create_user(data: UserCreateIn, user: dict = Depends(require_role("adm
     invalid = [p for p in perms if p not in MODULE_KEYS]
     if invalid:
         raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid)}")
+    # Normalize permission_actions: only allow valid modules + actions
+    pa = {}
+    if data.permission_actions:
+        for mk, acts in data.permission_actions.items():
+            if mk not in MODULE_KEYS or not isinstance(acts, dict):
+                continue
+            pa[mk] = {a: bool(acts.get(a, False)) for a in ("view", "create", "edit", "delete", "import", "export")}
     doc = {
         "username": uname,
         "password_hash": hash_password(data.password),
         "role": data.role,
         "full_name": data.full_name or uname,
         "permissions": perms,
+        "permission_actions": pa,
         "active": True,
         "created_at": datetime.now(timezone.utc),
         "created_by": user["id"],
@@ -3190,6 +3203,13 @@ async def update_user(uid: str, data: UserUpdateIn, user: dict = Depends(require
         if invalid:
             raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid)}")
         updates["permissions"] = data.permissions
+    if data.permission_actions is not None:
+        pa = {}
+        for mk, acts in (data.permission_actions or {}).items():
+            if mk not in MODULE_KEYS or not isinstance(acts, dict):
+                continue
+            pa[mk] = {a: bool(acts.get(a, False)) for a in ("view", "create", "edit", "delete", "import", "export")}
+        updates["permission_actions"] = pa
     if data.active is not None:
         if target.get("role") == "administrator" and data.active is False:
             admin_count = await db.users.count_documents({"role": "administrator", "active": {"$ne": False}})
@@ -7575,6 +7595,65 @@ async def export_open_awb_excel(
 # ===========================================================================
 # Item #3: Import Invoice Number → mark AWB as Invoiced / Paid
 # ===========================================================================
+@app.get("/api/invoices/import-numbers-template")
+async def import_invoice_numbers_template(user: dict = Depends(require_role("finance", "operation", "administrator"))):
+    """Download Excel template untuk Import Invoice Number.
+    Kolom: AWB Number | Invoice Number | Status (Invoiced/Paid) | Paid Date (YYYY-MM-DD, opsional)."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Import Invoice"
+    headers = ["AWB Number", "Invoice Number", "Status", "Paid Date"]
+    from openpyxl.styles import Font as _F, PatternFill as _P, Alignment as _A
+    bold = _F(bold=True, color="FFFFFF")
+    fill = _P("solid", fgColor="1E40AF")
+    center = _A(horizontal="center", vertical="center")
+    for i, h in enumerate(headers, start=1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font = bold; c.fill = fill; c.alignment = center
+    # Sample rows
+    samples = [
+        ("AWB-202606-0001", "INV-EXT/2026/0001", "Invoiced", ""),
+        ("AWB-202606-0002", "INV-EXT/2026/0002", "Paid", "2026-06-30"),
+    ]
+    for r, row in enumerate(samples, start=2):
+        for c, v in enumerate(row, start=1):
+            ws.cell(row=r, column=c, value=v)
+    # Column widths
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 26
+    ws.column_dimensions["C"].width = 14
+    ws.column_dimensions["D"].width = 16
+    # Notes sheet
+    ws2 = wb.create_sheet("Petunjuk")
+    notes = [
+        ("Petunjuk Import Invoice Number", ""),
+        ("", ""),
+        ("Kolom A: AWB Number", "Wajib. Case-insensitive. Harus sudah ada di sistem."),
+        ("Kolom B: Invoice Number", "Opsional. Nomor invoice eksternal dari customer."),
+        ("Kolom C: Status", "Invoiced ATAU Paid (case-insensitive)."),
+        ("Kolom D: Paid Date", "Opsional. Format YYYY-MM-DD. Wajib jika Status=Paid."),
+        ("", ""),
+        ("Cara kerja:", ""),
+        ("1. Status=Invoiced", "AWB di-mark Invoiced + simpan Invoice Number."),
+        ("2. Status=Paid", "AWB di-mark Paid + tanggal bayar. Otomatis Invoiced juga."),
+        ("3. Matching gagal", "Baris di-skip, error dilaporkan di hasil import."),
+    ]
+    for r, (a, b) in enumerate(notes, start=1):
+        ws2.cell(row=r, column=1, value=a)
+        ws2.cell(row=r, column=2, value=b)
+    ws2["A1"].font = _F(bold=True, size=14)
+    ws2.column_dimensions["A"].width = 30
+    ws2.column_dimensions["B"].width = 60
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    return StreamingResponse(
+        out,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=Template_Import_Invoice_Number.xlsx"},
+    )
+
 @app.post("/api/invoices/import-numbers")
 async def import_invoice_numbers(
     file: UploadFile = File(...),

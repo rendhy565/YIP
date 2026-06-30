@@ -1,0 +1,34 @@
+{
+  "summary": "Iteration 20 verification: BUG FIX (Cancel printed invoice) + Item #3 template + Item #5 permission_actions matrix + Item #8 Multi-Bayar moved to Payments + sidebar RBAC cleanup + regressions. Backend: 11/11 pytest pass. Frontend: all critical UI flows verified including the P0 bug fix.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "InvoicesCreated Import modal", "issues": ["Escape key still does NOT close the Import Invoice No modal (carried over from iter19). Click 'Tutup' button to dismiss. Low priority."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration20_features.py",
+    "/app/test_reports/pytest/iteration20_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py grew to 8347 lines (was 8089). The recommendation from iter19 still stands: split into modules (payments.py, rbac.py, recurring.py, activity.py, notifications.py, invoices.py).",
+    "POST /api/invoices/{id}/mark-printed wraps post_journal in `except HTTPException: pass` (line 1965-1966) — silently swallows AR journal posting errors. Should at least log_activity the failure so finance can audit unposted AR.",
+    "Cancel invoice endpoint correctly refuses when any AWB is Paid (line 1981-1983) but does NOT log_activity the cancellation. Adding an audit trail entry for invoice cancellation would help compliance.",
+    "InvoiceCreateIn (line 1706) only accepts a single `awb_id`. The multi-AWB schema (`awb_ids`) is set internally to [awb_id] only. If front-end starts sending awb_ids list for multi-AWB invoices, it would 422. Consider supporting both shapes or rename to make singular intent explicit.",
+    "POST /api/invoices/import-numbers-template has no caching headers — every download regenerates the workbook in-memory. Low impact but consider adding ETag/Cache-Control: max-age=3600 since the template is static.",
+    "Frontend InvoicesCreated.js line 501 — cancel-invoice-modal uses raw inline div with fixed inset-0 (custom backdrop). Works but is inconsistent with other modals (Multi-Bayar uses a different style). Consider extracting a shared <ConfirmDialog> component to enforce visual consistency and unify Escape/click-outside-to-close behavior."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration20_features.py"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (all critical flows verified)"},
+  "test_credentials": "admin/admin123, finance/finance123, operation/operation123",
+  "seed_data_creation": "Tests seed a fresh invoice from a Reconciled AWB (uses AWB-202606-0054 by default), mark it printed, then cancel it — all within tests. Net residue: zero new invoices (cancel deletes the doc). The TEST_permmatrix_* user is created and deleted within TestPermissionActions. The seeded INV-202606-0001 used during interactive UI testing was also cancelled cleanly. Database state: no Invoiced AWBs remain; ~10 Reconciled AWBs ready for future invoice tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "BUG FIX VERIFIED end-to-end: clicking [data-testid=cancel-invoice-{id}] opens the custom Card-based modal [data-testid=cancel-invoice-modal] (NOT window.confirm). Confirm button POSTs to /api/invoices/{id}/cancel → 200 with {ok:true, awbs_reverted:[...], journals_deleted:N}, AWB reverts to Reconciled, invoice doc deleted, toast shows. Screenshot saved at /root/.screenshots/cancel_modal_open.png. Item #3 Template downloads as 'Template_Import_Invoice_Number.xlsx' with sheets [Import Invoice, Petunjuk] and headers A1=AWB Number, B1=Invoice Number, C1=Status, D1=Paid Date. Item #5 Permission matrix renders correctly with 6 columns x N modules — all data-testid=perm-{module_key}-{action} checkboxes present (e.g., perm-orders_input-view, perm-customers-edit, perm-customers-delete). Zero old-style perm-{module} testids found. Item #8 Multi-Bayar button visible on Payments page next to Mark Paid; modal shows Grand Total / Total Terbayar / Sisa cards + form (Tanggal, Nominal, Metode, Ref/No. Bukti, Catatan) + history table. /arc/invoices/created has zero payments-* buttons (Pembayaran removed). Sidebar has no RBAC menu entry. /api/auth/me returns permission_actions field. POST + PUT /api/users persist permission_actions correctly. Item #9 FPK export still reachable (POST /api/invoices/export-fpk returns 400 with empty list as expected). Activity Log + Recurring Expenses endpoints still 200.",
+  "rca of the issue": "N/A — no bugs found. Original P0 issue (Cancel button not working due to window.confirm() suppression) is fully resolved by the custom Card modal. Verified by Playwright: clicking the Cancel button opens [data-testid=cancel-invoice-modal] with the warning, clicking [data-testid=confirm-cancel-invoice-btn] triggers POST /api/invoices/{id}/cancel which returns 200 and the invoice is removed from the list with a success toast."
+}
