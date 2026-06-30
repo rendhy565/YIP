@@ -1,6 +1,19 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-06-30) — Iteration 21: BUG FIX Edit AWB Selling (Charter mode)
+**P0 BUG**: User report "mana sudah bisa ubah selling?" — Modal Edit AWB di `/arc/recap` hanya punya Tarif/KG × Qty(KG), tidak bisa edit selling untuk AWB charter (qty=0, tariff=0, tapi total_tariff>0). 
+**FIX**: Tambah toggle **Per-Kg ↔ Charter (Lump Sum)** di modal Edit AWB (`Recap.js`):
+- **Auto-detect** mode saat open: jika `is_charter` true ATAU (`total_tariff>0` && `qty_kg==0`) → default Charter mode dengan field "Selling Total (IDR)" pre-filled.
+- **Per-Kg mode**: Tarif/KG × Qty(KG) × PPN%
+- **Charter mode**: Selling Total (IDR) × PPN%
+- Live auto-compute "TOTAL SELLING + PPN" di kanan-atas section selling
+- Note: "PPN dihitung dari Selling saja. Addons (asuransi, polis, SPSI, forklift) TIDAK kena PPN"
+- Backend `PATCH /api/orders/{id}/extended` sudah support `is_charter` + `charter_amount` sejak iterasi sebelumnya; sekarang frontend mengisi keduanya dengan benar.
+- Reconciled AWB: auto re-post journal `sales_accrued` setelah edit.
+
+**Testing**: `/app/test_reports/iteration_21.json` → 6/6 backend pytest + 11/11 regression iter20 + Playwright UI verified (per-kg save, charter save, toggle, live compute, auto-detect on re-open). Zero action items.
+
 ## Latest (2026-06-30) — Iteration 20: BUG FIX + 4 user-requested adjustments
 **P0 BUG FIX**: Tombol Cancel invoice tercetak tidak berfungsi → root cause: `window.confirm()` di-suppress browser. Diganti dengan **custom Card modal** `[data-testid=cancel-invoice-modal]` di `/app/frontend/src/pages/InvoicesCreated.js`.
 
