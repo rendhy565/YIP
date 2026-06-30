@@ -217,6 +217,20 @@ export default function InvoicesCreated() {
     } catch (e) { toast.error(errMsg(e)); }
   };
 
+  const exportFpk = async () => {
+    const ids = targetIds();
+    if (ids.length === 0) { toast.error("Tidak ada invoice"); return; }
+    try {
+      const r = await api.post("/invoices/export-fpk", { invoice_ids: ids }, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement("a"); a.href = url;
+      a.download = `FPK_EMR_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success(`FPK (${ids.length} faktur) ter-export`);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   const bulkPrint = () => {
     const ids = targetIds();
     if (ids.length === 0) { toast.error("Tidak ada invoice"); return; }
@@ -288,6 +302,9 @@ export default function InvoicesCreated() {
             </Button>
             <Button data-testid="export-report-ar-from-invoices-btn" variant="secondary" onClick={exportReportAr}>
               <FileSpreadsheet size={14}/> Export REPORT AR (filter)
+            </Button>
+            <Button data-testid="export-fpk-btn" variant="secondary" onClick={exportFpk} className="!bg-amber-50 !text-amber-900 hover:!bg-amber-100 !border-amber-300">
+              <FileSpreadsheet size={14}/> Export FPK (Faktur Pajak)
             </Button>
             <Button data-testid="bulk-print-pdf-btn" variant="secondary" onClick={bulkPrint}>
               <Printer size={14}/> Print to PDF ({selected.size || filtered.length})

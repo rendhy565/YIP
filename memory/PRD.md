@@ -1,6 +1,26 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-06-30) — Item #9 COMPLETE: Export FPK (Faktur Pajak Excel)
+- **Endpoint**: `POST /api/invoices/export-fpk` body `{invoice_ids: [...]}` → returns xlsx
+- **Template**: `/app/backend/templates/template_fpk.xlsx` (user-provided "TEMPLATE XML FPK EMR 25 Juni 26.xlsx")
+- **Output PERSIS sama** dengan template:
+  - 4 sheets utuh: Faktur, DetailFaktur, REF (386 baris kode referensi), Keterangan (instruksi DJP)
+  - 11 threaded comments di header Faktur preserved
+  - Column widths preserved (B=16.14, F=29, O=33.42, P=70.42, dll)
+  - Data validation (dropdown "Normal" di C4:C106) preserved
+  - Cell number formats (`@`, `0.00`, `mm-dd-yy`) preserved
+- **Yang dinamis per invoice** (sesuai permintaan user):
+  - **B (Tanggal Faktur)**: `DD/MM/YYYY` dari `invoice_date`
+  - **H (Referensi)**: `invoice_number` (atau external_invoice_number jika di-import)
+  - K, L, O, P, R: dari customer (NPWP 16-digit + 6 digit cabang = ID TKU 22 digit)
+  - F, J (DPP): dari `total_tariff` aggregated multi-AWB
+  - Formula DPP (`=G*F-H`) dan PPN (`=1.1%*J`) auto-applied per row
+- **Konstanta tetap**: Jenis Faktur=Normal, Kode Transaksi=05, Negara=IDN, Tarif PPN=12, Jasa=B/000000/JASA PENGIRIMAN BARANG/UM.0033
+- **Seller NPWP**: dari `settings.npwp_{company_name}` atau `settings.company_npwp` (configurable via Settings page)
+- **UI**: Tombol "Export FPK (Faktur Pajak)" warna amber di `/arc/invoices/created` (selain Export REPORT AR & Print to PDF)
+- **Tested**: 200 OK, file 31KB, struktur diverifikasi via openpyxl — semua format dipertahankan.
+
 ## Latest (2026-06-30) — Batch 2 of 9-item enhancement COMPLETE — 100% tested
 1. **Import Invoice Number** (`POST /api/invoices/import-numbers`) — upload Excel (cols: AWB Number, Invoice Number, Status, Paid Date) → marks AWB as Invoiced/Paid. UI button on `/arc/invoices/created`.
 2. **Multi-Receiver Payment per AWB** — `GET/POST /api/orders/{oid}/payments`, `DELETE /api/payment-receipts/{rid}`. Multiple partial payments per AWB; auto-marks Paid when total_paid≥grand_total; reverts to Invoiced on receipt delete. UI modal accessible via "Pembayaran" button.

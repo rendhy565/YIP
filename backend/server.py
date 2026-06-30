@@ -8080,3 +8080,188 @@ async def my_permissions(user: dict = Depends(get_current_user)):
     perms = {d["module"]: {a: bool(d.get(a, False)) for a in RBAC_ACTIONS} for d in docs}
     return {"role": user["role"], "is_admin": False, "permissions": perms}
 
+
+# ===========================================================================
+# Item #9: Export Faktur Pajak Keluaran (FPK) — Excel format matching DJP Coretax template
+# ===========================================================================
+import shutil
+from pathlib import Path as _Path
+
+FPK_TEMPLATE_PATH = _Path(__file__).parent / "templates" / "template_fpk.xlsx"
+
+def _clean_npwp(npwp: Optional[str]) -> str:
+    """Strip dots, dashes, spaces from NPWP. Returns 16-digit string or empty."""
+    if not npwp:
+        return ""
+    cleaned = re.sub(r"[^0-9]", "", str(npwp))
+    # NPWP 15-digit legacy → prepend 0 to make 16-digit (Coretax standard since 2024)
+    if len(cleaned) == 15:
+        cleaned = "0" + cleaned
+    return cleaned[:16].ljust(16, "0") if cleaned else ""
+
+def _id_tku(npwp_16: str) -> str:
+    """ID TKU = NPWP 16-digit + cabang 6-digit (default 000000). Returns 22-digit string."""
+    if not npwp_16:
+        return ""
+    return (npwp_16 + "000000")[:22]
+
+class FpkExportIn(BaseModel):
+    invoice_ids: List[str]
+
+@app.post("/api/invoices/export-fpk")
+async def export_faktur_pajak(data: FpkExportIn, user: dict = Depends(require_role("finance", "operation", "administrator"))):
+    """Export invoices to DJP Coretax FPK XML upload template (.xlsx).
+    Layout PERSIS sama dengan TEMPLATE XML FPK — yang berubah hanya Tanggal Faktur, Referensi (no invoice),
+    data pembeli (NPWP, nama, alamat), dan nilai per baris (Harga Satuan & DPP Nilai Lain).
+    Sheet structure: Faktur, DetailFaktur, REF, Keterangan (REF & Keterangan dipertahankan utuh).
+    """
+    if not data.invoice_ids:
+        raise HTTPException(400, "invoice_ids tidak boleh kosong")
+    if not FPK_TEMPLATE_PATH.exists():
+        raise HTTPException(500, f"Template FPK tidak ditemukan: {FPK_TEMPLATE_PATH}")
+
+    # --- Fetch invoices + AWBs + customers + settings ---
+    inv_oids = [_oid(i) for i in data.invoice_ids]
+    invs = await db.invoices.find({"_id": {"$in": inv_oids}}).to_list(1000)
+    if not invs:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    # Order invoices by request order
+    inv_by_id = {str(i["_id"]): i for i in invs}
+    ordered_invs = [inv_by_id[iid] for iid in data.invoice_ids if iid in inv_by_id]
+
+    # Pre-fetch AWBs and customers
+    all_awb_ids = set()
+    for inv in ordered_invs:
+        if inv.get("awb_id"):
+            all_awb_ids.add(inv["awb_id"])
+        for x in inv.get("awb_ids") or []:
+            all_awb_ids.add(x)
+    amap = {a["_id"]: a for a in await db.awb_orders.find({"_id": {"$in": list(all_awb_ids)}}).to_list(5000)}
+    cust_ids = list({a.get("customer_id") for a in amap.values() if a.get("customer_id")})
+    cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": cust_ids}}).to_list(2000)}
+    settings = {s["key_name"]: s.get("key_value", "") for s in await db.settings.find().to_list(2000)}
+
+    # --- Load template (copy bytes into memory) ---
+    with open(FPK_TEMPLATE_PATH, "rb") as f:
+        template_bytes = f.read()
+    wb = openpyxl.load_workbook(io.BytesIO(template_bytes), data_only=False, keep_vba=False)
+    ws_f = wb["Faktur"]
+    ws_d = wb["DetailFaktur"]
+
+    # --- Determine seller NPWP (penjual) from first invoice's company_name ---
+    first_inv = ordered_invs[0]
+    first_awb = amap.get(first_inv.get("awb_id")) or next(iter(amap.values()), {})
+    issuer_name = first_awb.get("company_name") or ""
+    seller_npwp = _clean_npwp(settings.get(f"npwp_{issuer_name}") or settings.get("company_npwp", ""))
+    # If user hasn't configured NPWP, keep the template's default (don't overwrite C1)
+    if seller_npwp:
+        ws_f["C1"] = seller_npwp
+    seller_tku = _id_tku(seller_npwp) if seller_npwp else (ws_f["J4"].value or "")
+
+    # --- Clear existing sample data rows (Faktur 4-71, DetailFaktur 2-69) BUT preserve cell styles ---
+    FAKTUR_TEMPLATE_LAST = 71
+    DETAIL_TEMPLATE_LAST = 69
+    FAKTUR_DATA_COLS = list(range(1, 19))  # A-R
+    DETAIL_DATA_COLS = list(range(1, 15))  # A-N
+    for r in range(4, FAKTUR_TEMPLATE_LAST + 1):
+        for c in FAKTUR_DATA_COLS:
+            ws_f.cell(row=r, column=c).value = None
+    for r in range(2, DETAIL_TEMPLATE_LAST + 1):
+        for c in DETAIL_DATA_COLS:
+            ws_d.cell(row=r, column=c).value = None
+
+    # --- Fill data rows ---
+    # For invoices beyond row 71 (Faktur) / 69 (DetailFaktur), styling is auto-copied by openpyxl
+    # since we just set new cell values; openpyxl preserves number_format inheritance from prior rows.
+    for idx, inv in enumerate(ordered_invs):
+        baris = idx + 1
+        f_row = idx + 4      # Faktur starts row 4
+        d_row = idx + 2      # DetailFaktur starts row 2
+
+        # Resolve invoice details
+        awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+        awbs_for_inv = [amap[x] for x in awb_ids_list if x in amap]
+        primary = awbs_for_inv[0] if awbs_for_inv else {}
+        cust = cmap.get(primary.get("customer_id"), {}) if primary else {}
+
+        # Tanggal Faktur — DJP format DD/MM/YYYY (as text per Keterangan sheet)
+        inv_date = inv.get("invoice_date") or inv.get("created_at")
+        if isinstance(inv_date, datetime):
+            tgl_str = inv_date.strftime("%d/%m/%Y")
+        elif isinstance(inv_date, str) and inv_date:
+            try:
+                tgl_str = datetime.fromisoformat(inv_date.replace("Z", "+00:00")).strftime("%d/%m/%Y")
+            except Exception:
+                tgl_str = inv_date[:10]
+        else:
+            tgl_str = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+
+        # Customer details
+        cust_npwp = _clean_npwp(cust.get("npwp"))
+        cust_tku = _id_tku(cust_npwp) if cust_npwp else ""
+        cust_name = (cust.get("name") or "").upper()
+        cust_addr = cust.get("address") or ""
+        # Jenis ID Pembeli: TIN if 16-digit NPWP, else NIK
+        jenis_id = "TIN" if cust_npwp and len(cust_npwp) == 16 else ("NIK" if cust_npwp else "TIN")
+        if not cust_npwp:
+            cust_npwp = "0000000000000000"
+
+        # Invoice value — DPP = total selling (no addons, since addons not taxed)
+        # Use total_tariff (selling base before tax) summed across all AWBs of invoice
+        total_tariff = sum(float(a.get("total_tariff") or 0) for a in awbs_for_inv)
+        # If total_tariff is zero, fallback to grand_total - tax_amount
+        if total_tariff <= 0:
+            gt = sum(float(a.get("grand_total") or 0) for a in awbs_for_inv)
+            tax = sum(float(a.get("tax_amount") or 0) for a in awbs_for_inv)
+            total_tariff = max(0, gt - tax)
+
+        # === Faktur sheet ===
+        ws_f.cell(row=f_row, column=1).value = str(baris)                    # Baris (text)
+        ws_f.cell(row=f_row, column=2).value = tgl_str                        # Tanggal Faktur
+        ws_f.cell(row=f_row, column=3).value = "Normal"                       # Jenis Faktur
+        ws_f.cell(row=f_row, column=4).value = "05"                           # Kode Transaksi
+        # E: Keterangan Tambahan (only for 07/08) — empty
+        # F: Dokumen Pendukung — empty
+        # G: Period Dok Pendukung — empty
+        ws_f.cell(row=f_row, column=8).value = inv.get("invoice_number", "")  # Referensi
+        # I: Cap Fasilitas — empty
+        ws_f.cell(row=f_row, column=10).value = seller_tku                    # ID TKU Penjual
+        ws_f.cell(row=f_row, column=11).value = cust_npwp                     # NPWP/NIK Pembeli
+        ws_f.cell(row=f_row, column=12).value = jenis_id                      # Jenis ID Pembeli
+        ws_f.cell(row=f_row, column=13).value = "IDN"                         # Negara Pembeli
+        ws_f.cell(row=f_row, column=14).value = "-"                           # Nomor Dokumen Pembeli
+        ws_f.cell(row=f_row, column=15).value = cust_name                     # Nama Pembeli
+        ws_f.cell(row=f_row, column=16).value = cust_addr                     # Alamat Pembeli
+        # Q: Email Pembeli — empty (optional)
+        ws_f.cell(row=f_row, column=18).value = cust_tku or cust_npwp + "000000"  # ID TKU Pembeli
+
+        # === DetailFaktur sheet ===
+        ws_d.cell(row=d_row, column=1).value = baris                           # Baris (numeric)
+        ws_d.cell(row=d_row, column=2).value = "B"                             # Barang/Jasa = Jasa
+        ws_d.cell(row=d_row, column=3).value = "000000"                        # Kode
+        ws_d.cell(row=d_row, column=4).value = "JASA PENGIRIMAN BARANG"        # Nama
+        ws_d.cell(row=d_row, column=5).value = "UM.0033"                       # Satuan
+        ws_d.cell(row=d_row, column=6).value = float(total_tariff)             # Harga Satuan
+        ws_d.cell(row=d_row, column=7).value = 1                                # Jumlah
+        ws_d.cell(row=d_row, column=8).value = 0                                # Diskon
+        ws_d.cell(row=d_row, column=9).value = f"=G{d_row}*F{d_row}-H{d_row}"  # DPP formula
+        ws_d.cell(row=d_row, column=10).value = float(total_tariff)            # DPP Nilai Lain
+        ws_d.cell(row=d_row, column=11).value = 12                              # Tarif PPN
+        ws_d.cell(row=d_row, column=12).value = f"=1.1%*J{d_row}"              # PPN formula
+        ws_d.cell(row=d_row, column=13).value = 0                               # Tarif PPnBM
+        ws_d.cell(row=d_row, column=14).value = 0                               # PPnBM
+
+    # --- Save to bytes ---
+    out_buf = io.BytesIO()
+    wb.save(out_buf)
+    out_buf.seek(0)
+
+    await log_activity(user, "export", "invoice_fpk", None, f"Exported FPK Excel for {len(ordered_invs)} invoice(s)")
+
+    filename = f"FPK_EMR_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        out_buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
