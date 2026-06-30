@@ -476,6 +476,43 @@ async def journal_exists_for(reference_type: str, reference_id: str) -> bool:
     return bool(await db.journal_entries.find_one({"reference_type": reference_type, "reference_id": reference_id}))
 
 # ---------------------------------------------------------------------------
+# Activity Log helpers + Notifications (in-app)
+# ---------------------------------------------------------------------------
+async def log_activity(user: Optional[dict], action: str, target_type: str, target_id: Optional[str] = None, summary: str = "", details: Optional[dict] = None):
+    """Insert one activity log row. Non-blocking semantically (errors are swallowed)."""
+    try:
+        await db.activity_logs.insert_one({
+            "user_id": (user or {}).get("id"),
+            "user_name": (user or {}).get("username") or (user or {}).get("name"),
+            "user_role": (user or {}).get("role"),
+            "action": action,             # e.g. "create", "update", "delete", "import", "export"
+            "target_type": target_type,   # e.g. "awb_order", "invoice", "cost", "expense", "payment_receipt"
+            "target_id": target_id,
+            "summary": summary,
+            "details": details or {},
+            "timestamp": datetime.now(timezone.utc),
+        })
+    except Exception:
+        pass
+
+async def push_notification(user_id: Optional[str], title: str, message: str, level: str = "info", link: Optional[str] = None, broadcast: bool = False):
+    """Create an in-app notification. If broadcast=True, sends to all users."""
+    now = datetime.now(timezone.utc)
+    base = {
+        "title": title, "message": message, "level": level,
+        "link": link, "read": False, "created_at": now,
+    }
+    try:
+        if broadcast:
+            users = await db.users.find({}).to_list(500)
+            for u in users:
+                await db.notifications.insert_one({**base, "user_id": str(u["_id"])})
+        else:
+            await db.notifications.insert_one({**base, "user_id": user_id})
+    except Exception:
+        pass
+
+# ---------------------------------------------------------------------------
 # Expense Categories helpers
 # ---------------------------------------------------------------------------
 async def get_expense_category(name: str) -> Optional[dict]:
@@ -906,6 +943,62 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Activity Log middleware — auto-log all successful mutating requests
+@app.middleware("http")
+async def activity_log_middleware(request, call_next):
+    response = await call_next(request)
+    try:
+        method = request.method
+        if method in ("POST", "PUT", "PATCH", "DELETE") and 200 <= response.status_code < 300:
+            path = request.url.path
+            # Skip noisy/internal endpoints
+            skip_prefixes = ("/api/auth/", "/api/notifications/", "/api/activity-logs")
+            if not any(path.startswith(p) for p in skip_prefixes):
+                # Extract user from auth header
+                auth = request.headers.get("authorization", "")
+                user_info = {"id": None, "username": "anonymous", "role": ""}
+                if auth.startswith("Bearer "):
+                    try:
+                        from jose import jwt as _jwt
+                        payload = _jwt.decode(auth[7:], JWT_SECRET, algorithms=[JWT_ALG])
+                        uid = payload.get("sub")
+                        if uid:
+                            u = await db.users.find_one({"_id": _oid(uid)})
+                            if u:
+                                user_info = {"id": str(u["_id"]), "username": u.get("username"), "role": u.get("role")}
+                    except Exception:
+                        pass
+                # Derive target_type from path segments (after /api/)
+                parts = [p for p in path.split("/") if p and p != "api"]
+                target_type = parts[0] if parts else "unknown"
+                # Derive target_id when present (e.g. /api/orders/<id>/... → id)
+                target_id = None
+                if len(parts) >= 2 and len(parts[1]) == 24:
+                    target_id = parts[1]
+                action_map = {"POST": "create", "PUT": "update", "PATCH": "update", "DELETE": "delete"}
+                action = action_map.get(method, method.lower())
+                # Refine for known sub-paths
+                if "import" in path:
+                    action = "import"
+                elif "export" in path:
+                    action = "export"
+                await db.activity_logs.insert_one({
+                    "user_id": user_info["id"],
+                    "user_name": user_info["username"],
+                    "user_role": user_info["role"],
+                    "action": action,
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "summary": f"{method} {path}",
+                    "method": method,
+                    "path": path,
+                    "status_code": response.status_code,
+                    "timestamp": datetime.now(timezone.utc),
+                })
+    except Exception:
+        pass
+    return response
 
 # ---------------------------------------------------------------------------
 # Auth
@@ -7477,3 +7570,519 @@ async def export_open_awb_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+# ===========================================================================
+# Item #3: Import Invoice Number → mark AWB as Invoiced / Paid
+# ===========================================================================
+@app.post("/api/invoices/import-numbers")
+async def import_invoice_numbers(
+    file: UploadFile = File(...),
+    dry_run: bool = False,
+    user: dict = Depends(require_role("finance", "administrator")),
+):
+    """Import Excel with columns: Invoice Number, AWB Number, Status (Invoiced/Paid), Paid Date (optional YYYY-MM-DD).
+    - Matches AWB by awb_number (case-insensitive)
+    - Status=Invoiced → sets external_invoice_number, status=Invoiced, invoice_date=today (if absent)
+    - Status=Paid → sets paid_at, status=Paid. Also sets external_invoice_number if provided
+    - Idempotent: re-import same row produces no error, just no change
+    """
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    ws = wb.active
+
+    # Detect header row (look for "AWB" + "Invoice")
+    header_row_idx = None
+    col_idx = {}
+    for ridx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        if ridx > 10:
+            break
+        norm = [str(c).strip().lower() if c is not None else "" for c in row]
+        if any("awb" in c and "no" in c for c in norm) or any("awb number" in c for c in norm):
+            header_row_idx = ridx
+            for i, c in enumerate(norm):
+                if "awb" in c and ("number" in c or "no" in c) and "awb" not in col_idx:
+                    col_idx["awb"] = i
+                elif "invoice" in c and ("number" in c or "no" in c) and "inv" not in col_idx:
+                    col_idx["inv"] = i
+                elif c == "status":
+                    col_idx["status"] = i
+                elif "paid" in c and "date" in c:
+                    col_idx["paid_date"] = i
+            break
+    if not header_row_idx or "awb" not in col_idx:
+        raise HTTPException(400, "Header tidak terdeteksi. Pastikan ada kolom 'AWB Number' dan 'Invoice Number'.")
+
+    summary = {"marked_invoiced": 0, "marked_paid": 0, "skipped": 0, "errors": [], "samples": []}
+    now = datetime.now(timezone.utc)
+
+    for ridx, row in enumerate(ws.iter_rows(min_row=header_row_idx + 1, values_only=True), start=header_row_idx + 1):
+        if not row or all(v is None for v in row):
+            continue
+        awb_no = str(row[col_idx["awb"]] or "").strip()
+        inv_no = str(row[col_idx.get("inv")] or "").strip() if col_idx.get("inv") is not None else ""
+        status_v = str(row[col_idx.get("status")] or "").strip().lower() if col_idx.get("status") is not None else ""
+        paid_date_raw = row[col_idx.get("paid_date")] if col_idx.get("paid_date") is not None else None
+        if not awb_no:
+            continue
+        # Find AWB
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awb_no)}$", "$options": "i"}})
+        if not awb:
+            summary["errors"].append({"row": ridx, "message": f"AWB '{awb_no}' tidak ditemukan"})
+            continue
+        update_set: dict = {}
+        # Always update invoice number when provided
+        if inv_no:
+            update_set["external_invoice_number"] = inv_no
+        # Status logic
+        if "paid" in status_v or "lunas" in status_v:
+            # Parse paid date
+            paid_dt = None
+            if isinstance(paid_date_raw, datetime):
+                paid_dt = paid_date_raw if paid_date_raw.tzinfo else paid_date_raw.replace(tzinfo=timezone.utc)
+            elif isinstance(paid_date_raw, str) and paid_date_raw:
+                try:
+                    paid_dt = datetime.strptime(paid_date_raw.strip(), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+            update_set["paid_at"] = paid_dt or now
+            update_set["status"] = "Paid"
+            # Also mark Invoiced fields if AWB was still Open/Reconciled
+            if awb.get("status") not in ("Invoiced", "Paid"):
+                update_set["invoice_date"] = awb.get("invoice_date") or (paid_dt or now)
+                update_set.setdefault("external_invoice_number", inv_no or awb.get("external_invoice_number") or "")
+            kind = "paid"
+            summary["marked_paid"] += 1
+        elif "invoice" in status_v or "inv" in status_v or inv_no:
+            update_set["status"] = "Invoiced"
+            if not awb.get("invoice_date"):
+                update_set["invoice_date"] = now
+            kind = "invoiced"
+            summary["marked_invoiced"] += 1
+        else:
+            summary["skipped"] += 1
+            continue
+        if dry_run:
+            if len(summary["samples"]) < 5:
+                summary["samples"].append({"awb": awb_no, "invoice": inv_no, "action": kind, "current_status": awb.get("status")})
+            continue
+        update_set["updated_at"] = now
+        update_set["updated_by"] = user["id"]
+        await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": update_set})
+        if len(summary["samples"]) < 5:
+            summary["samples"].append({"awb": awb_no, "invoice": inv_no, "action": kind})
+    return summary
+
+
+# ===========================================================================
+# Item #8: Multi-receiver Payment per AWB
+# ===========================================================================
+class PaymentReceiptIn(BaseModel):
+    amount: float
+    payment_date: str  # YYYY-MM-DD
+    payment_method: Optional[str] = "Transfer"  # Cash, Transfer, Cek, etc
+    notes: Optional[str] = None
+    reference_no: Optional[str] = None  # cek/transfer ref
+
+@app.get("/api/orders/{oid}/payments")
+async def list_payment_receipts(oid: str, user: dict = Depends(require_role("finance", "operation", "administrator"))):
+    awb = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not awb:
+        raise HTTPException(404, "AWB tidak ditemukan")
+    docs = await db.payment_receipts.find({"awb_id": _oid(oid)}).sort("payment_date", 1).to_list(200)
+    total_paid = sum(float(d.get("amount") or 0) for d in docs)
+    grand = float(awb.get("grand_total") or 0)
+    return {
+        "awb_number": awb.get("awb_number"),
+        "grand_total": grand,
+        "total_paid": total_paid,
+        "remaining": round(grand - total_paid, 2),
+        "is_fully_paid": total_paid >= grand and grand > 0,
+        "receipts": [serialize(d) for d in docs],
+    }
+
+@app.post("/api/orders/{oid}/payments")
+async def add_payment_receipt(oid: str, data: PaymentReceiptIn, user: dict = Depends(require_role("finance", "administrator"))):
+    awb = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not awb:
+        raise HTTPException(404, "AWB tidak ditemukan")
+    if data.amount <= 0:
+        raise HTTPException(400, "Amount harus > 0")
+    try:
+        pay_dt = datetime.strptime(data.payment_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except Exception:
+        raise HTTPException(400, "Format payment_date harus YYYY-MM-DD")
+    now = datetime.now(timezone.utc)
+    doc = {
+        "awb_id": _oid(oid),
+        "amount": float(data.amount),
+        "payment_date": pay_dt,
+        "payment_method": data.payment_method or "Transfer",
+        "notes": data.notes,
+        "reference_no": data.reference_no,
+        "created_by": user["id"],
+        "created_at": now,
+    }
+    r = await db.payment_receipts.insert_one(doc)
+    # Journal: Dr Cash / Cr AR
+    try:
+        await post_journal(
+            date=pay_dt,
+            description=f"Pembayaran #{r.inserted_id} - AWB {awb.get('awb_number')}",
+            lines=[
+                {"account_code": "1101", "debit": float(data.amount), "credit": 0, "memo": data.reference_no or awb.get("awb_number")},
+                {"account_code": "1201", "debit": 0, "credit": float(data.amount), "memo": awb.get("awb_number")},
+            ],
+            reference_type="payment_receipt", reference_id=str(r.inserted_id), posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
+    # Check if fully paid → update AWB status
+    total_paid = await db.payment_receipts.aggregate([
+        {"$match": {"awb_id": _oid(oid)}},
+        {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
+    ]).to_list(1)
+    paid_sum = float(total_paid[0]["sum"]) if total_paid else 0
+    grand = float(awb.get("grand_total") or 0)
+    if grand > 0 and paid_sum >= grand:
+        await db.awb_orders.update_one(
+            {"_id": _oid(oid)},
+            {"$set": {"status": "Paid", "paid_at": pay_dt, "updated_at": now, "updated_by": user["id"]}},
+        )
+    return {
+        "ok": True,
+        "receipt_id": str(r.inserted_id),
+        "total_paid": paid_sum,
+        "grand_total": grand,
+        "remaining": round(grand - paid_sum, 2),
+        "is_fully_paid": grand > 0 and paid_sum >= grand,
+    }
+
+@app.delete("/api/payment-receipts/{rid}")
+async def delete_payment_receipt(rid: str, user: dict = Depends(require_role("finance", "administrator"))):
+    doc = await db.payment_receipts.find_one({"_id": _oid(rid)})
+    if not doc:
+        raise HTTPException(404, "Receipt tidak ditemukan")
+    awb_id = doc["awb_id"]
+    await db.payment_receipts.delete_one({"_id": _oid(rid)})
+    await db.journal_entries.delete_many({"reference_type": "payment_receipt", "reference_id": rid})
+    # Recheck status — if was Paid but now not fully paid → revert to Invoiced
+    total_paid = await db.payment_receipts.aggregate([
+        {"$match": {"awb_id": awb_id}},
+        {"$group": {"_id": None, "sum": {"$sum": "$amount"}}}
+    ]).to_list(1)
+    paid_sum = float(total_paid[0]["sum"]) if total_paid else 0
+    awb = await db.awb_orders.find_one({"_id": awb_id})
+    if awb and awb.get("status") == "Paid":
+        grand = float(awb.get("grand_total") or 0)
+        if paid_sum < grand:
+            await db.awb_orders.update_one(
+                {"_id": awb_id},
+                {"$set": {"status": "Invoiced"}, "$unset": {"paid_at": ""}},
+            )
+    return {"ok": True}
+
+# ===========================================================================
+# Item #4: Activity Log read + Item #2 partial: Notifications API
+# ===========================================================================
+@app.get("/api/activity-logs")
+async def list_activity_logs(
+    user_id: Optional[str] = None,
+    target_type: Optional[str] = None,
+    action: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 200,
+    user: dict = Depends(require_role("administrator")),
+):
+    q = {}
+    if user_id:
+        q["user_id"] = user_id
+    if target_type:
+        q["target_type"] = target_type
+    if action:
+        q["action"] = action
+    if start_date and end_date:
+        try:
+            sy, sm, sd = [int(x) for x in start_date.split("-")]
+            ey, em, ed = [int(x) for x in end_date.split("-")]
+            q["timestamp"] = {
+                "$gte": datetime(sy, sm, sd, tzinfo=timezone.utc),
+                "$lte": datetime(ey, em, ed, 23, 59, 59, tzinfo=timezone.utc),
+            }
+        except Exception:
+            pass
+    docs = await db.activity_logs.find(q).sort("timestamp", -1).limit(min(limit, 2000)).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.get("/api/notifications")
+async def list_my_notifications(unread_only: bool = False, user: dict = Depends(get_current_user)):
+    q = {"user_id": user["id"]}
+    if unread_only:
+        q["read"] = False
+    docs = await db.notifications.find(q).sort("created_at", -1).limit(100).to_list(100)
+    unread_count = await db.notifications.count_documents({"user_id": user["id"], "read": False})
+    return {"notifications": [serialize(d) for d in docs], "unread_count": unread_count}
+
+@app.post("/api/notifications/{nid}/read")
+async def mark_notification_read(nid: str, user: dict = Depends(get_current_user)):
+    await db.notifications.update_one(
+        {"_id": _oid(nid), "user_id": user["id"]},
+        {"$set": {"read": True, "read_at": datetime.now(timezone.utc)}},
+    )
+    return {"ok": True}
+
+@app.post("/api/notifications/read-all")
+async def mark_all_notifications_read(user: dict = Depends(get_current_user)):
+    r = await db.notifications.update_many(
+        {"user_id": user["id"], "read": False},
+        {"$set": {"read": True, "read_at": datetime.now(timezone.utc)}},
+    )
+    return {"updated": r.modified_count}
+
+
+# ===========================================================================
+# Item #2: Recurring Expense (Cost Automatic)
+# ===========================================================================
+class RecurringExpenseIn(BaseModel):
+    name: str
+    category: str                      # must exist in expense_categories
+    amount: float
+    frequency: str                     # 'monthly', 'weekly', 'daily', 'custom'
+    execute_day: Optional[int] = 1     # day of month (1-31) for monthly, day of week (0-6) for weekly
+    start_date: str                    # YYYY-MM-DD
+    end_date: Optional[str] = None     # YYYY-MM-DD optional limit
+    max_occurrences: Optional[int] = None
+    description: Optional[str] = None
+    notify_enabled: bool = True
+    auto_execute: bool = True          # if true, system creates expense automatically; if false, only notifies
+    cash_account_code: Optional[str] = "1101"
+
+def _compute_next_due(frequency: str, current_due: datetime, execute_day: Optional[int] = None) -> datetime:
+    if frequency == "monthly":
+        y = current_due.year
+        m = current_due.month + 1
+        if m > 12:
+            m = 1
+            y += 1
+        # clamp day
+        from calendar import monthrange
+        last_day = monthrange(y, m)[1]
+        d = min(execute_day or current_due.day, last_day)
+        return datetime(y, m, d, tzinfo=timezone.utc)
+    if frequency == "weekly":
+        return current_due + timedelta(days=7)
+    if frequency == "daily":
+        return current_due + timedelta(days=1)
+    return current_due + timedelta(days=30)
+
+@app.get("/api/recurring-expenses")
+async def list_recurring_expenses(user: dict = Depends(require_role("finance", "administrator"))):
+    docs = await db.recurring_expenses.find({}).sort("created_at", -1).to_list(500)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/recurring-expenses")
+async def create_recurring_expense(data: RecurringExpenseIn, user: dict = Depends(require_role("finance", "administrator"))):
+    cat = await get_expense_category(data.category)
+    if not cat:
+        raise HTTPException(400, f"Kategori '{data.category}' tidak terdaftar")
+    if data.frequency not in ("monthly", "weekly", "daily", "custom"):
+        raise HTTPException(400, "frequency harus 'monthly', 'weekly', 'daily', atau 'custom'")
+    try:
+        start_dt = datetime.strptime(data.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except Exception:
+        raise HTTPException(400, "Format start_date harus YYYY-MM-DD")
+    end_dt = None
+    if data.end_date:
+        try:
+            end_dt = datetime.strptime(data.end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "Format end_date harus YYYY-MM-DD")
+    now = datetime.now(timezone.utc)
+    doc = {
+        "name": data.name.strip(),
+        "category": cat["name"],
+        "posting_type": cat.get("posting_type"),
+        "account_code": cat.get("account_code"),
+        "amount": float(data.amount),
+        "frequency": data.frequency,
+        "execute_day": data.execute_day,
+        "start_date": start_dt,
+        "end_date": end_dt,
+        "max_occurrences": data.max_occurrences,
+        "description": data.description,
+        "notify_enabled": bool(data.notify_enabled),
+        "auto_execute": bool(data.auto_execute),
+        "cash_account_code": data.cash_account_code or "1101",
+        "next_due": start_dt,
+        "last_executed_at": None,
+        "occurrence_count": 0,
+        "active": True,
+        "created_by": user["id"],
+        "created_at": now,
+    }
+    r = await db.recurring_expenses.insert_one(doc)
+    await log_activity(user, "create", "recurring_expense", str(r.inserted_id), f"Created {doc['name']} ({data.frequency})")
+    return serialize(await db.recurring_expenses.find_one({"_id": r.inserted_id}))
+
+class RecurringExpenseUpdate(BaseModel):
+    name: Optional[str] = None
+    amount: Optional[float] = None
+    description: Optional[str] = None
+    notify_enabled: Optional[bool] = None
+    auto_execute: Optional[bool] = None
+    active: Optional[bool] = None
+    end_date: Optional[str] = None
+
+@app.put("/api/recurring-expenses/{rid}")
+async def update_recurring_expense(rid: str, data: RecurringExpenseUpdate, user: dict = Depends(require_role("finance", "administrator"))):
+    doc = await db.recurring_expenses.find_one({"_id": _oid(rid)})
+    if not doc:
+        raise HTTPException(404, "Recurring expense tidak ditemukan")
+    upd = {k: v for k, v in data.dict().items() if v is not None}
+    if "end_date" in upd:
+        try:
+            upd["end_date"] = datetime.strptime(upd["end_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "Format end_date harus YYYY-MM-DD")
+    if upd:
+        upd["updated_at"] = datetime.now(timezone.utc)
+        await db.recurring_expenses.update_one({"_id": _oid(rid)}, {"$set": upd})
+        await log_activity(user, "update", "recurring_expense", rid, f"Updated {doc.get('name')}")
+    return serialize(await db.recurring_expenses.find_one({"_id": _oid(rid)}))
+
+@app.delete("/api/recurring-expenses/{rid}")
+async def delete_recurring_expense(rid: str, user: dict = Depends(require_role("finance", "administrator"))):
+    doc = await db.recurring_expenses.find_one({"_id": _oid(rid)})
+    if not doc:
+        raise HTTPException(404, "Recurring expense tidak ditemukan")
+    await db.recurring_expenses.delete_one({"_id": _oid(rid)})
+    await log_activity(user, "delete", "recurring_expense", rid, f"Deleted {doc.get('name')}")
+    return {"ok": True}
+
+@app.post("/api/recurring-expenses/run-due")
+async def run_due_recurring_expenses(user: dict = Depends(require_role("finance", "administrator"))):
+    """Find all active recurring expenses with next_due <= today and create the actual expense.
+    Returns count of expenses created and notifications sent. Can be called manually or via a cron job.
+    """
+    now = datetime.now(timezone.utc)
+    due = await db.recurring_expenses.find({
+        "active": True,
+        "next_due": {"$lte": now},
+        "$or": [{"end_date": None}, {"end_date": {"$gte": now}}],
+    }).to_list(1000)
+    created = 0
+    notified = 0
+    for rec in due:
+        # Check max_occurrences
+        if rec.get("max_occurrences") and (rec.get("occurrence_count") or 0) >= rec["max_occurrences"]:
+            await db.recurring_expenses.update_one({"_id": rec["_id"]}, {"$set": {"active": False}})
+            continue
+        if rec.get("auto_execute", True):
+            # Create the expense
+            exp_date = (rec["next_due"]).strftime("%Y-%m-%d")
+            ex_doc = {
+                "category": rec["category"],
+                "posting_type": rec.get("posting_type", "expense"),
+                "account_code": rec.get("account_code"),
+                "description": (rec.get("description") or "") + f" [Recurring: {rec['name']}]",
+                "amount": float(rec["amount"]),
+                "expense_date": exp_date,
+                "period_month": rec["next_due"].strftime("%Y-%m"),
+                "cash_account_code": rec.get("cash_account_code", "1101"),
+                "recurring_id": str(rec["_id"]),
+                "created_by": user["id"],
+                "created_at": now,
+            }
+            r = await db.fixed_costs.insert_one(ex_doc)
+            try:
+                expense_code = rec.get("account_code") or "6199"
+                label = "Beban Operasional" if rec.get("posting_type") == "cogs" else "Beban"
+                await post_journal(
+                    date=rec["next_due"],
+                    description=f"{label} {rec['category']} - {exp_date} (Auto: {rec['name']})",
+                    lines=[
+                        {"account_code": expense_code, "debit": float(rec["amount"]), "credit": 0, "memo": rec.get("description") or rec["name"]},
+                        {"account_code": rec.get("cash_account_code", "1101"), "debit": 0, "credit": float(rec["amount"]), "memo": rec["name"]},
+                    ],
+                    reference_type="fixed_cost", reference_id=str(r.inserted_id), posted_by=user["id"],
+                )
+            except HTTPException:
+                pass
+            created += 1
+            await log_activity(user, "auto_create", "recurring_expense", str(rec["_id"]), f"Auto-created expense {rec['name']} ({rec['amount']})")
+        # Send notification
+        if rec.get("notify_enabled"):
+            await push_notification(
+                user_id=str(rec.get("created_by")),
+                title="Recurring Expense Executed" if rec.get("auto_execute") else "Recurring Expense Due",
+                message=f"{rec['name']} sebesar Rp {rec['amount']:,.0f} ({rec['category']})",
+                level="info" if rec.get("auto_execute") else "warning",
+                link="/fixed-costs",
+            )
+            await push_notification(
+                user_id=None, broadcast=False,
+                title=f"Recurring: {rec['name']}",
+                message=f"Rp {rec['amount']:,.0f} ({rec['category']})",
+                level="info",
+                link="/fixed-costs",
+            ) if False else None  # already covered above
+            notified += 1
+        # Update next_due + occurrence_count
+        next_due = _compute_next_due(rec["frequency"], rec["next_due"], rec.get("execute_day"))
+        await db.recurring_expenses.update_one(
+            {"_id": rec["_id"]},
+            {
+                "$set": {"next_due": next_due, "last_executed_at": now},
+                "$inc": {"occurrence_count": 1},
+            },
+        )
+    return {"due_found": len(due), "expenses_created": created, "notifications_sent": notified}
+
+
+# ===========================================================================
+# Item #5: RBAC Fase A — module × action permission matrix
+# ===========================================================================
+RBAC_ACTIONS = ["view", "create", "edit", "delete", "import", "export"]
+
+class PermissionUpdate(BaseModel):
+    role: str
+    permissions: dict  # {module_key: {view: bool, create: bool, edit: bool, delete: bool, import: bool, export: bool}}
+
+@app.get("/api/rbac/matrix")
+async def rbac_matrix(user: dict = Depends(require_role("administrator"))):
+    """Return current permission matrix for all roles × modules × actions."""
+    docs = await db.role_permissions.find({}).to_list(500)
+    matrix = {}
+    for d in docs:
+        matrix.setdefault(d["role"], {})[d["module"]] = {a: bool(d.get(a, False)) for a in RBAC_ACTIONS}
+    return {"modules": [{"key": m["key"], "label": m["label"]} for m in MODULES], "actions": RBAC_ACTIONS, "matrix": matrix}
+
+@app.post("/api/rbac/update")
+async def rbac_update(data: PermissionUpdate, user: dict = Depends(require_role("administrator"))):
+    if data.role == "administrator":
+        raise HTTPException(400, "Role administrator memiliki akses penuh dan tidak dapat dikonfigurasi")
+    now = datetime.now(timezone.utc)
+    for module, actions in data.permissions.items():
+        payload = {a: bool(actions.get(a, False)) for a in RBAC_ACTIONS}
+        payload["updated_at"] = now
+        await db.role_permissions.update_one(
+            {"role": data.role, "module": module},
+            {"$set": payload, "$setOnInsert": {"created_at": now}},
+            upsert=True,
+        )
+    await log_activity(user, "update", "rbac", None, f"Updated permissions for role '{data.role}'")
+    return {"ok": True}
+
+@app.get("/api/rbac/my-permissions")
+async def my_permissions(user: dict = Depends(get_current_user)):
+    """Return effective permissions for current user (used by frontend to gate UI)."""
+    if user["role"] == "administrator":
+        return {"role": "administrator", "is_admin": True, "permissions": {m["key"]: {a: True for a in RBAC_ACTIONS} for m in MODULES}}
+    docs = await db.role_permissions.find({"role": user["role"]}).to_list(200)
+    perms = {d["module"]: {a: bool(d.get(a, False)) for a in RBAC_ACTIONS} for d in docs}
+    return {"role": user["role"], "is_admin": False, "permissions": perms}
+

@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save } from "lucide-react";
+import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save, BadgeDollarSign, Plus, Trash2 } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -21,6 +21,42 @@ export default function InvoicesCreated() {
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  // Invoice Number import (mark AWB as Invoiced/Paid)
+  const [showInvNoImport, setShowInvNoImport] = useState(false);
+  const [invNoFile, setInvNoFile] = useState(null);
+  const [invNoImporting, setInvNoImporting] = useState(false);
+  const [invNoResult, setInvNoResult] = useState(null);
+  // Multi-receiver payment modal
+  const [paymentInv, setPaymentInv] = useState(null);
+  const [payments, setPayments] = useState({ receipts: [], grand_total: 0, total_paid: 0, remaining: 0 });
+  const [newPay, setNewPay] = useState({ amount: "", payment_date: new Date().toISOString().slice(0,10), payment_method: "Transfer", reference_no: "", notes: "" });
+  useEffect(() => {
+    if (paymentInv?.awb_id) {
+      api.get(`/orders/${paymentInv.awb_id}/payments`).then((r) => setPayments(r.data));
+    }
+  }, [paymentInv]);
+  const addPayment = async () => {
+    if (!newPay.amount || parseFloat(newPay.amount) <= 0) { toast.error("Amount harus > 0"); return; }
+    try {
+      await api.post(`/orders/${paymentInv.awb_id}/payments`, { ...newPay, amount: parseFloat(newPay.amount) });
+      toast.success("Pembayaran ditambahkan");
+      const r = await api.get(`/orders/${paymentInv.awb_id}/payments`);
+      setPayments(r.data);
+      setNewPay({ amount: "", payment_date: new Date().toISOString().slice(0,10), payment_method: "Transfer", reference_no: "", notes: "" });
+      load();  // refresh invoice list
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const delPayment = async (rid) => {
+    if (!window.confirm("Hapus pembayaran ini?")) return;
+    try {
+      await api.delete(`/payment-receipts/${rid}`);
+      const r = await api.get(`/orders/${paymentInv.awb_id}/payments`);
+      setPayments(r.data);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
 
   const COMPANY_OPTIONS = ["PT. Abirama Mitra Pradana", "PT. Abirama Mitra Pratama"];
 
@@ -194,11 +230,15 @@ export default function InvoicesCreated() {
     <div data-testid="invoices-created-page">
       <PageHeader
         title="Invoice Tercetak"
-        subtitle="Filter, print, dan export invoice yang sudah dibuat."
+        subtitle="Filter, print, export, dan import invoice yang sudah dibuat."
         action={
-          <Link to="/invoices">
-            <Button variant="secondary"><FileText size={16}/> Ke Pembuatan Invoice</Button>
-          </Link>
+          <div className="flex gap-2 flex-wrap">
+            <Button data-testid="import-invoice-no-btn" variant="secondary" onClick={() => { setShowInvNoImport(true); setInvNoFile(null); setInvNoResult(null); }}><Upload size={16}/> Import Invoice No (Mark Status)</Button>
+            <Button variant="secondary" onClick={() => setShowImport(true)}><Upload size={16}/> Import PO Number</Button>
+            <Link to="/invoices">
+              <Button variant="secondary"><FileText size={16}/> Ke Pembuatan Invoice</Button>
+            </Link>
+          </div>
         }
       />
 
@@ -321,9 +361,14 @@ export default function InvoicesCreated() {
                       <Printer size={14}/> {i.print_count > 0 ? `Cetak Ulang (${i.print_count}x)` : "Cetak"}
                     </Button>
                     {i.awb_status !== "Paid" && (
-                      <Button variant="secondary" data-testid={`cancel-invoice-${i.id}`} onClick={() => cancelInvoice(i)} className="!bg-rose-50 !text-rose-700 hover:!bg-rose-100 !border-rose-200">
-                        <X size={14}/> Cancel
-                      </Button>
+                      <>
+                        <Button variant="secondary" data-testid={`payments-${i.id}`} onClick={() => setPaymentInv(i)} className="!bg-emerald-50 !text-emerald-700 hover:!bg-emerald-100 !border-emerald-200">
+                          <BadgeDollarSign size={14}/> Pembayaran
+                        </Button>
+                        <Button variant="secondary" data-testid={`cancel-invoice-${i.id}`} onClick={() => cancelInvoice(i)} className="!bg-rose-50 !text-rose-700 hover:!bg-rose-100 !border-rose-200">
+                          <X size={14}/> Cancel
+                        </Button>
+                      </>
                     )}
                   </div>
                 </Td>
@@ -376,6 +421,156 @@ export default function InvoicesCreated() {
           </Card>
         </div>
       )}
+
+      {/* Invoice Number Import Modal — marks AWB as Invoiced/Paid */}
+      {showInvNoImport && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <Card className="w-full max-w-xl p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h3 className="font-heading font-bold text-xl">Import Invoice Number</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Format kolom: <code className="bg-slate-100 px-1 rounded">Invoice Number</code>, <code className="bg-slate-100 px-1 rounded">AWB Number</code>, <code className="bg-slate-100 px-1 rounded">Status</code> (Invoiced/Paid), <code className="bg-slate-100 px-1 rounded">Paid Date</code> (opt).
+                </p>
+              </div>
+              <button onClick={() => { setShowInvNoImport(false); setInvNoFile(null); setInvNoResult(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+
+            <div className="space-y-3">
+              <input
+                data-testid="inv-no-file-input"
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(e) => { setInvNoFile(e.target.files?.[0] || null); setInvNoResult(null); }}
+                className="block w-full text-sm border border-slate-300 rounded p-2"
+              />
+
+              {invNoResult && (
+                <div className="border border-emerald-300 bg-emerald-50 rounded p-3 text-sm space-y-1">
+                  <div className="font-bold text-emerald-900">✓ Import Selesai</div>
+                  <div>✓ <strong>{invNoResult.marked_invoiced}</strong> AWB di-mark Invoiced</div>
+                  <div>✓ <strong>{invNoResult.marked_paid}</strong> AWB di-mark Paid</div>
+                  {invNoResult.skipped > 0 && <div className="text-amber-700">⚠ {invNoResult.skipped} baris di-skip</div>}
+                  {invNoResult.errors?.length > 0 && (
+                    <details>
+                      <summary className="cursor-pointer text-red-700 text-xs">{invNoResult.errors.length} error</summary>
+                      <ul className="text-xs list-disc pl-5">
+                        {invNoResult.errors.slice(0, 10).map((e, i) => <li key={i}>Row {e.row}: {e.message}</li>)}
+                      </ul>
+                    </details>
+                  )}
+                </div>
+              )}
+
+              <div className="bg-slate-50 border border-slate-200 rounded p-2 text-xs text-slate-700">
+                <strong>Cara kerja:</strong>
+                <ul className="list-disc pl-5 mt-1">
+                  <li>Status = &quot;Invoiced&quot; → set AWB status Invoiced + simpan Invoice Number</li>
+                  <li>Status = &quot;Paid&quot; → set AWB status Paid + tanggal bayar</li>
+                  <li>Matching by AWB Number (case-insensitive)</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => { setShowInvNoImport(false); setInvNoFile(null); setInvNoResult(null); }}>Tutup</Button>
+              <Button
+                data-testid="confirm-import-invno-btn"
+                onClick={async () => {
+                  if (!invNoFile) { toast.error("Pilih file"); return; }
+                  setInvNoImporting(true);
+                  try {
+                    const fd = new FormData();
+                    fd.append("file", invNoFile);
+                    const r = await api.post("/invoices/import-numbers", fd, { headers: { "Content-Type": "multipart/form-data" } });
+                    setInvNoResult(r.data);
+                    toast.success(`${r.data.marked_invoiced} Invoiced + ${r.data.marked_paid} Paid`);
+                    load();
+                  } catch (e) { toast.error(errMsg(e)); }
+                  finally { setInvNoImporting(false); }
+                }}
+                disabled={invNoImporting || !invNoFile}
+              >
+                {invNoImporting ? "Memproses..." : <><Upload size={14}/> Import</>}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Multi-Receiver Payment Modal */}
+      {paymentInv && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4">
+          <Card className="w-full max-w-2xl p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h3 className="font-heading font-bold text-xl flex items-center gap-2"><BadgeDollarSign size={20}/> Pembayaran AWB {payments.awb_number || paymentInv.awb_number}</h3>
+                <p className="text-xs text-slate-500 mt-1">Catat semua penerimaan pembayaran. AWB otomatis ber-status Paid saat total = grand_total.</p>
+              </div>
+              <button onClick={() => setPaymentInv(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="p-2 rounded bg-slate-50 border border-slate-200">
+                <div className="text-[10px] uppercase font-bold text-slate-500">Grand Total</div>
+                <div className="font-mono font-bold">{fmtIDR(payments.grand_total)}</div>
+              </div>
+              <div className="p-2 rounded bg-emerald-50 border border-emerald-200">
+                <div className="text-[10px] uppercase font-bold text-emerald-700">Total Terbayar</div>
+                <div className="font-mono font-bold text-emerald-800">{fmtIDR(payments.total_paid)}</div>
+              </div>
+              <div className={`p-2 rounded border ${payments.is_fully_paid ? "bg-emerald-50 border-emerald-200" : "bg-amber-50 border-amber-200"}`}>
+                <div className={`text-[10px] uppercase font-bold ${payments.is_fully_paid ? "text-emerald-700" : "text-amber-700"}`}>{payments.is_fully_paid ? "✓ LUNAS" : "Sisa"}</div>
+                <div className="font-mono font-bold">{payments.is_fully_paid ? "PAID" : fmtIDR(payments.remaining)}</div>
+              </div>
+            </div>
+
+            <div className="border border-slate-200 rounded p-3 mb-3 bg-slate-50">
+              <div className="text-xs font-bold mb-2 text-slate-700">Tambah Pembayaran Baru</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div><Label className="!text-[10px]">Tanggal *</Label><Input type="date" value={newPay.payment_date} onChange={(e) => setNewPay({...newPay, payment_date: e.target.value})}/></div>
+                <div><Label className="!text-[10px]">Amount (IDR) *</Label><Input type="number" value={newPay.amount} onChange={(e) => setNewPay({...newPay, amount: e.target.value})} placeholder="0"/></div>
+                <div><Label className="!text-[10px]">Metode</Label>
+                  <select value={newPay.payment_method} onChange={(e) => setNewPay({...newPay, payment_method: e.target.value})} className="w-full px-2 py-2 border border-slate-300 rounded text-sm">
+                    <option>Transfer</option><option>Cash</option><option>Cek</option><option>Giro</option><option>Lainnya</option>
+                  </select>
+                </div>
+                <div><Label className="!text-[10px]">Ref/No. Bukti</Label><Input value={newPay.reference_no} onChange={(e) => setNewPay({...newPay, reference_no: e.target.value})}/></div>
+              </div>
+              <div className="mt-2"><Label className="!text-[10px]">Catatan</Label><Input value={newPay.notes} onChange={(e) => setNewPay({...newPay, notes: e.target.value})}/></div>
+              <div className="mt-2 text-right">
+                <Button data-testid="add-payment-btn" onClick={addPayment}><Plus size={14}/> Tambah Pembayaran</Button>
+              </div>
+            </div>
+
+            <div className="text-xs font-bold mb-2 text-slate-700">Riwayat Pembayaran ({(payments.receipts || []).length})</div>
+            <Table>
+              <thead><tr><Th>Tanggal</Th><Th className="text-right">Amount</Th><Th>Metode</Th><Th>Ref</Th><Th>Catatan</Th><Th></Th></tr></thead>
+              <tbody>
+                {(payments.receipts || []).map((p) => (
+                  <tr key={p.id}>
+                    <Td className="text-xs font-mono">{fmtDate(p.payment_date)}</Td>
+                    <Td className="text-right font-mono font-semibold">{fmtIDR(p.amount)}</Td>
+                    <Td className="text-xs">{p.payment_method}</Td>
+                    <Td className="text-xs font-mono">{p.reference_no || "-"}</Td>
+                    <Td className="text-xs text-slate-600">{p.notes || "-"}</Td>
+                    <Td className="text-right">
+                      <button onClick={() => delPayment(p.id)} className="p-1 text-red-600 hover:bg-red-50 rounded"><Trash2 size={12}/></button>
+                    </Td>
+                  </tr>
+                ))}
+                {(payments.receipts || []).length === 0 && <tr><Td colSpan={6} className="text-center text-xs text-slate-400 py-6">Belum ada pembayaran.</Td></tr>}
+              </tbody>
+            </Table>
+
+            <div className="flex justify-end pt-3 mt-3 border-t">
+              <Button variant="secondary" onClick={() => setPaymentInv(null)}>Tutup</Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+
     </div>
   );
 }

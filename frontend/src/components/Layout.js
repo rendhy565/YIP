@@ -7,8 +7,9 @@ import {
   Wallet, ClipboardCheck, BadgeDollarSign, TrendingUp, Settings as SettingsIcon,
   LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck,
   BookOpen, BookText, Library, Scale, Building, LineChart, Lock,
-  UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3,
+  UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity,
 } from "lucide-react";
+import NotificationBell from "./NotificationBell";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, perm: "*" },
@@ -33,6 +34,7 @@ const NAV = [
   { to: "/customers", label: "Customer", icon: Users, perm: "customers" },
   { to: "/contracts", label: "Perjanjian Rate", icon: ClipboardCheck, perm: "contracts" },
   { to: "/expense-categories", label: "Master Kategori Expense", icon: Banknote, perm: "expense_categories" },
+  { to: "/recurring-expenses", label: "Cost Automatic (Recurring)", icon: Repeat, perm: "fixed_costs" },
   { to: "/pnl", label: "Laba Rugi (Order)", icon: TrendingUp, perm: "pnl" },
 
   { type: "section", label: "Akunting (PSAK)", feature: "accounting" },
@@ -60,6 +62,8 @@ const NAV = [
   { type: "section", label: "Sistem" },
   { to: "/settings", label: "Pengaturan", icon: SettingsIcon, perm: "settings" },
   { type: "section", label: "Administrator", adminOnly: true },
+  { to: "/activity-log", label: "Activity Log", icon: Activity, perm: "*", adminOnly: true },
+  { to: "/rbac", label: "Role Permissions", icon: ShieldCheck, perm: "*", adminOnly: true },
   { to: "/import", label: "Import Excel", icon: Upload, perm: "*", adminOnly: true },
   { to: "/users", label: "User Management", icon: ShieldCheck, perm: "user_management" },
 ];
@@ -161,6 +165,7 @@ export default function Layout({ children }) {
             <div className="text-[10px] uppercase tracking-[0.12em] text-slate-400">{user?.role}</div>
           </div>
           <button data-testid="logout-button" onClick={logout} title="Keluar" className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white"><LogOut size={16} /></button>
+          <NotificationBell/>
         </div>
       </div>
     </>
