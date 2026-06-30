@@ -4,6 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, StatusBadge } from "../components/ui";
 import { fmtIDR } from "../lib/utils";
 import { useAuth } from "../lib/auth";
+import { useCan } from "../lib/useCan";
 import {
   TrendingUp, TrendingDown, FileCheck2, FileText, FileSpreadsheet,
   PackageCheck, PackagePlus, Wallet, ArrowUpRight, Hourglass
@@ -25,6 +26,18 @@ const StatCard = ({ icon: Icon, label, value, accent = "text-slate-900", sub }) 
 );
 
 export default function Dashboard() {
+  // Granular permissions for quicklinks (must be at top — React hooks rule)
+  const canOrdersCreate = useCan("orders_input", "create");
+  const canRecapEdit = useCan("recap", "edit_selling");
+  const canRecapReconcile = useCan("recap", "reconcile");
+  const canRecapExport = useCan("recap", "export");
+  const canRecap = canRecapEdit || canRecapReconcile || canRecapExport;
+  const canInvoicesCreate = useCan("invoices", "create");
+  const canAccrueSettle = useCan("accrue", "settle");
+  const canPayMark = useCan("payments", "mark_paid");
+  const canPayMulti = useCan("payments", "multi_payment");
+  const canPayments = canPayMark || canPayMulti;
+  const canPnlExport = useCan("pnl", "export");
   const { user } = useAuth();
   const [k, setK] = useState(null);
   const [pymhd, setPymhd] = useState(null);
@@ -116,44 +129,48 @@ export default function Dashboard() {
       <Card className="p-5">
         <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-3">Pintasan Cepat</div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {user?.role === "operation" && (
+          {canOrdersCreate && (
             <Link data-testid="quick-new-order" to="/orders/new" className="group p-4 rounded-md border border-slate-200 hover:border-blue-500 hover:bg-blue-50 transition-colors">
               <PackagePlus size={18} className="text-blue-700 mb-2" />
               <div className="text-sm font-bold text-slate-900">Input AWB Baru</div>
               <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 1 <ArrowUpRight size={11} /></div>
             </Link>
           )}
-          {user?.role === "operation" && (
+          {canRecap && (
             <Link to="/recap" className="group p-4 rounded-md border border-slate-200 hover:border-amber-500 hover:bg-amber-50 transition-colors">
               <FileSpreadsheet size={18} className="text-amber-600 mb-2" />
               <div className="text-sm font-bold text-slate-900">Rekap & Excel</div>
               <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 3 & 4 <ArrowUpRight size={11} /></div>
             </Link>
           )}
-          <Link to="/invoices" className="group p-4 rounded-md border border-slate-200 hover:border-purple-500 hover:bg-purple-50 transition-colors">
-            <FileText size={18} className="text-purple-700 mb-2" />
-            <div className="text-sm font-bold text-slate-900">Invoice</div>
-            <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 5 <ArrowUpRight size={11} /></div>
-          </Link>
-          {user?.role === "finance" && (
+          {canInvoicesCreate && (
+            <Link to="/invoices" className="group p-4 rounded-md border border-slate-200 hover:border-purple-500 hover:bg-purple-50 transition-colors">
+              <FileText size={18} className="text-purple-700 mb-2" />
+              <div className="text-sm font-bold text-slate-900">Invoice</div>
+              <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 5 <ArrowUpRight size={11} /></div>
+            </Link>
+          )}
+          {canAccrueSettle && (
             <Link to="/accrue" className="group p-4 rounded-md border border-slate-200 hover:border-orange-500 hover:bg-orange-50 transition-colors">
               <Wallet size={18} className="text-orange-600 mb-2" />
               <div className="text-sm font-bold text-slate-900">Settle Hutang</div>
               <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 2 <ArrowUpRight size={11} /></div>
             </Link>
           )}
-          {user?.role === "finance" && (
+          {canPayments && (
             <Link to="/payments" className="group p-4 rounded-md border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors">
               <FileCheck2 size={18} className="text-emerald-700 mb-2" />
               <div className="text-sm font-bold text-slate-900">Mark as Paid</div>
               <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 6 <ArrowUpRight size={11} /></div>
             </Link>
           )}
-          <Link to="/pnl" className="group p-4 rounded-md border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors">
-            <TrendingUp size={18} className="text-emerald-700 mb-2" />
-            <div className="text-sm font-bold text-slate-900">Laba Rugi</div>
-            <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 7 <ArrowUpRight size={11} /></div>
-          </Link>
+          {canPnlExport && (
+            <Link to="/pnl" className="group p-4 rounded-md border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors">
+              <TrendingUp size={18} className="text-emerald-700 mb-2" />
+              <div className="text-sm font-bold text-slate-900">Laba Rugi</div>
+              <div className="text-[11px] text-slate-500 flex items-center gap-1">Modul 7 <ArrowUpRight size={11} /></div>
+            </Link>
+          )}
         </div>
       </Card>
     </div>

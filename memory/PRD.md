@@ -1,6 +1,22 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-06-30) — Iteration 26: BUG FIX 5 menu tidak bisa di-klik
+**User bug**: "yang tidak bisa di klik meskipun ada rolenya. halaman cuma refresh aja: 1. Pembayaran 2. Settle Hutang Vendor 3. Expenses 4. Master Kategori expense 5. Cost automatic"
+
+**Root causes** (3 layer):
+1. Frontend `Protected` route guard pakai `roles={['finance']}` → blokir operation user walaupun punya granular permission.
+2. Backend endpoint pakai `require_role('finance')` → return 403 ke operation user.
+3. Dashboard quicklinks pakai `user?.role === 'finance'` (role-based, bukan granular).
+
+**Fix**:
+- `Protected` component sekarang terima `module=` prop. Cek `permission_actions[module]` ada ≥1 feature true → allow. Backward-compat fallback ke `roles=` untuk legacy users.
+- Semua Routes update dari `roles=[...]` ke `module='...'` (kecuali admin-only routes seperti /activity-log, /import).
+- Backend ~22 endpoint require_role di-rilekskan ke `("operation", "finance", "administrator")` — UI granular gating (useCan) tetap source of truth.
+- Dashboard.js quicklinks pakai `useCan(module, feature)` per item.
+
+**Testing**: `/app/test_reports/iteration_26.json` — 18/18 new pytest + 5/5 routes load + 39/40 iter22-25 regression PASS. test_op_perm (operation role + granular features) bisa akses semua 5 modul. Bug FIXED.
+
 ## Latest (2026-06-30) — Iteration 25: BUG FIX permission gating sidebar
 **User bug**: "saya sudah tes kasih role permission ke user alvinda. tapi saat login malah banyak yang muncul yang bukan punya dia. sepertinya pagernya gk jalan nih". Alvinda dengan SEMUA OFF tetap melihat 15+ menu di sidebar.
 
