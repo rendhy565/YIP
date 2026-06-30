@@ -3375,7 +3375,9 @@ async def update_user(uid: str, data: UserUpdateIn, user: dict = Depends(require
             if admin_count <= 1:
                 raise HTTPException(400, "Tidak dapat menonaktifkan administrator terakhir")
         updates["role"] = data.role
-    if data.permissions is not None:
+    if data.permissions is not None and data.permission_actions is None:
+        # Only honor explicit permissions array if frontend did NOT send permission_actions
+        # (since permission_actions overrides). Backward-compat for legacy clients.
         invalid = [p for p in data.permissions if p not in MODULE_KEYS]
         if invalid:
             raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid)}")
@@ -3389,7 +3391,6 @@ async def update_user(uid: str, data: UserUpdateIn, user: dict = Depends(require
             pa[mk] = {fk: bool(feats.get(fk, False)) for fk in valid_keys}
         updates["permission_actions"] = pa
         # ALWAYS auto-derive permissions array from permission_actions (single source of truth).
-        # This OVERRIDES any explicit permissions array sent by frontend.
         updates["permissions"] = derive_permissions_from_actions(pa)
     if data.active is not None:
         if target.get("role") == "administrator" and data.active is False:

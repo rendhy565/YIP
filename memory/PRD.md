@@ -1,6 +1,26 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-06-30) — Iteration 25: BUG FIX permission gating sidebar
+**User bug**: "saya sudah tes kasih role permission ke user alvinda. tapi saat login malah banyak yang muncul yang bukan punya dia. sepertinya pagernya gk jalan nih". Alvinda dengan SEMUA OFF tetap melihat 15+ menu di sidebar.
+
+**Root causes** (4 layer):
+1. `Layout.hasPerm()` punya admin auto-bypass (`if user.role==='administrator' return true`) — bertentangan dengan user-choice "admin juga harus di-set per fitur".
+2. Banyak sidebar items pakai `perm: "*"` (selalu visible): Panjar Kerja, Dashboard Analitik, Accounting menus, HR, Tax, Asset, Bank Recon.
+3. `Users.js applyRoleDefaults` menambah module ke `permissions` array walau semua feature=false.
+4. Backend POST/PUT user TIDAK auto-derive `permissions` dari `permission_actions` → array stale.
+
+**Fix**: `permission_actions` jadi **single source of truth**. Backend helper `derive_permissions_from_actions(pa)` dipanggil di:
+- `POST /api/users` — derive permissions from pa
+- `PUT /api/users/{id}` — derive permissions from pa (override explicit)
+- `GET /api/auth/login` — derive on read
+- `GET /api/auth/me` — derive on read
+- Legacy users (pa kosong total) tetap fall back ke stored permissions (backward compat).
+
+Frontend `Layout.hasPerm()` → cek `user.permission_actions[module]` punya ≥1 feature=true. Sidebar items `perm:"*"` diganti spesifik per modul. `applyRoleDefaults` di Users.js cuma push ke perms saat feature=true.
+
+**Testing**: `/app/test_reports/iteration_25.json` — **40/40 pytest pass** (12 new + 16 iter22 + 12 iter24). Playwright UI: test_alvinda (operation role, semua features=false) hanya melihat "Dashboard" di sidebar (1 link, was 15+). Admin tetap melihat 30 menu. Legacy user fallback works.
+
 ## Latest (2026-06-30) — Iteration 23: Granular Per-Feature Permissions COMPLETE
 **Feature**: User feedback: "permission harus lebih spesifik. misalkan di daftar AWB siapa yang boleh klik tombol terima, tombol POD, add cost dll".
 
