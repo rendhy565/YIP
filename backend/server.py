@@ -4910,11 +4910,16 @@ async def list_sheets(
 # ANALYTICS DASHBOARD (filtered KPIs + breakdowns + paginated detail)
 # ===========================================================================
 
-def _parse_iso_date(s: Optional[str]) -> Optional[datetime]:
+def _parse_iso_date(s: Optional[str], end_of_day: bool = False) -> Optional[datetime]:
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s).replace(tzinfo=timezone.utc) if "T" not in s else datetime.fromisoformat(s)
+        if "T" in s:
+            return datetime.fromisoformat(s)
+        dt = datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+        if end_of_day:
+            dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return dt
     except Exception:
         return None
 
@@ -4930,7 +4935,7 @@ async def _build_awb_filter(
 ) -> dict:
     q: dict = {}
     df = _parse_iso_date(period_from)
-    dt = _parse_iso_date(period_to)
+    dt = _parse_iso_date(period_to, end_of_day=True)
     if df or dt:
         date_q = {}
         if df: date_q["$gte"] = df

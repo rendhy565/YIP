@@ -23,7 +23,7 @@ import requests
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://git-tweak-staging.preview.emergentagent.com",
+    "https://date-inclusion-bug.preview.emergentagent.com",
 ).rstrip("/")
 ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
