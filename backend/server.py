@@ -380,6 +380,11 @@ class OrderIn(BaseModel):
     insurance_enabled: Optional[bool] = False
     polis_amount: Optional[float] = None  # Nilai Polis (IDR) — penambah total invoice
     insurance_amount: Optional[float] = None  # Nilai Asuransi (IDR) — penambah total invoice
+    # --- Jadwal & Lead Time ---
+    closing_date: Optional[str] = None       # YYYY-MM-DD (khusus Laut)
+    etd: Optional[str] = None                # YYYY-MM-DD Estimated Time Departure dari asal/pelabuhan
+    eta: Optional[str] = None                # YYYY-MM-DD Estimated Time Arrival di tujuan/pelabuhan
+    plan_eta_customer: Optional[str] = None  # YYYY-MM-DD rencana ETA di gudang customer
 
 class CostIn(BaseModel):
     awb_id: str
@@ -1305,6 +1310,31 @@ async def update_setting(key_name: str, data: SettingIn, user: dict = Depends(re
     )
     return {"ok": True}
 
+@app.get("/api/orders/check-awb")
+async def check_awb_available(
+    awb_number: str,
+    exclude_id: Optional[str] = None,
+    user: dict = Depends(get_current_user),
+):
+    """Cek apakah nomor AWB sudah dipakai. Digunakan untuk validasi inline pada form Input Order.
+    - `exclude_id`: kalau edit AWB, kirim id AWB saat ini agar tidak terdeteksi bentrok dgn diri sendiri."""
+    awb_no = (awb_number or "").strip()
+    if not awb_no:
+        return {"available": True, "exists": False, "awb_number": awb_no}
+    q: dict = {"awb_number": awb_no}
+    if exclude_id:
+        try: q["_id"] = {"$ne": _oid(exclude_id)}
+        except Exception: pass
+    doc = await db.awb_orders.find_one(q, {"_id": 1, "awb_number": 1, "created_at": 1})
+    if doc:
+        return {
+            "available": False, "exists": True,
+            "awb_number": awb_no,
+            "existing_id": str(doc["_id"]),
+            "existing_date": doc.get("created_at"),
+        }
+    return {"available": True, "exists": False, "awb_number": awb_no}
+
 # ---------------------------------------------------------------------------
 # AWB Orders (Module 1)
 # ---------------------------------------------------------------------------
@@ -1336,12 +1366,28 @@ async def list_orders(
     # join customer name
     cust_ids = list({d["customer_id"] for d in docs if d.get("customer_id")})
     cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": cust_ids}}).to_list(1000)}
+    # Vendor list per AWB (untuk kolom Vendor #1/#2/#3 di UI) — urutan sesuai created_at cost.
+    awb_ids = [d["_id"] for d in docs]
+    vendor_map: dict = {}  # awb_id -> list vendor unik (max 3)
+    if awb_ids:
+        cursor = db.awb_costs.find({"awb_id": {"$in": awb_ids}}).sort("created_at", 1)
+        async for c in cursor:
+            vn = (c.get("vendor_name") or "").strip()
+            if not vn:
+                continue
+            lst = vendor_map.setdefault(c["awb_id"], [])
+            if vn not in lst and len(lst) < 3:
+                lst.append(vn)
     out = []
     for d in docs:
         s = serialize(d)
         c = cmap.get(d.get("customer_id"))
         s["customer_name"] = c["name"] if c else None
         s["customer_id"] = str(d["customer_id"]) if d.get("customer_id") else None
+        vlist = vendor_map.get(d["_id"], [])
+        s["vendor_1"] = vlist[0] if len(vlist) > 0 else None
+        s["vendor_2"] = vlist[1] if len(vlist) > 1 else None
+        s["vendor_3"] = vlist[2] if len(vlist) > 2 else None
         out.append(s)
     return out
 
@@ -1484,6 +1530,10 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
         "insurance_enabled": bool(data.insurance_enabled),
         "polis_amount": float(data.polis_amount or 0) if data.insurance_enabled else 0,
         "insurance_amount": float(data.insurance_amount or 0) if data.insurance_enabled else 0,
+        "closing_date": (data.closing_date or "").strip() or None,
+        "etd": (data.etd or "").strip() or None,
+        "eta": (data.eta or "").strip() or None,
+        "plan_eta_customer": (data.plan_eta_customer or "").strip() or None,
         "status": "Open",
         "revenue_recognized": False,
         "created_by": user["id"],
@@ -4222,6 +4272,10 @@ class AwbExtendedUpdate(BaseModel):
     is_charter: Optional[bool] = None
     charter_amount: Optional[float] = None
     pickup_date: Optional[str] = None  # YYYY-MM-DD
+    closing_date: Optional[str] = None
+    etd: Optional[str] = None
+    eta: Optional[str] = None
+    plan_eta_customer: Optional[str] = None
 
 @app.patch("/api/orders/{oid}/extended")
 async def patch_awb_extended(oid: str, data: AwbExtendedUpdate, user: dict = Depends(get_current_user)):
@@ -5102,15 +5156,21 @@ async def analytics_awbs_detail(
     skip = max(0, (page - 1) * page_size)
     cursor = db.awb_orders.find(q).sort(sort_field, sort_d).skip(skip).limit(min(page_size, 200))
     awbs = await cursor.to_list(page_size)
-    # Get costs aggregate per AWB & primary vendor
+    # Get costs aggregate per AWB & primary vendor + vendor list (max 3, urutan created_at asc)
     awb_ids = [a["_id"] for a in awbs]
     cost_agg: dict = {}
     primary_vendor: dict = {}
+    vendor_list: dict = {}  # awb_id -> [vendor1, vendor2, vendor3]
     if awb_ids:
-        async for c in db.awb_costs.find({"awb_id": {"$in": awb_ids}}):
+        async for c in db.awb_costs.find({"awb_id": {"$in": awb_ids}}).sort("created_at", 1):
             cost_agg[c["awb_id"]] = cost_agg.get(c["awb_id"], 0) + float(c.get("amount", 0))
-            if c["awb_id"] not in primary_vendor and c.get("vendor_name"):
-                primary_vendor[c["awb_id"]] = c["vendor_name"]
+            vn = (c.get("vendor_name") or "").strip()
+            if vn:
+                if c["awb_id"] not in primary_vendor:
+                    primary_vendor[c["awb_id"]] = vn
+                lst = vendor_list.setdefault(c["awb_id"], [])
+                if vn not in lst and len(lst) < 3:
+                    lst.append(vn)
     # Customer names
     cust_ids = list({a.get("customer_id") for a in awbs if a.get("customer_id")})
     cust_map = {}
@@ -5135,6 +5195,9 @@ async def analytics_awbs_detail(
             "armada_type": a.get("armada_type"),
             "intracity": a.get("intracity"),
             "vendor_name": primary_vendor.get(a["_id"]),
+            "vendor_1": vendor_list.get(a["_id"], [None])[0] if vendor_list.get(a["_id"]) else None,
+            "vendor_2": vendor_list.get(a["_id"], [])[1] if len(vendor_list.get(a["_id"], [])) > 1 else None,
+            "vendor_3": vendor_list.get(a["_id"], [])[2] if len(vendor_list.get(a["_id"], [])) > 2 else None,
             "items_count": len(a.get("items", [])),
             "qty_kg": a.get("qty_kg") or 0,
             "selling": selling,

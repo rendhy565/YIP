@@ -299,6 +299,7 @@ export default function OrdersList() {
         <Table>
           <thead><tr>
             <Th>AWB</Th><Th>Tgl Pickup</Th><Th>Tgl Terima</Th><Th>Tgl POD</Th><Th>Customer</Th><Th>Rute</Th>
+            <Th>Vendor #1</Th><Th>Vendor #2</Th><Th>Vendor #3</Th>
             <Th className="text-right">Qty (Kg)</Th><Th className="text-right">Selling</Th><Th className="text-right">Cost</Th>
             <Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
@@ -331,6 +332,9 @@ export default function OrdersList() {
                 </Td>
                 <Td>{r.customer_name || "-"}</Td>
                 <Td className="font-mono text-xs">{r.origin} → {r.destination}</Td>
+                <Td className="text-xs">{r.vendor_1 || <span className="text-slate-400">—</span>}</Td>
+                <Td className="text-xs">{r.vendor_2 || <span className="text-slate-400">—</span>}</Td>
+                <Td className="text-xs">{r.vendor_3 || <span className="text-slate-400">—</span>}</Td>
                 <Td className="text-right">{r.qty_kg}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
                 <Td className="text-right">

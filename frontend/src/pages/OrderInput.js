@@ -3,9 +3,10 @@ import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label } from "../components/ui";
 import SearchableSelect from "../components/SearchableSelect";
+import NumberInput from "../components/NumberInput";
 import { errMsg, fmtIDR } from "../lib/utils";
 import { toast } from "sonner";
-import { Calculator, Save, FileLock2, UserPlus, X, ShieldCheck } from "lucide-react";
+import { Calculator, Save, FileLock2, UserPlus, X, ShieldCheck, AlertTriangle, CalendarClock } from "lucide-react";
 
 const emptyCust = { name: "", company_details: "", address: "", npwp: "" };
 
@@ -83,7 +84,14 @@ export default function OrderInput() {
     insurance_enabled: false,
     polis_amount: "",
     insurance_amount: "",
+    closing_date: "",
+    etd: "",
+    eta: "",
+    plan_eta_customer: "",
   });
+
+  // AWB duplicate real-time check
+  const [awbDup, setAwbDup] = useState({ checking: false, exists: false, msg: "" });
 
   // Sender suggestions for selected customer
   const [senderSuggestions, setSenderSuggestions] = useState([]);
@@ -114,6 +122,23 @@ export default function OrderInput() {
       await api.delete(`/sender-suggestions/${sid}`);
       setSenderSuggestions((s) => s.filter((x) => x.id !== sid));
     } catch (e) { /* ignore */ }
+  };
+
+  // Cek duplikasi AWB saat user blur field
+  const checkAwbDup = async () => {
+    const val = (form.awb_number || "").trim();
+    if (!val) { setAwbDup({ checking: false, exists: false, msg: "" }); return; }
+    setAwbDup({ checking: true, exists: false, msg: "" });
+    try {
+      const r = await api.get("/orders/check-awb", { params: { awb_number: val } });
+      if (r.data?.exists) {
+        setAwbDup({ checking: false, exists: true, msg: `Nomor AWB "${val}" sudah dipakai — pakai nomor lain.` });
+      } else {
+        setAwbDup({ checking: false, exists: false, msg: "" });
+      }
+    } catch {
+      setAwbDup({ checking: false, exists: false, msg: "" });
+    }
   };
 
   const onContractChange = (cid) => {
@@ -149,8 +174,22 @@ export default function OrderInput() {
   const invoiceEstimate = useMemo(() => grandTotal + polisAmt + insAmt, [grandTotal, polisAmt, insAmt]);
   const contractLocked = !!form.contract_id;
 
+  // Lead time otomatis: dari ETD → Plan ETA Customer (hari)
+  const leadTimeDays = useMemo(() => {
+    if (!form.etd || !form.plan_eta_customer) return null;
+    const s = new Date(form.etd), e = new Date(form.plan_eta_customer);
+    if (isNaN(s) || isNaN(e)) return null;
+    const diff = Math.round((e - s) / (1000 * 60 * 60 * 24));
+    return diff >= 0 ? diff : null;
+  }, [form.etd, form.plan_eta_customer]);
+
   const submit = async (e) => {
     e.preventDefault();
+    // Cegah submit jika AWB duplikat
+    if (awbDup.exists) {
+      toast.error(awbDup.msg || "Nomor AWB sudah dipakai");
+      return;
+    }
     // Validate koli mandatory
     if (!form.koli_count || parseInt(form.koli_count, 10) <= 0) {
       toast.error("Koli wajib diisi (lebih dari 0)"); return;
@@ -176,6 +215,10 @@ export default function OrderInput() {
         container_type: form.service === "FCL" ? (form.container_type || null) : null,
         polis_amount: form.insurance_enabled && form.polis_amount !== "" ? parseFloat(form.polis_amount) : null,
         insurance_amount: form.insurance_enabled && form.insurance_amount !== "" ? parseFloat(form.insurance_amount) : null,
+        closing_date: form.closing_date || null,
+        etd: form.etd || null,
+        eta: form.eta || null,
+        plan_eta_customer: form.plan_eta_customer || null,
         contract_id: form.contract_id || null,
       };
       const r = await api.post("/orders", payload);
@@ -216,7 +259,21 @@ export default function OrderInput() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <Label>No. AWB (manual) *</Label>
-              <Input data-testid="order-awb-input" value={form.awb_number} onChange={(e) => setForm({ ...form, awb_number: e.target.value })} required placeholder="Mis. ABR-001234"/>
+              <Input
+                data-testid="order-awb-input"
+                value={form.awb_number}
+                onChange={(e) => { setForm({ ...form, awb_number: e.target.value }); if (awbDup.exists || awbDup.msg) setAwbDup({ checking: false, exists: false, msg: "" }); }}
+                onBlur={checkAwbDup}
+                required
+                placeholder="Mis. ABR-001234"
+                className={awbDup.exists ? "border-rose-500 focus:border-rose-500 focus:ring-rose-500" : ""}
+              />
+              {awbDup.checking && <p className="mt-1 text-[11px] text-slate-500">Memeriksa ketersediaan…</p>}
+              {awbDup.exists && (
+                <p data-testid="awb-dup-warning" className="mt-1 text-[11px] font-semibold text-rose-700 inline-flex items-center gap-1">
+                  <AlertTriangle size={11}/> {awbDup.msg}
+                </p>
+              )}
             </div>
             <div>
               <Label>Reff No (opsional)</Label>
@@ -411,7 +468,7 @@ export default function OrderInput() {
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-1">
                 <Label>Nilai Charter (IDR) * <span className="text-blue-700 text-[10px] ml-1">— {form.service}: single price</span></Label>
-                <Input data-testid="order-charter-amount-input" type="number" step="0.01" value={form.charter_amount} onChange={(e) => setForm({ ...form, charter_amount: e.target.value })} required />
+                <NumberInput data-testid="order-charter-amount-input" value={form.charter_amount} onChange={(e) => setForm({ ...form, charter_amount: e.target.value })} required placeholder="Mis. 1.500.000"/>
               </div>
               <div>
                 <Label>PPN *</Label>
@@ -426,7 +483,7 @@ export default function OrderInput() {
                 <Label>
                   Tarif per Kg (IDR) * {contractLocked && <span className="ml-1 text-blue-700 inline-flex items-center gap-1"><FileLock2 size={11}/> terkunci</span>}
                 </Label>
-                <Input data-testid="order-tariff-input" type="number" step="0.01" value={form.tariff_per_kg} onChange={(e) => setForm({ ...form, tariff_per_kg: e.target.value })} required disabled={contractLocked} />
+                <NumberInput data-testid="order-tariff-input" value={form.tariff_per_kg} onChange={(e) => setForm({ ...form, tariff_per_kg: e.target.value })} required disabled={contractLocked} placeholder="Mis. 1.500"/>
               </div>
               <div>
                 <Label>Qty (Kg) *</Label>
@@ -491,13 +548,46 @@ export default function OrderInput() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <Label>Nilai Polis (IDR)</Label>
-                  <Input data-testid="polis-amount" type="number" step="0.01" value={form.polis_amount} onChange={(e) => setForm({ ...form, polis_amount: e.target.value })} placeholder="0"/>
+                  <NumberInput data-testid="polis-amount" value={form.polis_amount} onChange={(e) => setForm({ ...form, polis_amount: e.target.value })} placeholder="0"/>
                 </div>
                 <div>
                   <Label>Nilai Asuransi (IDR)</Label>
-                  <Input data-testid="insurance-amount" type="number" step="0.01" value={form.insurance_amount} onChange={(e) => setForm({ ...form, insurance_amount: e.target.value })} placeholder="0"/>
+                  <NumberInput data-testid="insurance-amount" value={form.insurance_amount} onChange={(e) => setForm({ ...form, insurance_amount: e.target.value })} placeholder="0"/>
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* ROW: Jadwal Keberangkatan & Lead Time */}
+          <div className="mt-6 pt-4 border-t border-slate-200">
+            <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-3 inline-flex items-center gap-2">
+              <CalendarClock size={14} className="text-blue-700"/> Jadwal Keberangkatan
+              <span className="text-[10px] normal-case tracking-normal font-normal text-slate-400">— opsional, semua field boleh dikosongkan</span>
+            </h4>
+            <div className={`grid grid-cols-1 gap-4 ${form.via === "L" ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
+              {form.via === "L" && (
+                <div>
+                  <Label>Closing Date <span className="text-slate-400 text-[10px]">— khusus Laut</span></Label>
+                  <Input data-testid="order-closing-date" type="date" value={form.closing_date} onChange={(e) => setForm({ ...form, closing_date: e.target.value })}/>
+                </div>
+              )}
+              <div>
+                <Label>ETD {form.via === "L" ? "Pelabuhan" : form.via === "U" ? "Bandara" : "Asal"}</Label>
+                <Input data-testid="order-etd" type="date" value={form.etd} onChange={(e) => setForm({ ...form, etd: e.target.value })}/>
+              </div>
+              <div>
+                <Label>ETA {form.via === "L" ? "Pelabuhan" : form.via === "U" ? "Bandara" : "Tujuan"}</Label>
+                <Input data-testid="order-eta" type="date" value={form.eta} onChange={(e) => setForm({ ...form, eta: e.target.value })}/>
+              </div>
+              <div>
+                <Label>Plan ETA Customer</Label>
+                <Input data-testid="order-plan-eta-customer" type="date" value={form.plan_eta_customer} onChange={(e) => setForm({ ...form, plan_eta_customer: e.target.value })}/>
+              </div>
+            </div>
+            {leadTimeDays !== null && (
+              <p data-testid="lead-time-preview" className="mt-2 text-[11px] text-blue-700 font-semibold">
+                Lead Time: {leadTimeDays} hari (ETD → Plan ETA Customer)
+              </p>
             )}
           </div>
         </Card>

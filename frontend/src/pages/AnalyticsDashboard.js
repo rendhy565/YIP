@@ -516,6 +516,9 @@ export default function AnalyticsDashboard() {
                 <ColHead>Tipe Armada</ColHead>
                 <ColHead>Jenis Armada</ColHead>
                 <ColHead>Vendor Utama</ColHead>
+                <ColHead>Vendor #1</ColHead>
+                <ColHead>Vendor #2</ColHead>
+                <ColHead>Vendor #3</ColHead>
                 <ColHead align="right">Item Lines</ColHead>
                 <ColHead align="right">Kg</ColHead>
                 <ColHead align="right" onClick={() => sortCol("total_tariff")} sorted={sortBy === "total_tariff" ? sortDir : null}>Selling</ColHead>
@@ -532,7 +535,7 @@ export default function AnalyticsDashboard() {
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={20} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
+                <tr><td colSpan={23} className="text-center text-slate-400 py-8">Tidak ada data</td></tr>
               )}
               {rows.map((r, i) => (
                 <tr key={r.id} className="hover:bg-blue-50/40 border-b border-slate-100">
@@ -544,6 +547,9 @@ export default function AnalyticsDashboard() {
                   <td className="px-3 py-2 text-xs">{r.armada_type || "-"}</td>
                   <td className="px-3 py-2 text-xs">{r.fleet_type || "-"}</td>
                   <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={r.vendor_name}>{r.vendor_name || "-"}</td>
+                  <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={r.vendor_1}>{r.vendor_1 || <span className="text-slate-400">—</span>}</td>
+                  <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={r.vendor_2}>{r.vendor_2 || <span className="text-slate-400">—</span>}</td>
+                  <td className="px-3 py-2 text-xs max-w-[140px] truncate" title={r.vendor_3}>{r.vendor_3 || <span className="text-slate-400">—</span>}</td>
                   <td className="px-3 py-2 text-right font-mono">{r.items_count}</td>
                   <td className="px-3 py-2 text-right font-mono text-xs">{r.qty_kg || "-"}</td>
                   <td className="px-3 py-2 text-right font-mono">{fmtIDR(r.selling)}</td>
