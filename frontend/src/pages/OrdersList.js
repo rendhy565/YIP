@@ -100,6 +100,21 @@ export default function OrdersList() {
 
   const pag = usePagination(filteredRows, { resetKey: `${q}|${status}|${customerId}|${month}|${filterMode}` });
 
+  // Daftar bulan (YYYY-MM) yang tersedia di data — di-generate dari created_at
+  const monthOptions = React.useMemo(() => {
+    const INDO = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const set = new Map();
+    for (const r of rows) {
+      if (!r.created_at) continue;
+      const d = new Date(r.created_at);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      if (!set.has(ym)) set.set(ym, `${INDO[d.getMonth()]} ${d.getFullYear()}`);
+    }
+    return [...set.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0])) // terbaru dulu
+      .map(([value, label]) => ({ value, label }));
+  }, [rows]);
+
   const dropOrder = async (r) => {
     if (!window.confirm(`Tandai AWB ${r.awb_number} sebagai DROP?`)) return;
     try { await api.patch(`/orders/${r.id}/status`, { status: "Drop" }); toast.success(`AWB ${r.awb_number} di-drop`); load(); }
@@ -245,28 +260,18 @@ export default function OrdersList() {
               <Input data-testid="orders-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contoh: AWB-202606-0001 / JKT / Pak Andi..." className="pl-9"/>
             </div>
           </div>
-          <div className="min-w-[170px]">
+          <div className="min-w-[180px]">
             <Label>Bulan Pickup</Label>
-            <div className="flex gap-1">
-              <Input
-                data-testid="filter-month-input"
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-                className="flex-1"
-              />
-              {month && (
-                <button
-                  type="button"
-                  data-testid="filter-month-clear"
-                  onClick={() => setMonth("")}
-                  title="Semua Bulan"
-                  className="px-2 border border-slate-300 rounded text-slate-500 hover:bg-slate-100"
-                >
-                  <X size={12}/>
-                </button>
-              )}
-            </div>
+            <Select
+              data-testid="filter-month-select"
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+            >
+              <option value="">Semua Bulan</option>
+              {monthOptions.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </Select>
           </div>
           <div className="min-w-[180px]">
             <Label>Status</Label>
