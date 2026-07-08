@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Select, Input, Table, Th, Td, StatusBadge, Label, Button } from "../components/ui";
-import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
-import { Trash2, MinusCircle, PackageCheck, X, Search, Download } from "lucide-react";
+import { fmtIDR, fmtDate, fmtDateTime, errMsg } from "../lib/utils";
+import { Trash2, MinusCircle, PackageCheck, X, Search, Download, MapPin } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
 import { toast } from "sonner";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 import CostListModal from "../components/CostListModal";
+import TrackingModal from "../components/TrackingModal";
 
 function todayStr() {
   const d = new Date();
@@ -55,6 +56,9 @@ export default function OrdersList() {
 
   // Cost popup — list & delete costs (uses shared component)
   const [costFor, setCostFor] = useState(null);
+
+  // Tracking popup — posisi barang berjalan
+  const [trackFor, setTrackFor] = useState(null);
 
   const load = () => {
     Promise.all([
@@ -298,7 +302,7 @@ export default function OrdersList() {
       <Card>
         <Table>
           <thead><tr>
-            <Th>AWB</Th><Th>Tgl Pickup</Th><Th>Tgl Terima</Th><Th>Tgl POD</Th><Th>Customer</Th><Th>Rute</Th>
+            <Th>AWB</Th><Th>Tgl Pickup</Th><Th>Posisi Terakhir</Th><Th>Tgl Terima</Th><Th>Tgl POD</Th><Th>Customer</Th><Th>Rute</Th>
             <Th>Vendor #1</Th><Th>Vendor #2</Th><Th>Vendor #3</Th>
             <Th className="text-right">Qty (Kg)</Th><Th className="text-right">Selling</Th><Th className="text-right">Cost</Th>
             <Th>Status</Th><Th className="text-right">Aksi</Th>
@@ -308,6 +312,14 @@ export default function OrdersList() {
               <tr key={r.id} data-testid={`order-row-${r.id}`}>
                 <Td><span className="font-mono font-semibold">{r.awb_number}</span></Td>
                 <Td className="text-slate-600 text-xs">{fmtDate(r.created_at)}</Td>
+                <Td className="text-xs max-w-[220px]">
+                  {r.latest_tracking ? (
+                    <div>
+                      <div className="text-slate-900 truncate" title={r.latest_tracking}>{r.latest_tracking}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{fmtDateTime(r.latest_tracking_at)}</div>
+                    </div>
+                  ) : <span className="text-slate-400">—</span>}
+                </Td>
                 <Td className="text-slate-600 text-xs">
                   {r.received_at ? (
                     canEditReceive ? (
@@ -356,6 +368,20 @@ export default function OrdersList() {
                 <Td><StatusBadge status={r.status} /></Td>
                 <Td className="text-right">
                   <div className="flex gap-1 justify-end whitespace-nowrap">
+                    {/* Tracking — di kiri Terima. Locked bila sudah received atau status Drop */}
+                    {r.status !== "Drop" && (
+                      <button
+                        data-testid={`tracking-btn-${r.awb_number}`}
+                        onClick={() => setTrackFor(r)}
+                        disabled={!!r.received_at}
+                        title={r.received_at ? "Terkunci — barang sudah diterima" : "Update posisi barang berjalan"}
+                        className={`px-2 py-1 text-[10px] uppercase font-bold rounded inline-flex items-center gap-1 ${
+                          r.received_at
+                            ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+                            : "bg-blue-100 text-blue-800 hover:bg-blue-200"
+                        }`}
+                      ><MapPin size={11}/> Tracking</button>
+                    )}
                     {canReceive && !r.received_at && r.status !== "Drop" && (
                       <button
                         data-testid={`receive-btn-${r.awb_number}`}
@@ -386,7 +412,7 @@ export default function OrdersList() {
                 </Td>
               </tr>
             ))}
-            {filteredRows.length === 0 && <tr><Td colSpan={11} className="text-center text-slate-500 py-10">{rows.length === 0 ? "Tidak ada order." : "Tidak ada hasil cocok dengan filter."}</Td></tr>}
+            {filteredRows.length === 0 && <tr><Td colSpan={15} className="text-center text-slate-500 py-10">{rows.length === 0 ? "Tidak ada order." : "Tidak ada hasil cocok dengan filter."}</Td></tr>}
           </tbody>
         </Table>
         <Pagination {...pag} testid="pagination-orders"/>
@@ -567,6 +593,15 @@ export default function OrdersList() {
           awb={costFor}
           onClose={() => setCostFor(null)}
           onChanged={load}
+        />
+      )}
+
+      {/* ========== TRACKING POPUP — Posisi barang berjalan ========== */}
+      {trackFor && (
+        <TrackingModal
+          awb={trackFor}
+          onClose={() => setTrackFor(null)}
+          onSaved={load}
         />
       )}
     </div>

@@ -439,6 +439,9 @@ class AwbPodIn(BaseModel):
     pod_notes: Optional[str] = None
     pod_signed_by: Optional[str] = None
 
+class TrackingIn(BaseModel):
+    position: str  # teks bebas — posisi/status barang terakhir (mis. "Sudah loading di Cikarang")
+
 # ---------------------------------------------------------------------------
 # AWB number generator
 # ---------------------------------------------------------------------------
@@ -1378,6 +1381,17 @@ async def list_orders(
             lst = vendor_map.setdefault(c["awb_id"], [])
             if vn not in lst and len(lst) < 3:
                 lst.append(vn)
+    # Latest tracking per AWB (posisi terakhir)
+    tracking_map: dict = {}  # awb_id -> {position, created_at}
+    if awb_ids:
+        # Ambil entry paling recent per awb — pakai aggregate
+        pipeline = [
+            {"$match": {"awb_id": {"$in": awb_ids}}},
+            {"$sort": {"created_at": -1}},
+            {"$group": {"_id": "$awb_id", "position": {"$first": "$position"}, "created_at": {"$first": "$created_at"}}},
+        ]
+        async for t in db.awb_tracking.aggregate(pipeline):
+            tracking_map[t["_id"]] = {"position": t["position"], "created_at": t["created_at"]}
     out = []
     for d in docs:
         s = serialize(d)
@@ -1388,6 +1402,9 @@ async def list_orders(
         s["vendor_1"] = vlist[0] if len(vlist) > 0 else None
         s["vendor_2"] = vlist[1] if len(vlist) > 1 else None
         s["vendor_3"] = vlist[2] if len(vlist) > 2 else None
+        tr = tracking_map.get(d["_id"])
+        s["latest_tracking"] = tr["position"] if tr else None
+        s["latest_tracking_at"] = tr["created_at"] if tr else None
         out.append(s)
     return out
 
@@ -2334,6 +2351,45 @@ async def receive_awb(oid: str, data: ReceiveAwbIn, user: dict = Depends(get_cur
         "sub_label": {"$in": ["SPSI", "Sewa Forklift"]},
     })
     return serialize(await db.awb_orders.find_one({"_id": _oid(oid)}))
+
+# ── Tracking (posisi/status barang berjalan) ───────────────────────────────
+# Sifatnya append-only: setiap update posisi = row baru di collection awb_tracking.
+# Field yang muncul di list AWB adalah entry terakhir (paling recent).
+# Tombol tracking di UI di-kunci setelah AWB "received" (barang diterima).
+@app.post("/api/orders/{oid}/tracking")
+async def add_tracking(oid: str, data: TrackingIn, user: dict = Depends(get_current_user)):
+    o = await db.awb_orders.find_one({"_id": _oid(oid)}, {"awb_number": 1, "received_at": 1})
+    if not o:
+        raise HTTPException(404, "Order tidak ditemukan")
+    if o.get("received_at"):
+        raise HTTPException(400, "AWB sudah diterima — tracking dikunci.")
+    text = (data.position or "").strip()
+    if not text:
+        raise HTTPException(400, "Posisi tidak boleh kosong")
+    doc = {
+        "awb_id": _oid(oid),
+        "position": text,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": user["id"],
+        "created_by_name": user.get("full_name") or user.get("username") or "?",
+    }
+    r = await db.awb_tracking.insert_one(doc)
+    return {"ok": True, "id": str(r.inserted_id), "position": text, "created_at": doc["created_at"]}
+
+@app.get("/api/orders/{oid}/tracking")
+async def list_tracking(oid: str, user: dict = Depends(get_current_user)):
+    cursor = db.awb_tracking.find({"awb_id": _oid(oid)}).sort("created_at", -1)
+    rows = []
+    async for d in cursor:
+        rows.append({
+            "id": str(d["_id"]),
+            "position": d.get("position"),
+            "created_at": d.get("created_at"),
+            "created_by_name": d.get("created_by_name"),
+        })
+    return rows
+
+
 
 @app.post("/api/orders/{oid}/receive-pod")
 async def receive_pod_awb(oid: str, data: AwbPodIn = AwbPodIn(), user: dict = Depends(get_current_user)):

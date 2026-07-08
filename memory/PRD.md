@@ -1,6 +1,23 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-07-08) — Iteration 29: Tracking Posisi Barang (real-time log)
+**Fitur baru**:
+- Tombol "Tracking" di Daftar AWB, posisi di **kiri tombol "Terima"**
+- Klik → modal popup dengan input teks bebas untuk posisi terkini + riwayat timeline
+- **Append-only**: setiap simpan buat row baru di `awb_tracking` collection, tidak overwrite
+- Timeline visual: dot biru + badge "TERAKHIR" untuk entry paling recent
+- Tanggal-jam otomatis dari server (`datetime.now(timezone.utc)`)
+- Kolom baru "Posisi Terakhir" di Daftar AWB — tampilkan posisi + timestamp entry terbaru
+- **Auto-lock**: tombol tracking disabled dan berwarna abu-abu setelah AWB "Terima Barang" (received_at ada). Backend juga block POST tracking dengan HTTP 400 "AWB sudah diterima — tracking dikunci."
+
+**Endpoint baru**:
+- `POST /api/orders/{oid}/tracking` — { position: str } → append entry
+- `GET /api/orders/{oid}/tracking` — list riwayat (desc)
+- `/api/orders` list response enriched dengan `latest_tracking` + `latest_tracking_at`
+
+**Komponen baru**: `TrackingModal.js` (reusable). data-testid: `tracking-btn-{awb}`, `tracking-modal`, `tracking-position-input`, `tracking-save-btn`, `tracking-modal-close`, `tracking-history-list`, `tracking-row-{id}`.
+
 ## Latest (2026-07-08) — Iteration 28: Update TMS AR CARGO — batch 2
 **Session ini (setelah iter-27)**:
 1. **#1 Pop-up AWB duplikat** — validasi inline real-time saat blur: endpoint `GET /api/orders/check-awb`; border input jadi merah + label "Nomor AWB … sudah dipakai — pakai nomor lain"; submit di-block jika duplikat.
