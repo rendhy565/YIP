@@ -1,6 +1,24 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-07-08) — Iteration 27: Update TMS AR CARGO (multi-item)
+**Session ini**:
+1. Bug fix filter tanggal Analytics Dashboard (`_parse_iso_date` end_of_day)
+2. Month picker dropdown (Select berbasis data → zero typo) di Daftar AWB
+3. **PPN 1.1%** (dari 1%): migrasi `tax_ppn_1` dari "1" → "1.1"; label auto jadi "PPN 1.1%"
+4. **Split Armada**: `armada_requested` (untuk invoice/tagihan customer) + `armada_internal` (aktual pickup internal). Legacy `armada` tetap disimpan (= armada_requested) untuk kompatibilitas.
+5. **FCL varian kontainer**: field `container_type` dengan opsi 20FT, 20FT HQ, 40FT, 40FT HQ, OPEN TOP. Wajib diisi saat service=FCL. Muncul di line item invoice ("FCL 40FT HQ - CDD").
+
+**Backlog (menunggu klarifikasi user)**:
+- Pop-up saat AWB duplikat (modal vs inline vs keduanya)
+- Kolom Vendor #1/#2/#3 (halaman mana + sumber data)
+- FTL Multidrop (struktur data: 1 AWB multi-drop vs N AWB dgn group)
+- Multidrop part-of label
+- Angka thousand separator di input field (lokasi spesifik)
+- Jadwal & Lead Time per moda (Darat/Laut/Udara — field detail per moda)
+
+
+
 ## Latest (2026-06-30) — Iteration 26: BUG FIX 5 menu tidak bisa di-klik
 **User bug**: "yang tidak bisa di klik meskipun ada rolenya. halaman cuma refresh aja: 1. Pembayaran 2. Settle Hutang Vendor 3. Expenses 4. Master Kategori expense 5. Cost automatic"
 

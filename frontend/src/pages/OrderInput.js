@@ -28,6 +28,7 @@ const COMPANY_OPTIONS = [
 
 const SERVICE_OPTIONS = ["LCL", "FCL", "LTL", "FTL", "AIR", "Lumpsum"];
 const CHARTER_SERVICES = ["FCL", "FTL", "Lumpsum"]; // single price, no weight multiplier
+const CONTAINER_TYPES = ["20FT", "20FT HQ", "40FT", "40FT HQ", "OPEN TOP"];
 const VIA_OPTIONS = [
   { value: "D", label: "Darat" },
   { value: "L", label: "Laut" },
@@ -74,6 +75,9 @@ export default function OrderInput() {
     koli_count: "",
     koli_qty_per: "",
     armada: "",
+    armada_requested: "",
+    armada_internal: "",
+    container_type: "",
     driver_name: "",
     nopol: "",
     insurance_enabled: false,
@@ -154,6 +158,9 @@ export default function OrderInput() {
     if (isCharter && (!form.charter_amount || parseFloat(form.charter_amount) <= 0)) {
       toast.error(`Service ${form.service} adalah Charter — wajib isi Nilai Charter (IDR)`); return;
     }
+    if (form.service === "FCL" && !form.container_type) {
+      toast.error("Service FCL wajib pilih Tipe Kontainer (20FT / 40FT / dsb)"); return;
+    }
     try {
       const payload = {
         ...form,
@@ -164,6 +171,9 @@ export default function OrderInput() {
         charter_amount: isCharter ? (parseFloat(form.charter_amount) || 0) : 0,
         koli_count: parseInt(form.koli_count, 10),
         sender_name: form.sender_name || null,
+        armada_requested: (form.armada_requested || "").trim() || null,
+        armada_internal: (form.armada_internal || "").trim() || null,
+        container_type: form.service === "FCL" ? (form.container_type || null) : null,
         polis_amount: form.insurance_enabled && form.polis_amount !== "" ? parseFloat(form.polis_amount) : null,
         insurance_amount: form.insurance_enabled && form.insurance_amount !== "" ? parseFloat(form.insurance_amount) : null,
         contract_id: form.contract_id || null,
@@ -334,7 +344,7 @@ export default function OrderInput() {
             </div>
             <div>
               <Label>Service</Label>
-              <Select data-testid="order-service-select" value={form.service} onChange={(e) => setForm({ ...form, service: e.target.value })}>
+              <Select data-testid="order-service-select" value={form.service} onChange={(e) => setForm({ ...form, service: e.target.value, container_type: e.target.value === "FCL" ? form.container_type : "" })}>
                 <option value="">— Pilih —</option>
                 {SERVICE_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
@@ -347,6 +357,22 @@ export default function OrderInput() {
               </Select>
             </div>
           </div>
+
+          {/* ROW: Tipe Kontainer — hanya untuk FCL */}
+          {form.service === "FCL" && (
+            <div className="mt-4">
+              <Label>Tipe Kontainer * <span className="text-blue-700 text-[10px] ml-1">— khusus FCL</span></Label>
+              <Select
+                data-testid="order-container-type-select"
+                value={form.container_type}
+                onChange={(e) => setForm({ ...form, container_type: e.target.value })}
+                required
+              >
+                <option value="">— Pilih Kontainer —</option>
+                {CONTAINER_TYPES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </Select>
+            </div>
+          )}
 
           {/* ROW: Status Pengiriman */}
           <div className="mt-4">
@@ -415,14 +441,26 @@ export default function OrderInput() {
             </div>
           )}
 
-          {/* ROW: Armada / Driver / Nopol */}
+          {/* ROW: Armada Request (Customer/Invoice) + Armada Internal (Pickup) + Driver + Nopol */}
           <div className="mt-6 pt-4 border-t border-slate-200">
             <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-3">Detail Armada</h4>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label>Armada</Label>
-                <Input data-testid="order-armada-input" value={form.armada} onChange={(e) => setForm({ ...form, armada: e.target.value })} placeholder="Mis. CDD"/>
+                <Label>
+                  Armada Request Customer
+                  <span className="text-blue-700 text-[10px] ml-1">— tampil di invoice / tagihan</span>
+                </Label>
+                <Input data-testid="order-armada-requested-input" value={form.armada_requested} onChange={(e) => setForm({ ...form, armada_requested: e.target.value })} placeholder="Mis. CDD"/>
               </div>
+              <div>
+                <Label>
+                  Armada Pickup Internal
+                  <span className="text-slate-500 text-[10px] ml-1">— aktual dipakai (internal, opsional)</span>
+                </Label>
+                <Input data-testid="order-armada-internal-input" value={form.armada_internal} onChange={(e) => setForm({ ...form, armada_internal: e.target.value })} placeholder="Mis. FUSO"/>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label>Nama Driver</Label>
                 <Input data-testid="order-driver-input" value={form.driver_name} onChange={(e) => setForm({ ...form, driver_name: e.target.value })} placeholder="Mis. Pak Budi"/>

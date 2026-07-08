@@ -372,6 +372,9 @@ class OrderIn(BaseModel):
     koli_count: Optional[int] = None
     koli_qty_per: Optional[str] = None
     armada: Optional[str] = None
+    armada_requested: Optional[str] = None  # armada yang di-request customer (untuk tagihan invoice)
+    armada_internal: Optional[str] = None   # armada yang benar-benar dipakai pickup (internal)
+    container_type: Optional[str] = None    # untuk service FCL: 20FT / 20FT HQ / 40FT / 40FT HQ / OPEN TOP
     driver_name: Optional[str] = None
     nopol: Optional[str] = None
     insurance_enabled: Optional[bool] = False
@@ -813,9 +816,14 @@ async def seed_data():
                 {"$set": updates},
             )
 
-    # Tax settings (default 0/1/11). PPN 12 dipensiunkan per request user iter-10.
+    # Tax settings (default 0/1.1/11). PPN 1% dinaikkan ke 1.1% per request user.
     await db.settings.delete_many({"key_name": "tax_ppn_12"})  # migrate: drop legacy if present
-    for key, val in [("tax_ppn_0", "0"), ("tax_ppn_1", "1"), ("tax_ppn_11", "11")]:
+    # Migrasi: jika tax_ppn_1 masih bernilai "1", ubah ke "1.1"
+    await db.settings.update_one(
+        {"key_name": "tax_ppn_1", "key_value": "1"},
+        {"$set": {"key_value": "1.1"}},
+    )
+    for key, val in [("tax_ppn_0", "0"), ("tax_ppn_1", "1.1"), ("tax_ppn_11", "11")]:
         await db.settings.update_one(
             {"key_name": key},
             {"$setOnInsert": {"key_name": key, "key_value": val}},
@@ -1467,7 +1475,10 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
         "grand_total": round(total + tax_amt, 2),
         "koli_count": int(data.koli_count),
         "koli_qty_per": (data.koli_qty_per or "").strip() or None,
-        "armada": (data.armada or "").strip() or None,
+        "armada": (data.armada_requested or data.armada or "").strip() or None,
+        "armada_requested": (data.armada_requested or data.armada or "").strip() or None,
+        "armada_internal": (data.armada_internal or "").strip() or None,
+        "container_type": (data.container_type or "").strip() or None,
         "driver_name": (data.driver_name or "").strip() or None,
         "nopol": (data.nopol or "").strip() or None,
         "insurance_enabled": bool(data.insurance_enabled),
@@ -4200,6 +4211,9 @@ class AwbExtendedUpdate(BaseModel):
     koli_count: Optional[int] = None
     koli_qty_per: Optional[str] = None
     armada: Optional[str] = None
+    armada_requested: Optional[str] = None
+    armada_internal: Optional[str] = None
+    container_type: Optional[str] = None
     driver_name: Optional[str] = None
     nopol: Optional[str] = None
     insurance_enabled: Optional[bool] = None
@@ -6172,8 +6186,14 @@ async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[
     rows_items = []
     main_desc_parts = ["Biaya Pengiriman Barang"]
     suffix = []
-    if awb.get("service"): suffix.append(awb["service"])
-    if awb.get("armada"): suffix.append(awb["armada"])
+    # Service + container_type (untuk FCL: mis. "FCL 40FT HQ")
+    svc = awb.get("service") or ""
+    if awb.get("container_type"):
+        svc = f"{svc} {awb['container_type']}".strip()
+    if svc: suffix.append(svc)
+    # Untuk invoice, pakai armada_requested (yang di-request customer); fallback ke armada legacy
+    armada_bill = awb.get("armada_requested") or awb.get("armada")
+    if armada_bill: suffix.append(armada_bill)
     if suffix: main_desc_parts.append(" ".join(suffix))
     rows_items.append({"desc": " - ".join(main_desc_parts), "amount": awb.get("total_tariff") or 0, "with_detail": True})
 
