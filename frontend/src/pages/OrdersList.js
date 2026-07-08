@@ -27,6 +27,7 @@ export default function OrdersList() {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [q, setQ] = useState("");
+  const [month, setMonth] = useState(""); // YYYY-MM (kosong = semua bulan)
   const [filterMode, setFilterMode] = useState("AND"); // AND default for /orders (current behavior)
 
   // Receive modal
@@ -87,11 +88,17 @@ export default function OrdersList() {
     if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.customer_name || ""} ${r.consignee || ""} ${r.reff_no || ""} ${r.origin || ""} ${r.destination || ""}`.toLowerCase().includes(qStr));
     if (status) fns.push((r) => r.status === status);
     if (customerId) fns.push((r) => r.customer_id === customerId);
+    if (month) fns.push((r) => {
+      if (!r.created_at) return false;
+      const d = new Date(r.created_at);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      return ym === month;
+    });
     if (fns.length === 0) return rows;
     return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
-  }, [rows, q, status, customerId, filterMode]);
+  }, [rows, q, status, customerId, month, filterMode]);
 
-  const pag = usePagination(filteredRows, { resetKey: `${q}|${status}|${customerId}|${filterMode}` });
+  const pag = usePagination(filteredRows, { resetKey: `${q}|${status}|${customerId}|${month}|${filterMode}` });
 
   const dropOrder = async (r) => {
     if (!window.confirm(`Tandai AWB ${r.awb_number} sebagai DROP?`)) return;
@@ -226,9 +233,9 @@ export default function OrdersList() {
           storageKey="orders"
           mode={filterMode}
           setMode={setFilterMode}
-          currentFilters={{ q, status, customerId }}
-          onLoadPreset={(f) => { setQ(f.q || ""); setStatus(f.status || ""); setCustomerId(f.customerId || ""); }}
-          activeCount={[q.trim(), status, customerId].filter(Boolean).length}
+          currentFilters={{ q, status, customerId, month }}
+          onLoadPreset={(f) => { setQ(f.q || ""); setStatus(f.status || ""); setCustomerId(f.customerId || ""); setMonth(f.month || ""); }}
+          activeCount={[q.trim(), status, customerId, month].filter(Boolean).length}
         />
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[260px]">
@@ -236,6 +243,29 @@ export default function OrdersList() {
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
               <Input data-testid="orders-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contoh: AWB-202606-0001 / JKT / Pak Andi..." className="pl-9"/>
+            </div>
+          </div>
+          <div className="min-w-[170px]">
+            <Label>Bulan Pickup</Label>
+            <div className="flex gap-1">
+              <Input
+                data-testid="filter-month-input"
+                type="month"
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+                className="flex-1"
+              />
+              {month && (
+                <button
+                  type="button"
+                  data-testid="filter-month-clear"
+                  onClick={() => setMonth("")}
+                  title="Semua Bulan"
+                  className="px-2 border border-slate-300 rounded text-slate-500 hover:bg-slate-100"
+                >
+                  <X size={12}/>
+                </button>
+              )}
             </div>
           </div>
           <div className="min-w-[180px]">
