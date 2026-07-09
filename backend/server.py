@@ -6279,12 +6279,19 @@ async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[
     c.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[5].height = 38
 
-    # --- Issuer block (rows 7-9) + Meta on right ---
+    # --- Issuer block (rows 7-10) + Meta on right ---
+    # Split address per line untuk render multi-baris kop surat.
     ws.merge_cells("B7:L7"); ws["B7"] = issuer or "PT. Abirama Mitra"; ws["B7"].font = bold
-    ws.merge_cells("B8:L8"); ws["B8"] = issuer_address.split("\n")[0] if "\n" in issuer_address else issuer_address
-    ws["B8"].font = regular
-    ws.merge_cells("B9:L9"); ws["B9"] = issuer_address.split("\n", 1)[1] if "\n" in issuer_address else (issuer_npwp and f"NPWP: {issuer_npwp}" or "")
-    ws["B9"].font = regular
+    addr_lines = [ln.strip() for ln in (issuer_address or "").split("\n") if ln.strip()]
+    # Isi B8..B10 (max 3 baris tambahan) dari address; sisakan slot terakhir untuk NPWP kalau ada
+    for i in range(3):
+        row_i = 8 + i
+        ws.merge_cells(f"B{row_i}:L{row_i}")
+        if i < len(addr_lines):
+            ws[f"B{row_i}"] = addr_lines[i]
+        elif i == len(addr_lines) and issuer_npwp:
+            ws[f"B{row_i}"] = f"NPWP: {issuer_npwp}"
+        ws[f"B{row_i}"].font = regular
 
     # Right meta block
     ws["P7"] = "Invoice No"; ws["P7"].font = bold

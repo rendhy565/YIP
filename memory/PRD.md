@@ -1,14 +1,18 @@
 # PRD — ARC TMS Business Suite
 
 
-## Latest (2026-07-09) — Iteration 30: Armada Dropdown + Kop Surat AR Cargo
+## Latest (2026-07-09) — Iteration 30: Armada Dropdown + Kop Surat AR Cargo LENGKAP
 **Fitur**:
-1. **Armada Dropdown**: field `armada_requested` & `armada_internal` di Input AWB berubah dari Input text jadi `<Select>`. 21 opsi:
-   - TRUCKING CHARTER (BLIND VAN, 1 TON, CDE, CDD, CDD LONG, FUSO, FUSO LONG, TRONTON, WING BOX, CONTAINER 20", CONTAINER 40")
-   - MULTIDROP variants untuk BLIND VAN, 1 TON, CDE, CDD, CDD LONG, FUSO, FUSO LONG
-   - KONSUL UDARA / DARAT / LAUT
-2. **Logo AR Cargo di invoice**: kop surat baru (PNG 800x565, resized ke 120px height @ runtime via PIL) di-upload ke `settings.invoice_logo_b64`. Semua invoice yang di-export (`/api/exports/invoice/{id}`) sekarang otomatis pakai logo baru ini.
-3. **Bug fix sizing logo**: sebelumnya width tidak proporsional (openpyxl `img.height=X` tidak scale width). Sekarang PIL resize + convert RGBA→RGB dulu sebelum embed → file size turun dari 156KB ke 23KB per invoice.
+1. **Armada Dropdown**: 21 opsi standar (TRUCKING CHARTER + MULTIDROP + KONSUL Udara/Darat/Laut) untuk field `armada_requested` & `armada_internal`.
+2. **Logo AR Cargo** di invoice — resize proporsional ke 169x120px via PIL.
+3. **Kop Surat LENGKAP di invoice** (bukan cuma logo):
+   - Setting `address_PT. Abirama Mitra Pratama` & `Pradana` diisi multi-baris:
+     - `Grand Galaxy City RSK 6 No. 73 Jakasetia`
+     - `Bekasi Selatan, Kota Bekasi, Jawa Barat 17147`
+     - `Website: http://ar-cargo.com`
+   - Template invoice diperluas dari 2 baris jadi 3 baris (B8..B10) untuk render seluruh info kop.
+   - Jika address < 3 baris, NPWP otomatis di-append di baris berikutnya.
+4. **Bug fix sizing logo** — file size invoice 156KB → 23KB.
 
 ## Latest (2026-07-08) — Iteration 29: Tracking Posisi Barang (real-time log)
 **Fitur baru**:
