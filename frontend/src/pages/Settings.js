@@ -41,6 +41,7 @@ export default function Settings() {
 
   const tax = rows.filter((r) => r.key_name.startsWith("tax_ppn"));
   const company = rows.filter((r) => r.key_name.startsWith("company_"));
+  const kop = rows.filter((r) => r.key_name.startsWith("kop_"));
   const issuerKeys = rows.filter((r) => (r.key_name.startsWith("signer_") || r.key_name.startsWith("address_") || r.key_name.startsWith("npwp_") || r.key_name.startsWith("bank_")));
   const logoRow = rows.find((r) => r.key_name === "invoice_logo_b64");
 
@@ -61,7 +62,19 @@ export default function Settings() {
 
   const labelMap = {
     company_name: "Nama Perusahaan (Default)", company_npwp: "NPWP Perusahaan (Default)", company_address: "Alamat Perusahaan (Default)",
-    tax_ppn_0: "PPN 0%", tax_ppn_1: "PPN 1%", tax_ppn_11: "PPN 11%",
+    tax_ppn_0: "PPN 0%", tax_ppn_1: "PPN 1.1%", tax_ppn_11: "PPN 11%",
+    kop_address: "Alamat Kop Surat",
+    kop_phone: "Telepon Kop Surat",
+    kop_email: "Email Kop Surat",
+    kop_website: "Website Kop Surat",
+    kop_tagline: "Tagline Kop Surat",
+  };
+  const kopPlaceholder = {
+    kop_address: "Grand Galaxy City RSK 6 No. 73 Jakasetia, Bekasi Selatan, Bekasi 17147",
+    kop_phone: "021-1234567 / 0812-3456-7890",
+    kop_email: "info@ar-cargo.com",
+    kop_website: "http://ar-cargo.com",
+    kop_tagline: "Solusi Pengiriman Tercepat, Terpercaya dan Profesional",
   };
   const issuerLabel = (key) => {
     if (key.startsWith("signer_")) return `Penandatangan — ${key.slice(7)}`;
@@ -152,9 +165,75 @@ export default function Settings() {
             <label className="inline-block">
               <input data-testid="logo-upload-input" type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadLogo} className="block w-full text-xs file:mr-3 file:py-2 file:px-3 file:rounded file:border-0 file:bg-blue-600 file:text-white file:font-bold file:cursor-pointer hover:file:bg-blue-700"/>
             </label>
-            <p className="text-[11px] text-slate-500 mt-2">Logo akan muncul di pojok kiri atas invoice Excel di atas banner "INVOICE".</p>
+            <p className="text-[11px] text-slate-500 mt-2">Logo akan muncul di pojok kiri atas invoice Excel di atas banner &quot;INVOICE&quot;.</p>
           </div>
         </div>
+      </Card>
+
+      {/* === KOP SURAT — dipakai untuk semua invoice === */}
+      <Card className="mb-5" data-testid="kop-surat-section">
+        <div className="px-4 py-3 border-b border-slate-200">
+          <h3 className="font-bold inline-flex items-center gap-2">📄 Kop Surat Template Invoice</h3>
+          <p className="text-xs text-slate-500 mt-1">
+            Info kop surat yang akan tampil di <strong>header semua invoice</strong> (semua center-aligned di bawah logo).
+            Nama perusahaan otomatis diambil dari <em>Perusahaan Issuer</em> yang dipilih saat Input AWB.
+          </p>
+        </div>
+        {/* Preview live */}
+        <div className="p-4 border-b border-slate-200 bg-slate-50">
+          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-2">Preview Kop</div>
+          <div className="border border-slate-300 bg-white rounded p-4 text-center" data-testid="kop-preview">
+            {logoRow?.key_value && (
+              <img
+                src={logoRow.key_value.startsWith("data:") ? logoRow.key_value : `data:image/png;base64,${logoRow.key_value}`}
+                alt="Logo"
+                className="mx-auto mb-2"
+                style={{ maxHeight: 60 }}
+              />
+            )}
+            <div className="text-base font-bold text-blue-900 uppercase">— NAMA PERUSAHAAN (dari AWB) —</div>
+            <div className="text-xs text-slate-600 mt-1">{(edited.kop_address ?? kop.find(k=>k.key_name==='kop_address')?.key_value) || <em className="text-slate-400">(alamat kosong)</em>}</div>
+            {((edited.kop_phone ?? kop.find(k=>k.key_name==='kop_phone')?.key_value) || (edited.kop_email ?? kop.find(k=>k.key_name==='kop_email')?.key_value)) && (
+              <div className="text-xs text-slate-600 mt-0.5">
+                {(edited.kop_phone ?? kop.find(k=>k.key_name==='kop_phone')?.key_value) && `Telp: ${edited.kop_phone ?? kop.find(k=>k.key_name==='kop_phone')?.key_value}`}
+                {(edited.kop_phone ?? kop.find(k=>k.key_name==='kop_phone')?.key_value) && (edited.kop_email ?? kop.find(k=>k.key_name==='kop_email')?.key_value) && " · "}
+                {(edited.kop_email ?? kop.find(k=>k.key_name==='kop_email')?.key_value) && `Email: ${edited.kop_email ?? kop.find(k=>k.key_name==='kop_email')?.key_value}`}
+              </div>
+            )}
+            {(edited.kop_website ?? kop.find(k=>k.key_name==='kop_website')?.key_value) && (
+              <div className="text-xs text-slate-600 mt-0.5">Website: {edited.kop_website ?? kop.find(k=>k.key_name==='kop_website')?.key_value}</div>
+            )}
+            {(edited.kop_tagline ?? kop.find(k=>k.key_name==='kop_tagline')?.key_value) && (
+              <div className="text-xs italic text-blue-900 mt-1">{edited.kop_tagline ?? kop.find(k=>k.key_name==='kop_tagline')?.key_value}</div>
+            )}
+          </div>
+        </div>
+        {/* Form input */}
+        <Table>
+          <thead><tr><Th>Field</Th><Th>Nilai</Th><Th></Th></tr></thead>
+          <tbody>
+            {["kop_address", "kop_phone", "kop_email", "kop_website", "kop_tagline"].map((k) => {
+              const r = kop.find((x) => x.key_name === k);
+              if (!r) return null;
+              return (
+                <tr key={k}>
+                  <Td className="w-52">{labelMap[k]}</Td>
+                  <Td>
+                    <Input
+                      data-testid={`setting-${k}`}
+                      value={edited[k] ?? r.key_value}
+                      onChange={(e) => setEdited({ ...edited, [k]: e.target.value })}
+                      placeholder={kopPlaceholder[k] || ""}
+                    />
+                  </Td>
+                  <Td className="text-right">
+                    <Button variant="secondary" onClick={() => save(k)} disabled={!(k in edited)}><Save size={14}/> Simpan</Button>
+                  </Td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </Table>
       </Card>
 
       <Card>

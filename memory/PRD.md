@@ -1,7 +1,32 @@
 # PRD — ARC TMS Business Suite
 
 
-## Latest (2026-07-09) — Iteration 30: Armada Dropdown + Kop Surat AR Cargo LENGKAP
+## Latest (2026-07-09) — Iteration 31: Kop Surat CENTER + Global Settings (rombak)
+**Rombakan penuh** setelah user report kop tidak muncul + minta center + input di Settings.
+
+**Struktur baru:**
+- Settings global (bukan per-issuer): `kop_address`, `kop_phone`, `kop_email`, `kop_website`, `kop_tagline`
+- **Nama perusahaan diambil dari `awb.company_name`** (issuer yg dipilih saat Input AWB)
+- **SEMUA CENTER-aligned** di invoice: logo, nama, alamat, kontak, website, tagline
+
+**Layout invoice baru (rows 1-17):**
+- R1-4: Logo (center, di kolom K)
+- R5: Nama Perusahaan (BOLD BIG, uppercase, center) — dari awb.company_name
+- R6: Alamat (center)
+- R7: Telp · Email (center, kalau ada)
+- R8: Website (center)
+- R9: Tagline (italic biru, center)
+- R10: INVOICE banner
+- R12-14: Meta (Invoice No/Date/Due Date) kanan
+- R15: Attn
+- R17: Table header
+
+**Halaman Settings — section baru "Kop Surat Template Invoice":**
+- Live preview center-aligned (mirror invoice)
+- 5 input field dgn placeholder helpful
+- Tombol Simpan per field
+
+
 **Fitur**:
 1. **Armada Dropdown**: 21 opsi standar (TRUCKING CHARTER + MULTIDROP + KONSUL Udara/Darat/Laut) untuk field `armada_requested` & `armada_internal`.
 2. **Logo AR Cargo** di invoice — resize proporsional ke 169x120px via PIL.

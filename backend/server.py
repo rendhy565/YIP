@@ -869,6 +869,12 @@ async def seed_data():
         ("bank_account_PT. Abirama Mitra Pratama", ""),
         # Logo (base64 PNG/JPG)
         ("invoice_logo_b64", ""),
+        # === Kop Surat Global (dipakai di header semua invoice) ===
+        ("kop_address", "Grand Galaxy City RSK 6 No. 73 Jakasetia, Bekasi Selatan, Kota Bekasi, Jawa Barat 17147"),
+        ("kop_phone", ""),
+        ("kop_email", ""),
+        ("kop_website", "http://ar-cargo.com"),
+        ("kop_tagline", "Solusi Pengiriman Tercepat, Terpercaya dan Profesional via Darat, Laut, Udara"),
     ]:
         await db.settings.update_one(
             {"key_name": k},
@@ -6225,9 +6231,15 @@ async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[
     # --- Issuer info & settings ---
     issuer = awb.get("company_name") or ""
     settings = {s["key_name"]: s.get("key_value", "") async for s in db.settings.find(
-        {"key_name": {"$regex": "^(signer_|address_|npwp_|company_|bank_|invoice_)"}}
+        {"key_name": {"$regex": "^(signer_|address_|npwp_|company_|bank_|invoice_|kop_)"}}
     )}
-    issuer_address = settings.get(f"address_{issuer}") or settings.get("company_address", "")
+    # Kop surat global (settings baru — dipakai untuk SEMUA issuer)
+    kop_address = settings.get("kop_address", "")
+    kop_phone   = settings.get("kop_phone", "")
+    kop_email   = settings.get("kop_email", "")
+    kop_website = settings.get("kop_website", "")
+    kop_tagline = settings.get("kop_tagline", "")
+    # Per-issuer setting untuk signer & bank (tetap dipakai untuk tanda tangan & rekening)
     issuer_npwp = settings.get(f"npwp_{issuer}") or settings.get("company_npwp", "")
     signer_name = settings.get(f"signer_{issuer}", "")
     bank_name = settings.get(f"bank_name_{issuer}", "Mandiri")
@@ -6241,7 +6253,7 @@ async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[
                   "Q": 4, "R": 5, "S": 5, "T": 5, "U": 4, "V": 6, "W": 11}
     for k, v in col_widths.items(): ws.column_dimensions[k].width = v
 
-    # --- Logo (rows 1-4) ---
+    # --- Logo (rows 1-4) — anchored di kolom J (tengah dari A..W) ---
     if logo_b64:
         try:
             raw = logo_b64.split(",", 1)[1] if "," in logo_b64 and logo_b64.startswith("data:") else logo_b64
@@ -6267,52 +6279,81 @@ async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[
             except Exception:
                 pass
             img = XLImage(io.BytesIO(img_bytes))
-            ws.add_image(img, "A1")
+            ws.add_image(img, "K1")  # posisikan logo di kolom tengah
         except Exception:
             pass
     for r in range(1, 5): ws.row_dimensions[r].height = 22
 
-    # --- Grey banner with INVOICE title (row 5) ---
-    ws.merge_cells("B5:W5")
-    c = ws["B5"]; c.value = "INVOICE"
+    # === KOP SURAT (rows 5-9) — SEMUA CENTER, nama dari AWB, alamat dari Settings ===
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    bold_company = Font(name="Calibri", bold=True, size=14, color="1F3864")
+    kop_regular = Font(name="Calibri", size=10, color="404040")
+    kop_italic = Font(name="Calibri", italic=True, size=10, color="1F3864")
+
+    # Row 5: Nama Perusahaan (dari awb.company_name)
+    ws.merge_cells("A5:W5")
+    ws["A5"] = (issuer or "PT. Abirama Mitra").upper()
+    ws["A5"].font = bold_company; ws["A5"].alignment = center
+    ws.row_dimensions[5].height = 24
+
+    # Row 6: Alamat (dari settings, boleh multi-baris via \n)
+    ws.merge_cells("A6:W6")
+    ws["A6"] = (kop_address or "").replace("\n", " · ")
+    ws["A6"].font = kop_regular; ws["A6"].alignment = center
+    ws.row_dimensions[6].height = 20 if kop_address else 6
+
+    # Row 7: Telepon · Email
+    contact_parts = []
+    if kop_phone: contact_parts.append(f"Telp: {kop_phone}")
+    if kop_email: contact_parts.append(f"Email: {kop_email}")
+    ws.merge_cells("A7:W7")
+    ws["A7"] = " · ".join(contact_parts)
+    ws["A7"].font = kop_regular; ws["A7"].alignment = center
+    ws.row_dimensions[7].height = 16 if contact_parts else 4
+
+    # Row 8: Website
+    ws.merge_cells("A8:W8")
+    ws["A8"] = f"Website: {kop_website}" if kop_website else ""
+    ws["A8"].font = kop_regular; ws["A8"].alignment = center
+    ws.row_dimensions[8].height = 16 if kop_website else 4
+
+    # Row 9: Tagline (italic biru)
+    ws.merge_cells("A9:W9")
+    ws["A9"] = kop_tagline or ""
+    ws["A9"].font = kop_italic; ws["A9"].alignment = center
+    ws.row_dimensions[9].height = 18 if kop_tagline else 6
+
+    # --- Grey banner with INVOICE title (row 10) ---
+    ws.merge_cells("B10:W10")
+    c = ws["B10"]; c.value = "INVOICE"
     c.font = bold_white_big; c.fill = grey_banner
     c.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[5].height = 38
+    ws.row_dimensions[10].height = 38
 
-    # --- Issuer block (rows 7-10) + Meta on right ---
-    # Split address per line untuk render multi-baris kop surat.
-    ws.merge_cells("B7:L7"); ws["B7"] = issuer or "PT. Abirama Mitra"; ws["B7"].font = bold
-    addr_lines = [ln.strip() for ln in (issuer_address or "").split("\n") if ln.strip()]
-    # Isi B8..B10 (max 3 baris tambahan) dari address; sisakan slot terakhir untuk NPWP kalau ada
-    for i in range(3):
-        row_i = 8 + i
-        ws.merge_cells(f"B{row_i}:L{row_i}")
-        if i < len(addr_lines):
-            ws[f"B{row_i}"] = addr_lines[i]
-        elif i == len(addr_lines) and issuer_npwp:
-            ws[f"B{row_i}"] = f"NPWP: {issuer_npwp}"
-        ws[f"B{row_i}"].font = regular
-
-    # Right meta block
-    ws["P7"] = "Invoice No"; ws["P7"].font = bold
-    ws["U7"] = ":"; ws["U7"].font = bold
-    ws.merge_cells("V7:W7"); ws["V7"] = invoice.get("invoice_number", ""); ws["V7"].font = bold
-    ws["P8"] = "Date"; ws["P8"].font = bold
-    ws["U8"] = ":"; ws["U8"].font = bold
+    # --- Meta block (rows 12-14) — Invoice No / Date / Due Date di kanan ---
+    ws["P12"] = "Invoice No"; ws["P12"].font = bold
+    ws["U12"] = ":"; ws["U12"].font = bold
+    ws.merge_cells("V12:W12"); ws["V12"] = invoice.get("invoice_number", ""); ws["V12"].font = bold
+    ws["P13"] = "Date"; ws["P13"].font = bold
+    ws["U13"] = ":"; ws["U13"].font = bold
     inv_date = (invoice.get("created_at") or datetime.now(timezone.utc)).replace(tzinfo=None)
-    ws.merge_cells("V8:W8"); ws["V8"] = _fmt_id_date(inv_date)
+    ws.merge_cells("V13:W13"); ws["V13"] = _fmt_id_date(inv_date)
     due = inv_date + timedelta(days=30)
-    ws["P9"] = "Due Date"; ws["P9"].font = bold
-    ws["U9"] = ":"; ws["U9"].font = bold
-    ws.merge_cells("V9:W9"); ws["V9"] = _fmt_id_date(due)
+    ws["P14"] = "Due Date"; ws["P14"].font = bold
+    ws["U14"] = ":"; ws["U14"].font = bold
+    ws.merge_cells("V14:W14"); ws["V14"] = _fmt_id_date(due)
 
-    # --- Attn ---
-    ws["B11"] = "Attn :"; ws["B11"].font = regular
+    # --- Attn (row 15) ---
+    ws["B15"] = "Attn :"; ws["B15"].font = regular
     attn = awb.get("consignee") or (customer.get("name") if customer else "")
-    ws["C11"] = attn; ws["C11"].font = regular
+    ws["C15"] = attn; ws["C15"].font = regular
 
-    # --- Table header (row 13) — dark band white text ---
-    header_row = 13
+    # --- NPWP issuer di kiri (kalau ada) ---
+    if issuer_npwp:
+        ws["B12"] = f"NPWP: {issuer_npwp}"; ws["B12"].font = regular
+
+    # --- Table header (row 17) — dark band white text ---
+    header_row = 17
     ws.row_dimensions[header_row].height = 26
     ws.merge_cells(start_row=header_row, start_column=2, end_row=header_row, end_column=3)
     ws.cell(header_row, 2, "No"); ws.cell(header_row, 2).font = bold_white_table; ws.cell(header_row, 2).fill = dark_band; ws.cell(header_row, 2).alignment = Alignment(horizontal="center", vertical="center")
