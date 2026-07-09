@@ -1,7 +1,25 @@
 # PRD — ARC TMS Business Suite
 
 
-## Latest (2026-07-09) — Iteration 31: Kop Surat CENTER + Global Settings (rombak)
+## Latest (2026-07-09) — Iteration 32: Kop Surat Fix Layout (revisi)
+Fix berdasarkan feedback:
+1. **Logo pojok kiri atas** (A1 155x110px) — bukan center
+2. **Kop text center di sisa kanan** (K1:W1 s/d K5:W5) — tidak overlap dengan logo
+3. **Tombol Simpan** — diganti jadi **1 tombol global** "Simpan Semua Kop Surat" biru besar, disabled saat tidak ada perubahan.
+
+**Layout invoice baru**:
+- R1-5 col A-J: Logo AR Cargo (kiri atas)
+- R1 col K-W: Nama Perusahaan (dari `awb.company_name`, bold size 14, center)
+- R2 col K-W: Alamat (center wrap)
+- R3 col K-W: Telp · Email (center, kalau ada)
+- R4 col K-W: Website (center)
+- R5 col K-W: Tagline (italic biru, center)
+- R7: INVOICE banner
+- R9-11: Meta (Invoice No/Date/Due) kanan + NPWP kiri
+- R12: Attn
+- R14+: Table
+
+
 **Rombakan penuh** setelah user report kop tidak muncul + minta center + input di Settings.
 
 **Struktur baru:**

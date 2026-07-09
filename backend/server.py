@@ -6253,107 +6253,91 @@ async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[
                   "Q": 4, "R": 5, "S": 5, "T": 5, "U": 4, "V": 6, "W": 11}
     for k, v in col_widths.items(): ws.column_dimensions[k].width = v
 
-    # --- Logo (rows 1-4) — anchored di kolom J (tengah dari A..W) ---
+    # --- Logo (rows 1-5, pojok kiri atas A1) ---
     if logo_b64:
         try:
             raw = logo_b64.split(",", 1)[1] if "," in logo_b64 and logo_b64.startswith("data:") else logo_b64
             img_bytes = base64.b64decode(raw)
-            # Resize dengan PIL SEBELUM embed ke Excel — supaya render size benar-benar sesuai target
             try:
                 from PIL import Image as PILImage  # type: ignore
                 pil = PILImage.open(io.BytesIO(img_bytes))
-                target_h = 120  # px, tinggi header logo
+                target_h = 110  # px
                 if pil.height > 0:
                     ratio = target_h / pil.height
-                    new_size = (int(pil.width * ratio), target_h)
-                    pil = pil.resize(new_size, PILImage.LANCZOS)
+                    pil = pil.resize((int(pil.width * ratio), target_h), PILImage.LANCZOS)
                     if pil.mode == "RGBA":
-                        bg = PILImage.new("RGB", pil.size, (255, 255, 255))
-                        bg.paste(pil, mask=pil.split()[3])
-                        pil = bg
+                        bg = PILImage.new("RGB", pil.size, (255, 255, 255)); bg.paste(pil, mask=pil.split()[3]); pil = bg
                     elif pil.mode != "RGB":
                         pil = pil.convert("RGB")
-                    buf2 = io.BytesIO()
-                    pil.save(buf2, format="PNG", optimize=True)
-                    img_bytes = buf2.getvalue()
+                    buf2 = io.BytesIO(); pil.save(buf2, format="PNG", optimize=True); img_bytes = buf2.getvalue()
             except Exception:
                 pass
             img = XLImage(io.BytesIO(img_bytes))
-            ws.add_image(img, "K1")  # posisikan logo di kolom tengah
+            ws.add_image(img, "A1")
         except Exception:
             pass
-    for r in range(1, 5): ws.row_dimensions[r].height = 22
+    for r in range(1, 6): ws.row_dimensions[r].height = 22
 
-    # === KOP SURAT (rows 5-9) — SEMUA CENTER, nama dari AWB, alamat dari Settings ===
+    # === KOP SURAT (rows 1-5) — di sisa lebar KANAN dari logo, semua CENTER ===
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     bold_company = Font(name="Calibri", bold=True, size=14, color="1F3864")
     kop_regular = Font(name="Calibri", size=10, color="404040")
     kop_italic = Font(name="Calibri", italic=True, size=10, color="1F3864")
 
-    # Row 5: Nama Perusahaan (dari awb.company_name)
-    ws.merge_cells("A5:W5")
-    ws["A5"] = (issuer or "PT. Abirama Mitra").upper()
-    ws["A5"].font = bold_company; ws["A5"].alignment = center
-    ws.row_dimensions[5].height = 24
+    # R1: Nama Perusahaan (dari AWB) — center K1:W1
+    ws.merge_cells("K1:W1"); ws["K1"] = (issuer or "PT. Abirama Mitra").upper()
+    ws["K1"].font = bold_company; ws["K1"].alignment = center
 
-    # Row 6: Alamat (dari settings, boleh multi-baris via \n)
-    ws.merge_cells("A6:W6")
-    ws["A6"] = (kop_address or "").replace("\n", " · ")
-    ws["A6"].font = kop_regular; ws["A6"].alignment = center
-    ws.row_dimensions[6].height = 20 if kop_address else 6
+    # R2: Alamat
+    ws.merge_cells("K2:W2"); ws["K2"] = (kop_address or "").replace("\n", " ")
+    ws["K2"].font = kop_regular; ws["K2"].alignment = center
 
-    # Row 7: Telepon · Email
+    # R3: Telp · Email
     contact_parts = []
     if kop_phone: contact_parts.append(f"Telp: {kop_phone}")
     if kop_email: contact_parts.append(f"Email: {kop_email}")
-    ws.merge_cells("A7:W7")
-    ws["A7"] = " · ".join(contact_parts)
-    ws["A7"].font = kop_regular; ws["A7"].alignment = center
-    ws.row_dimensions[7].height = 16 if contact_parts else 4
+    ws.merge_cells("K3:W3"); ws["K3"] = " · ".join(contact_parts)
+    ws["K3"].font = kop_regular; ws["K3"].alignment = center
 
-    # Row 8: Website
-    ws.merge_cells("A8:W8")
-    ws["A8"] = f"Website: {kop_website}" if kop_website else ""
-    ws["A8"].font = kop_regular; ws["A8"].alignment = center
-    ws.row_dimensions[8].height = 16 if kop_website else 4
+    # R4: Website
+    ws.merge_cells("K4:W4"); ws["K4"] = f"Website: {kop_website}" if kop_website else ""
+    ws["K4"].font = kop_regular; ws["K4"].alignment = center
 
-    # Row 9: Tagline (italic biru)
-    ws.merge_cells("A9:W9")
-    ws["A9"] = kop_tagline or ""
-    ws["A9"].font = kop_italic; ws["A9"].alignment = center
-    ws.row_dimensions[9].height = 18 if kop_tagline else 6
+    # R5: Tagline
+    ws.merge_cells("K5:W5"); ws["K5"] = kop_tagline or ""
+    ws["K5"].font = kop_italic; ws["K5"].alignment = center
 
-    # --- Grey banner with INVOICE title (row 10) ---
-    ws.merge_cells("B10:W10")
-    c = ws["B10"]; c.value = "INVOICE"
+    # --- Grey banner with INVOICE title (row 7) ---
+    ws.merge_cells("B7:W7")
+    c = ws["B7"]; c.value = "INVOICE"
     c.font = bold_white_big; c.fill = grey_banner
     c.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[10].height = 38
+    ws.row_dimensions[7].height = 32
 
-    # --- Meta block (rows 12-14) — Invoice No / Date / Due Date di kanan ---
-    ws["P12"] = "Invoice No"; ws["P12"].font = bold
-    ws["U12"] = ":"; ws["U12"].font = bold
-    ws.merge_cells("V12:W12"); ws["V12"] = invoice.get("invoice_number", ""); ws["V12"].font = bold
-    ws["P13"] = "Date"; ws["P13"].font = bold
-    ws["U13"] = ":"; ws["U13"].font = bold
+    # --- Meta block (rows 9-11) — Invoice No / Date / Due Date di kanan ---
+    ws["P9"] = "Invoice No"; ws["P9"].font = bold
+    ws["U9"] = ":"; ws["U9"].font = bold
+    ws.merge_cells("V9:W9"); ws["V9"] = invoice.get("invoice_number", ""); ws["V9"].font = bold
+    ws["P10"] = "Date"; ws["P10"].font = bold
+    ws["U10"] = ":"; ws["U10"].font = bold
     inv_date = (invoice.get("created_at") or datetime.now(timezone.utc)).replace(tzinfo=None)
-    ws.merge_cells("V13:W13"); ws["V13"] = _fmt_id_date(inv_date)
+    ws.merge_cells("V10:W10"); ws["V10"] = _fmt_id_date(inv_date)
     due = inv_date + timedelta(days=30)
-    ws["P14"] = "Due Date"; ws["P14"].font = bold
-    ws["U14"] = ":"; ws["U14"].font = bold
-    ws.merge_cells("V14:W14"); ws["V14"] = _fmt_id_date(due)
-
-    # --- Attn (row 15) ---
-    ws["B15"] = "Attn :"; ws["B15"].font = regular
-    attn = awb.get("consignee") or (customer.get("name") if customer else "")
-    ws["C15"] = attn; ws["C15"].font = regular
+    ws["P11"] = "Due Date"; ws["P11"].font = bold
+    ws["U11"] = ":"; ws["U11"].font = bold
+    ws.merge_cells("V11:W11"); ws["V11"] = _fmt_id_date(due)
 
     # --- NPWP issuer di kiri (kalau ada) ---
     if issuer_npwp:
-        ws["B12"] = f"NPWP: {issuer_npwp}"; ws["B12"].font = regular
+        ws["B9"] = f"NPWP: {issuer_npwp}"; ws["B9"].font = regular
 
-    # --- Table header (row 17) — dark band white text ---
-    header_row = 17
+    # --- Attn (row 12) ---
+    ws["B12"] = "Attn :"; ws["B12"].font = regular
+    attn = awb.get("consignee") or (customer.get("name") if customer else "")
+    ws["C12"] = attn; ws["C12"].font = regular
+
+    # --- Table header (row 14) — dark band white text ---
+    header_row = 14
     ws.row_dimensions[header_row].height = 26
     ws.merge_cells(start_row=header_row, start_column=2, end_row=header_row, end_column=3)
     ws.cell(header_row, 2, "No"); ws.cell(header_row, 2).font = bold_white_table; ws.cell(header_row, 2).fill = dark_band; ws.cell(header_row, 2).alignment = Alignment(horizontal="center", vertical="center")

@@ -30,6 +30,21 @@ export default function Settings() {
     } catch (e) { toast.error(errMsg(e)); }
   };
 
+  // Simpan semua field kop_* yang di-edit sekaligus
+  const saveAllKop = async () => {
+    const kopKeys = ["kop_address", "kop_phone", "kop_email", "kop_website", "kop_tagline"];
+    const toSave = kopKeys.filter((k) => k in edited);
+    if (toSave.length === 0) { toast.info("Tidak ada perubahan"); return; }
+    try {
+      await Promise.all(toSave.map((k) =>
+        api.put(`/settings/${k}`, { key_name: k, key_value: String(edited[k]) })
+      ));
+      toast.success(`${toSave.length} field kop surat tersimpan`);
+      setEdited((e) => { const n = { ...e }; toSave.forEach((k) => delete n[k]); return n; });
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   const toggleFlag = async (key, enabled) => {
     try {
       await api.put(`/feature-flags/${key}`, { enabled });
@@ -210,7 +225,7 @@ export default function Settings() {
         </div>
         {/* Form input */}
         <Table>
-          <thead><tr><Th>Field</Th><Th>Nilai</Th><Th></Th></tr></thead>
+          <thead><tr><Th>Field</Th><Th>Nilai</Th></tr></thead>
           <tbody>
             {["kop_address", "kop_phone", "kop_email", "kop_website", "kop_tagline"].map((k) => {
               const r = kop.find((x) => x.key_name === k);
@@ -226,14 +241,24 @@ export default function Settings() {
                       placeholder={kopPlaceholder[k] || ""}
                     />
                   </Td>
-                  <Td className="text-right">
-                    <Button variant="secondary" onClick={() => save(k)} disabled={!(k in edited)}><Save size={14}/> Simpan</Button>
-                  </Td>
                 </tr>
               );
             })}
           </tbody>
         </Table>
+        <div className="p-4 flex items-center justify-between border-t border-slate-200 bg-slate-50">
+          <p className="text-[11px] text-slate-500">
+            Edit di atas, lalu klik <strong>Simpan Semua</strong>.
+            Perubahan langsung berlaku ke invoice yang di-export berikutnya.
+          </p>
+          <Button
+            data-testid="kop-save-all-btn"
+            onClick={saveAllKop}
+            disabled={!kop.some((r) => r.key_name in edited)}
+          >
+            <Save size={14}/> Simpan Semua Kop Surat
+          </Button>
+        </div>
       </Card>
 
       <Card>
