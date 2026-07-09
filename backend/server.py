@@ -6246,10 +6246,27 @@ async def _build_invoice_sheet(ws, invoice: dict, awb: dict, customer: Optional[
         try:
             raw = logo_b64.split(",", 1)[1] if "," in logo_b64 and logo_b64.startswith("data:") else logo_b64
             img_bytes = base64.b64decode(raw)
+            # Resize dengan PIL SEBELUM embed ke Excel — supaya render size benar-benar sesuai target
+            try:
+                from PIL import Image as PILImage  # type: ignore
+                pil = PILImage.open(io.BytesIO(img_bytes))
+                target_h = 120  # px, tinggi header logo
+                if pil.height > 0:
+                    ratio = target_h / pil.height
+                    new_size = (int(pil.width * ratio), target_h)
+                    pil = pil.resize(new_size, PILImage.LANCZOS)
+                    if pil.mode == "RGBA":
+                        bg = PILImage.new("RGB", pil.size, (255, 255, 255))
+                        bg.paste(pil, mask=pil.split()[3])
+                        pil = bg
+                    elif pil.mode != "RGB":
+                        pil = pil.convert("RGB")
+                    buf2 = io.BytesIO()
+                    pil.save(buf2, format="PNG", optimize=True)
+                    img_bytes = buf2.getvalue()
+            except Exception:
+                pass
             img = XLImage(io.BytesIO(img_bytes))
-            # Resize to fit ~ 80 pt height
-            img.height = 80
-            img.width = int(img.height * (img.width / img.height) if img.height else 200)
             ws.add_image(img, "A1")
         except Exception:
             pass

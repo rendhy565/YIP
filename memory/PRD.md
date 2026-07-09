@@ -1,6 +1,15 @@
 # PRD — ARC TMS Business Suite
 
 
+## Latest (2026-07-09) — Iteration 30: Armada Dropdown + Kop Surat AR Cargo
+**Fitur**:
+1. **Armada Dropdown**: field `armada_requested` & `armada_internal` di Input AWB berubah dari Input text jadi `<Select>`. 21 opsi:
+   - TRUCKING CHARTER (BLIND VAN, 1 TON, CDE, CDD, CDD LONG, FUSO, FUSO LONG, TRONTON, WING BOX, CONTAINER 20", CONTAINER 40")
+   - MULTIDROP variants untuk BLIND VAN, 1 TON, CDE, CDD, CDD LONG, FUSO, FUSO LONG
+   - KONSUL UDARA / DARAT / LAUT
+2. **Logo AR Cargo di invoice**: kop surat baru (PNG 800x565, resized ke 120px height @ runtime via PIL) di-upload ke `settings.invoice_logo_b64`. Semua invoice yang di-export (`/api/exports/invoice/{id}`) sekarang otomatis pakai logo baru ini.
+3. **Bug fix sizing logo**: sebelumnya width tidak proporsional (openpyxl `img.height=X` tidak scale width). Sekarang PIL resize + convert RGBA→RGB dulu sebelum embed → file size turun dari 156KB ke 23KB per invoice.
+
 ## Latest (2026-07-08) — Iteration 29: Tracking Posisi Barang (real-time log)
 **Fitur baru**:
 - Tombol "Tracking" di Daftar AWB, posisi di **kiri tombol "Terima"**

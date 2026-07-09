@@ -30,6 +30,32 @@ const COMPANY_OPTIONS = [
 const SERVICE_OPTIONS = ["LCL", "FCL", "LTL", "FTL", "AIR", "Lumpsum"];
 const CHARTER_SERVICES = ["FCL", "FTL", "Lumpsum"]; // single price, no weight multiplier
 const CONTAINER_TYPES = ["20FT", "20FT HQ", "40FT", "40FT HQ", "OPEN TOP"];
+
+// Daftar Armada Transport — standar internal AR Cargo
+const ARMADA_OPTIONS = [
+  "TRUCKING CHARTER BLIND VAN",
+  "TRUCKING CHARTER MULTIDROP BLIND VAN",
+  "TRUCKING CHARTER 1 TON",
+  "TRUCKING CHARTER MULTIDROP 1 TON",
+  "TRUCKING CHARTER CDE",
+  "TRUCKING CHARTER MULTIDROP CDE",
+  "TRUCKING CHARTER CDD",
+  "TRUCKING CHARTER MULTIDROP CDD",
+  "TRUCKING CHARTER CDD LONG",
+  "TRUCKING CHARTER MULTIDROP CDD LONG",
+  "TRUCKING CHARTER FUSO",
+  "TRUCKING CHARTER MULTIDROP FUSO",
+  "TRUCKING CHARTER FUSO LONG",
+  "TRUCKING CHARTER MULTIDROP FUSO LONG",
+  "TRUCKING CHARTER TRONTON",
+  "TRUCKING CHARTER WING BOX",
+  "TRUCKING CHARTER CONTAINER 20\"",
+  "TRUCKING CHARTER CONTAINER 40\"",
+  "KONSUL UDARA",
+  "KONSUL DARAT",
+  "KONSUL LAUT",
+];
+
 const VIA_OPTIONS = [
   { value: "D", label: "Darat" },
   { value: "L", label: "Laut" },
@@ -507,14 +533,20 @@ export default function OrderInput() {
                   Armada Request Customer
                   <span className="text-blue-700 text-[10px] ml-1">— tampil di invoice / tagihan</span>
                 </Label>
-                <Input data-testid="order-armada-requested-input" value={form.armada_requested} onChange={(e) => setForm({ ...form, armada_requested: e.target.value })} placeholder="Mis. CDD"/>
+                <Select data-testid="order-armada-requested-input" value={form.armada_requested} onChange={(e) => setForm({ ...form, armada_requested: e.target.value })}>
+                  <option value="">— Pilih Armada —</option>
+                  {ARMADA_OPTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </Select>
               </div>
               <div>
                 <Label>
                   Armada Pickup Internal
                   <span className="text-slate-500 text-[10px] ml-1">— aktual dipakai (internal, opsional)</span>
                 </Label>
-                <Input data-testid="order-armada-internal-input" value={form.armada_internal} onChange={(e) => setForm({ ...form, armada_internal: e.target.value })} placeholder="Mis. FUSO"/>
+                <Select data-testid="order-armada-internal-input" value={form.armada_internal} onChange={(e) => setForm({ ...form, armada_internal: e.target.value })}>
+                  <option value="">— Pilih Armada —</option>
+                  {ARMADA_OPTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                </Select>
               </div>
             </div>
             <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
