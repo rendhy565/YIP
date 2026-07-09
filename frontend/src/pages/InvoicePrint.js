@@ -73,10 +73,37 @@ export function InvoicePrintBody({ data }) {
     <>
       {/* PAGE 1: INVOICE (AR Cargo template) */}
       <div className="print-page invoice-page max-w-[210mm] mx-auto bg-white shadow border border-slate-200 p-8 mb-6">
-        {/* Logo row */}
-        <div className="flex items-start mb-2">
-          <div className="w-32 h-20 flex items-center justify-start">
+        {/* Header: Logo kiri + Kop Surat center di sisa kanan */}
+        <div className="flex items-start gap-4 mb-4">
+          <div className="w-32 h-24 flex items-center justify-start flex-shrink-0">
             {logoSrc ? <img src={logoSrc} alt="Logo" className="max-w-full max-h-full object-contain"/> : <span className="text-xs text-slate-300">[ LOGO ]</span>}
+          </div>
+          <div className="flex-1 text-center" data-testid="invoice-kop-header">
+            <div className="text-lg font-bold uppercase text-blue-900 tracking-wide">
+              {(awb?.company_name || company?.name || "PT. Abirama Mitra")}
+            </div>
+            {company?.kop_address && (
+              <div className="text-[11px] text-slate-700 mt-0.5 leading-tight">
+                {company.kop_address}
+              </div>
+            )}
+            {(company?.kop_phone || company?.kop_email) && (
+              <div className="text-[11px] text-slate-700 mt-0.5 leading-tight">
+                {company?.kop_phone && <>Telp: {company.kop_phone}</>}
+                {company?.kop_phone && company?.kop_email && " · "}
+                {company?.kop_email && <>Email: {company.kop_email}</>}
+              </div>
+            )}
+            {company?.kop_website && (
+              <div className="text-[11px] text-slate-700 mt-0.5 leading-tight">
+                Website: {company.kop_website}
+              </div>
+            )}
+            {company?.kop_tagline && (
+              <div className="text-[11px] italic text-blue-900 mt-1 leading-tight">
+                {company.kop_tagline}
+              </div>
+            )}
           </div>
         </div>
 

@@ -1,7 +1,21 @@
 # PRD — ARC TMS Business Suite
 
 
-## Latest (2026-07-09) — Iteration 32: Kop Surat Fix Layout (revisi)
+## Latest (2026-07-09) — Iteration 33: Kop Surat di HTML Invoice Preview (FIX ROOT CAUSE)
+User pakai **HTML invoice view** (halaman `/invoices/:id/print` — `InvoicePrint.js`) untuk lihat/cetak invoice, bukan Excel export.
+Iterasi sebelumnya (30-32) hanya edit template Excel — jadi user tetap gk lihat perubahan.
+
+**Fix di sini:**
+1. Endpoint `/api/invoices/{iid}/full` (line 2145) sekarang return `company.kop_address`, `kop_phone`, `kop_email`, `kop_website`, `kop_tagline` dari settings.
+2. `InvoicePrint.js` header di-rewrite:
+   - Logo pojok kiri atas (w-32 h-24)
+   - Kop text center di sisa lebar kanan (flex-1 text-center)
+   - Nama perusahaan dari `awb.company_name` (bold uppercase biru)
+   - Alamat, Telp/Email, Website, Tagline italic — semua center
+
+**Verified via UI screenshot** di `/invoices/{id}/print`: semua kop surat muncul dgn logo kiri, teks center kanan.
+
+
 Fix berdasarkan feedback:
 1. **Logo pojok kiri atas** (A1 155x110px) — bukan center
 2. **Kop text center di sisa kanan** (K1:W1 s/d K5:W5) — tidak overlap dengan logo

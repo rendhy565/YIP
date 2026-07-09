@@ -2151,6 +2151,12 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
             "bank_holder": settings.get(f"bank_holder_{issuer}", issuer.replace("PT. ", "")),
             "bank_account": settings.get(f"bank_account_{issuer}", ""),
             "logo_b64": settings.get("invoice_logo_b64", ""),
+            # Kop surat global (dipakai di header InvoicePrint HTML)
+            "kop_address": settings.get("kop_address", ""),
+            "kop_phone": settings.get("kop_phone", ""),
+            "kop_email": settings.get("kop_email", ""),
+            "kop_website": settings.get("kop_website", ""),
+            "kop_tagline": settings.get("kop_tagline", ""),
         },
     }
 
