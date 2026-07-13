@@ -3692,16 +3692,51 @@ async def update_feature_flag(key: str, data: FeatureFlagUpdate, user: dict = De
 # ===========================================================================
 # HR & PAYROLL MODULE  (toggle: hr)
 # ===========================================================================
+class FamilyMember(BaseModel):
+    hubungan: Optional[str] = None  # e.g. Istri, Suami, Anak, Ayah, Ibu
+    nama: Optional[str] = None
+    alamat: Optional[str] = None
+    no_hp: Optional[str] = None
+    no_ktp: Optional[str] = None
+
 class EmployeeIn(BaseModel):
+    # --- Identitas ---
     full_name: str
-    position: Optional[str] = None
-    nik: Optional[str] = None  # KTP
+    nickname: Optional[str] = None
+    tempat_lahir: Optional[str] = None
+    tanggal_lahir: Optional[str] = None       # YYYY-MM-DD
+    status_pernikahan: Optional[str] = None   # "Lajang" | "Menikah" | "Cerai Hidup" | "Cerai Mati"
+    jenis_kelamin: Optional[str] = None       # "L" | "P"
+    # --- Kontak & Legal ---
+    no_hp: Optional[str] = None
+    alamat_ktp: Optional[str] = None
+    alamat_domisili: Optional[str] = None
+    nik: Optional[str] = None                 # No. KTP
+    no_kk: Optional[str] = None               # No. KK
     npwp: Optional[str] = None
-    bpjs_no: Optional[str] = None
+    email: Optional[str] = None
+    # --- Logistik & Finansial ---
+    kendaraan_operasional: Optional[str] = None
+    sim_c: Optional[str] = None               # No. SIM C (kosong = tidak punya)
+    sim_a: Optional[str] = None
+    sim_lain: Optional[str] = None
+    bank_type: Optional[str] = None           # "BCA" | "Mandiri" | dsb
     bank_account: Optional[str] = None
+    # --- Kontak Darurat ---
+    emergency1_name: Optional[str] = None
+    emergency1_phone: Optional[str] = None
+    emergency1_relation: Optional[str] = None
+    emergency2_name: Optional[str] = None
+    emergency2_phone: Optional[str] = None
+    emergency2_relation: Optional[str] = None
+    # --- Data Keluarga (list) ---
+    family: List[FamilyMember] = []
+    # --- Kepegawaian (existing) ---
+    position: Optional[str] = None
+    bpjs_no: Optional[str] = None
     base_salary: float = 0
     allowance: float = 0
-    join_date: Optional[str] = None  # YYYY-MM-DD
+    join_date: Optional[str] = None           # YYYY-MM-DD
     active: bool = True
 
 @app.get("/api/hr/employees")

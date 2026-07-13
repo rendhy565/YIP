@@ -1,7 +1,24 @@
 # PRD — ARC TMS Business Suite
 
 
-## Latest (2026-07-09) — Iteration 33: Kop Surat di HTML Invoice Preview (FIX ROOT CAUSE)
+## Latest (2026-07-13) — Iteration 34: HR Master Karyawan (Full Form)
+Perluas modul HR-Payroll → Master Karyawan dengan **6 section** sesuai lampiran "Form Data Karyawan AR":
+
+1. **Identitas** — Nama Lengkap*, Nama Panggilan, Tempat Lahir, Tanggal Lahir, Status Pernikahan (Lajang/Menikah/Cerai Hidup/Cerai Mati), Jenis Kelamin (L/P)
+2. **Kontak & Legal** — No. HP Aktif, Email, Alamat KTP, Alamat Domisili, No. KTP, No. KK, No. NPWP
+3. **Logistik & Finansial** — Kendaraan Operasional, SIM C, SIM A, SIM Lain, Bank (BCA/Mandiri/BNI/BRI/Lainnya), No. Rekening
+4. **Kontak Darurat** — 2 kontak masing-masing dgn Nama, No. HP, Hubungan
+5. **Data Keluarga** — list dinamis dgn Hubungan, Nama, Alamat, No. HP, No. KTP (Tambah/Hapus row)
+6. **Kepegawaian** — Posisi, No. BPJS, Tanggal Bergabung, Gaji Pokok, Tunjangan, Status Aktif
+
+**Perubahan teknis**:
+- Backend `EmployeeIn` di-perluas dgn ~25 field + nested `family: List[FamilyMember]`
+- Frontend `HrPayroll.js` — table employees jadi ringkas (Nama/Panggilan/HP/Posisi/Bank/Gaji/Status), edit/add pakai **modal besar** dgn tab-less sections
+- data-testid: `hr-emp-modal`, `hr-emp-add`, `hr-emp-edit-{id}`, `hr-emp-save-btn`, `emp-full-name`, `emp-nickname`, `emp-add-family`, dsb.
+
+Verified via E2E: create employee dengan semua field + 2 anggota keluarga, edit modal, semua 6 section render dgn benar.
+
+
 User pakai **HTML invoice view** (halaman `/invoices/:id/print` — `InvoicePrint.js`) untuk lihat/cetak invoice, bukan Excel export.
 Iterasi sebelumnya (30-32) hanya edit template Excel — jadi user tetap gk lihat perubahan.
 
