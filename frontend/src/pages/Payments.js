@@ -36,7 +36,7 @@ export default function Payments() {
 
   const load = () => {
     Promise.all([
-      api.get("/orders", { params: { status_v: "Invoiced" } }),
+      api.get("/orders", { params: { status_v: "Invoiced,Paid" } }),
       api.get("/customers"),
     ]).then(([r, c]) => { setRows(r.data); setCustomers(c.data); setSelected(new Set()); });
   };
@@ -80,10 +80,12 @@ export default function Payments() {
 
   const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${filterMode}` });
 
+  // Filter rows selectable — exclude Paid dari toggle & bulk
+  const selectableRows = rows.filter((r) => r.status !== "Paid");
   const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
   const toggleAll = () => {
-    if (selected.size === rows.length) setSelected(new Set());
-    else setSelected(new Set(rows.map((r) => r.id)));
+    if (selected.size === selectableRows.length) setSelected(new Set());
+    else setSelected(new Set(selectableRows.map((r) => r.id)));
   };
 
   const openSingle = (r) => {
@@ -128,12 +130,13 @@ export default function Payments() {
     finally { setSaving(false); }
   };
 
-  const total = rows.reduce((s, r) => s + (r.grand_total || 0), 0);
-  const selectedTotal = rows.filter((r) => selected.has(r.id)).reduce((s, r) => s + (r.grand_total || 0), 0);
+  // Outstanding hanya dari yg belum lunas (Invoiced); Paid hanya untuk display
+  const total = rows.filter((r) => r.status !== "Paid").reduce((s, r) => s + (r.grand_total || 0), 0);
+  const selectedTotal = rows.filter((r) => selected.has(r.id) && r.status !== "Paid").reduce((s, r) => s + (r.grand_total || 0), 0);
 
   return (
     <div data-testid="payments-page">
-      <PageHeader title="Pembayaran (Closing)" subtitle="Tandai invoice LUNAS — single atau bulk. Wajib isi No. Invoice yang dibayar." />
+      <PageHeader title="Pembayaran (Closing)" subtitle="Tandai invoice LUNAS — single atau bulk. AWB yang sudah Paid tetap tampil dgn status Lunas untuk referensi." />
 
       <Card className="p-5 mb-5 bg-purple-50 border-purple-200">
         <div className="flex items-center gap-3 flex-wrap">
@@ -198,12 +201,18 @@ export default function Payments() {
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {pag.paged.map((r) => (
-              <tr key={r.id} data-testid={`payment-row-${r.id}`}>
+            {pag.paged.map((r) => {
+              const isPaid = r.status === "Paid";
+              return (
+              <tr key={r.id} data-testid={`payment-row-${r.id}`} className={isPaid ? "bg-emerald-50/30" : ""}>
                 <Td>
-                  <button onClick={() => toggle(r.id)}>
-                    {selected.has(r.id) ? <CheckSquare size={14} className="text-blue-700"/> : <Square size={14} className="text-slate-400"/>}
-                  </button>
+                  {isPaid ? (
+                    <span className="inline-block w-4 h-4 text-slate-300" title="Sudah lunas — tidak perlu ditandai lagi"><Square size={14}/></span>
+                  ) : (
+                    <button onClick={() => toggle(r.id)}>
+                      {selected.has(r.id) ? <CheckSquare size={14} className="text-blue-700"/> : <Square size={14} className="text-slate-400"/>}
+                    </button>
+                  )}
                 </Td>
                 <Td className="font-mono font-semibold">{r.awb_number}</Td>
                 <Td className="font-mono text-xs">
@@ -222,21 +231,26 @@ export default function Payments() {
                 <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
                 <Td><StatusBadge status={r.status}/></Td>
                 <Td className="text-right">
-                  <div className="inline-flex gap-1 justify-end">
-                    {canMultiPayment && (
-                      <Button data-testid={`multi-payment-${r.id}`} variant="secondary" onClick={() => setMultiAwb(r)} className="!bg-amber-50 !text-amber-800 hover:!bg-amber-100 !border-amber-200">
-                        <BadgeDollarSign size={14}/> Multi-Bayar
-                      </Button>
-                    )}
-                    {canMarkPaid && (
-                      <Button data-testid={`mark-paid-${r.id}`} variant="success" onClick={() => openSingle(r)}>
-                        <CheckCircle2 size={14}/> Mark Paid
-                      </Button>
-                    )}
-                  </div>
+                  {isPaid ? (
+                    <span className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">✓ Lunas</span>
+                  ) : (
+                    <div className="inline-flex gap-1 justify-end">
+                      {canMultiPayment && (
+                        <Button data-testid={`multi-payment-${r.id}`} variant="secondary" onClick={() => setMultiAwb(r)} className="!bg-amber-50 !text-amber-800 hover:!bg-amber-100 !border-amber-200">
+                          <BadgeDollarSign size={14}/> Multi-Bayar
+                        </Button>
+                      )}
+                      {canMarkPaid && (
+                        <Button data-testid={`mark-paid-${r.id}`} variant="success" onClick={() => openSingle(r)}>
+                          <CheckCircle2 size={14}/> Mark Paid
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </Td>
               </tr>
-            ))}
+              );
+            })}
             {rows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">Tidak ada invoice menunggu pembayaran.</Td></tr>}
           </tbody>
         </Table>

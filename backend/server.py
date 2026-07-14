@@ -1356,7 +1356,11 @@ async def list_orders(
 ):
     q = {}
     if status_v:
-        q["status"] = status_v
+        # Support multi-status filter dgn comma-separated (mis. "Invoiced,Paid")
+        if "," in status_v:
+            q["status"] = {"$in": [s.strip() for s in status_v.split(",") if s.strip()]}
+        else:
+            q["status"] = status_v
     if customer_id:
         q["customer_id"] = _oid(customer_id)
     if month:
