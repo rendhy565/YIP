@@ -1398,6 +1398,21 @@ async def list_orders(
         ]
         async for t in db.awb_tracking.aggregate(pipeline):
             tracking_map[t["_id"]] = {"position": t["position"], "created_at": t["created_at"]}
+    # Invoice number per AWB (dari collection invoices) — untuk kolom di Pembayaran/Closing
+    invoice_map: dict = {}  # awb_id -> {invoice_number, external_invoice_number, invoice_id}
+    if awb_ids:
+        async for inv in db.invoices.find({"$or": [
+            {"awb_id": {"$in": awb_ids}},
+            {"awb_ids": {"$in": awb_ids}},
+        ]}):
+            ids = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+            for a in ids:
+                if a not in invoice_map:  # jaga-jaga kalau multi-awb — ambil yg terbaru
+                    invoice_map[a] = {
+                        "invoice_number": inv.get("invoice_number"),
+                        "external_invoice_number": inv.get("external_invoice_number"),
+                        "invoice_id": str(inv["_id"]),
+                    }
     out = []
     for d in docs:
         s = serialize(d)
@@ -1411,6 +1426,10 @@ async def list_orders(
         tr = tracking_map.get(d["_id"])
         s["latest_tracking"] = tr["position"] if tr else None
         s["latest_tracking_at"] = tr["created_at"] if tr else None
+        inv_info = invoice_map.get(d["_id"])
+        s["invoice_number"] = inv_info["invoice_number"] if inv_info else None
+        s["external_invoice_number"] = inv_info["external_invoice_number"] if inv_info else None
+        s["invoice_id"] = inv_info["invoice_id"] if inv_info else None
         out.append(s)
     return out
 

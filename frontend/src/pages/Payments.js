@@ -72,7 +72,7 @@ export default function Payments() {
   const filtered = useMemo(() => {
     const qStr = q.trim().toLowerCase();
     const fns = [];
-    if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.customer_name || ""} ${r.origin || ""} ${r.destination || ""}`.toLowerCase().includes(qStr));
+    if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.invoice_number || ""} ${r.external_invoice_number || ""} ${r.customer_name || ""} ${r.origin || ""} ${r.destination || ""}`.toLowerCase().includes(qStr));
     if (customerId) fns.push((r) => r.customer_id === customerId);
     if (fns.length === 0) return rows;
     return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
@@ -194,7 +194,7 @@ export default function Payments() {
                 {selected.size === rows.length && rows.length > 0 ? <CheckSquare size={14}/> : <Square size={14}/>}
               </button>
             </Th>
-            <Th>AWB</Th><Th>Tanggal</Th><Th>Customer</Th><Th>Rute</Th>
+            <Th>AWB</Th><Th>Invoice No</Th><Th>Tanggal</Th><Th>Customer</Th><Th>Rute</Th>
             <Th className="text-right">Grand Total</Th><Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
@@ -206,6 +206,16 @@ export default function Payments() {
                   </button>
                 </Td>
                 <Td className="font-mono font-semibold">{r.awb_number}</Td>
+                <Td className="font-mono text-xs">
+                  {r.invoice_number ? (
+                    <div>
+                      <div className="text-slate-900 font-semibold">{r.invoice_number}</div>
+                      {r.external_invoice_number && r.external_invoice_number !== r.invoice_number && (
+                        <div className="text-[10px] text-slate-400">ext: {r.external_invoice_number}</div>
+                      )}
+                    </div>
+                  ) : <span className="text-slate-400">—</span>}
+                </Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
                 <Td>{r.customer_name}</Td>
                 <Td className="font-mono text-xs">{r.origin} → {r.destination}</Td>
@@ -227,7 +237,7 @@ export default function Payments() {
                 </Td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10">Tidak ada invoice menunggu pembayaran.</Td></tr>}
+            {rows.length === 0 && <tr><Td colSpan={9} className="text-center text-slate-500 py-10">Tidak ada invoice menunggu pembayaran.</Td></tr>}
           </tbody>
         </Table>
         <Pagination {...pag} testid="pagination-payments"/>
