@@ -8167,6 +8167,40 @@ async def import_invoice_numbers(
         update_set["updated_at"] = now
         update_set["updated_by"] = user["id"]
         await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": update_set})
+
+        # === Upsert dokumen di collection `invoices` supaya AWB muncul di halaman "Invoice Tercetak" ===
+        # Bila sudah ada dokumen invoice (mis. reimport), update nomor & status; kalau belum, buat baru.
+        existing_inv = await db.invoices.find_one({"$or": [
+            {"awb_id": awb["_id"]},
+            {"awb_ids": awb["_id"]},
+        ]})
+        # Nomor invoice: pakai dari Excel; kalau kosong pakai auto-generated dari sistem
+        eff_inv_no = inv_no or (existing_inv or {}).get("invoice_number") or await next_invoice_number()
+        inv_date_val = update_set.get("invoice_date") or (existing_inv or {}).get("invoice_date") or now
+        inv_doc_set = {
+            "invoice_number": eff_inv_no,
+            "external_invoice_number": inv_no or (existing_inv or {}).get("external_invoice_number") or "",
+            "invoice_date": inv_date_val,
+            "first_printed_at": (existing_inv or {}).get("first_printed_at") or inv_date_val,
+            "print_count": (existing_inv or {}).get("print_count") or 1,
+            "ar_recognized": (existing_inv or {}).get("ar_recognized") or False,
+            "updated_at": now,
+            "updated_by": user["id"],
+            "imported_via_upload": True,
+        }
+        if kind == "paid":
+            inv_doc_set["paid_at"] = update_set.get("paid_at")
+        if existing_inv:
+            await db.invoices.update_one({"_id": existing_inv["_id"]}, {"$set": inv_doc_set})
+        else:
+            inv_doc_set.update({
+                "awb_id": awb["_id"],
+                "awb_ids": [awb["_id"]],
+                "created_at": now,
+                "created_by": user["id"],
+            })
+            await db.invoices.insert_one(inv_doc_set)
+
         if len(summary["samples"]) < 5:
             summary["samples"].append({"awb": awb_no, "invoice": inv_no, "action": kind})
     return summary
