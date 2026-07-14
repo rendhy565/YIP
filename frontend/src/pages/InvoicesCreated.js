@@ -471,9 +471,12 @@ export default function InvoicesCreated() {
                   {invNoResult.skipped > 0 && <div className="text-amber-700">⚠ {invNoResult.skipped} baris di-skip</div>}
                   {invNoResult.errors?.length > 0 && (
                     <details>
-                      <summary className="cursor-pointer text-red-700 text-xs">{invNoResult.errors.length} error</summary>
-                      <ul className="text-xs list-disc pl-5">
-                        {invNoResult.errors.slice(0, 10).map((e, i) => <li key={i}>Row {e.row}: {e.message}</li>)}
+                      <summary className="cursor-pointer text-red-700 text-xs">
+                        {invNoResult.errors.length + (invNoResult.errors_truncated || 0)} error
+                        {invNoResult.errors_truncated > 0 && ` (menampilkan ${invNoResult.errors.length} pertama, ${invNoResult.errors_truncated} lainnya tidak ditampilkan)`}
+                      </summary>
+                      <ul className="text-xs list-disc pl-5 max-h-60 overflow-y-auto">
+                        {invNoResult.errors.slice(0, 50).map((e, i) => <li key={i}>Row {e.row}: {e.message}</li>)}
                       </ul>
                     </details>
                   )}

@@ -8134,13 +8134,18 @@ async def import_invoice_numbers(
     if not header_row_idx or "awb" not in col_idx:
         raise HTTPException(400, "Header tidak terdeteksi. Pastikan ada kolom 'AWB Number' dan 'Invoice Number'.")
 
-    summary = {"marked_invoiced": 0, "marked_paid": 0, "skipped": 0, "errors": [], "samples": []}
+    summary = {"marked_invoiced": 0, "marked_paid": 0, "skipped": 0, "errors": [], "errors_truncated": 0, "samples": []}
     now = datetime.now(timezone.utc)
+    MAX_ERRORS_REPORTED = 50  # cap agar response payload tidak balloon → hindari 500 di gateway
 
     for ridx, row in enumerate(ws.iter_rows(min_row=header_row_idx + 1, values_only=True), start=header_row_idx + 1):
+      try:
         if not row or all(v is None for v in row):
             continue
         awb_no = str(row[col_idx["awb"]] or "").strip()
+        # Buang trailing ".0" dari Excel-numeric AWB (mis. 200765.0 → 200765)
+        if awb_no.endswith(".0") and awb_no[:-2].isdigit():
+            awb_no = awb_no[:-2]
         inv_no = str(row[col_idx.get("inv")] or "").strip() if col_idx.get("inv") is not None else ""
         status_v = str(row[col_idx.get("status")] or "").strip().lower() if col_idx.get("status") is not None else ""
         paid_date_raw = row[col_idx.get("paid_date")] if col_idx.get("paid_date") is not None else None
@@ -8149,7 +8154,11 @@ async def import_invoice_numbers(
         # Find AWB
         awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awb_no)}$", "$options": "i"}})
         if not awb:
-            summary["errors"].append({"row": ridx, "message": f"AWB '{awb_no}' tidak ditemukan"})
+            if len(summary["errors"]) < MAX_ERRORS_REPORTED:
+                summary["errors"].append({"row": ridx, "message": f"AWB '{awb_no}' tidak ditemukan"})
+            else:
+                summary["errors_truncated"] += 1
+            summary["skipped"] += 1
             continue
         update_set: dict = {}
         # Always update invoice number when provided
@@ -8226,6 +8235,13 @@ async def import_invoice_numbers(
 
         if len(summary["samples"]) < 5:
             summary["samples"].append({"awb": awb_no, "invoice": inv_no, "action": kind})
+      except Exception as ex:
+        # Row-level error containment — 1 baris rusak tidak mem-crash seluruh import
+        summary["skipped"] += 1
+        if len(summary["errors"]) < MAX_ERRORS_REPORTED:
+            summary["errors"].append({"row": ridx, "message": f"Error: {str(ex)[:120]}"})
+        else:
+            summary["errors_truncated"] += 1
     return summary
 
 
