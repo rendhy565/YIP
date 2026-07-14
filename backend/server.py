@@ -729,7 +729,15 @@ async def seed_data():
     # Indexes
     await db.users.create_index("username", unique=True)
     await db.awb_orders.create_index("awb_number", unique=True)
-    await db.invoices.create_index("invoice_number", unique=True)
+    # Invoice_number TIDAK unique — 1 nomor invoice bisa dipakai untuk multi-AWB (grouping).
+    # Bila index unique legacy masih ada, drop-nya.
+    try:
+        idx_info = await db.invoices.index_information()
+        if "invoice_number_1" in idx_info and idx_info["invoice_number_1"].get("unique"):
+            await db.invoices.drop_index("invoice_number_1")
+    except Exception:
+        pass
+    await db.invoices.create_index("invoice_number")  # non-unique, untuk lookup
     await db.settings.create_index("key_name", unique=True)
     await db.fixed_costs.create_index("period_month")
     await db.chart_of_accounts.create_index("code", unique=True)
@@ -8201,11 +8209,18 @@ async def import_invoice_numbers(
         await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": update_set})
 
         # === Upsert dokumen di collection `invoices` supaya AWB muncul di halaman "Invoice Tercetak" ===
-        # Bila sudah ada dokumen invoice (mis. reimport), update nomor & status; kalau belum, buat baru.
-        existing_inv = await db.invoices.find_one({"$or": [
+        # Prioritas match:
+        #   1. Cari invoice by AWB (existing_by_awb) — reimport data yg sama
+        #   2. Kalau tidak ada, cari by invoice_number (existing_by_inv_no) — multi-AWB grouping
+        #   3. Kalau juga tidak ada, buat baru
+        existing_by_awb = await db.invoices.find_one({"$or": [
             {"awb_id": awb["_id"]},
             {"awb_ids": awb["_id"]},
         ]})
+        existing_by_inv_no = None
+        if not existing_by_awb and inv_no:
+            existing_by_inv_no = await db.invoices.find_one({"invoice_number": inv_no})
+        existing_inv = existing_by_awb or existing_by_inv_no
         # Nomor invoice: pakai dari Excel; kalau kosong pakai auto-generated dari sistem
         eff_inv_no = inv_no or (existing_inv or {}).get("invoice_number") or await next_invoice_number()
         inv_date_val = update_set.get("invoice_date") or (existing_inv or {}).get("invoice_date") or now
@@ -8222,8 +8237,15 @@ async def import_invoice_numbers(
         }
         if kind == "paid":
             inv_doc_set["paid_at"] = update_set.get("paid_at")
-        if existing_inv:
-            await db.invoices.update_one({"_id": existing_inv["_id"]}, {"$set": inv_doc_set})
+        if existing_by_awb:
+            # Reimport untuk AWB yg sama — cukup update field, jangan sentuh awb_ids
+            await db.invoices.update_one({"_id": existing_by_awb["_id"]}, {"$set": inv_doc_set})
+        elif existing_by_inv_no:
+            # Grouping — tambahkan AWB ini ke invoice yg sudah ada dgn nomor yg sama
+            await db.invoices.update_one(
+                {"_id": existing_by_inv_no["_id"]},
+                {"$set": inv_doc_set, "$addToSet": {"awb_ids": awb["_id"]}},
+            )
         else:
             inv_doc_set.update({
                 "awb_id": awb["_id"],
