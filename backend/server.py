@@ -8477,36 +8477,67 @@ async def list_recurring_expenses(user: dict = Depends(require_role("operation",
 
 @app.get("/api/recurring-expenses/upcoming")
 async def list_upcoming_recurring(user: dict = Depends(require_role("operation", "finance", "administrator"))):
-    """List recurring expense yang jatuh tempo BESOK (H-1) atau HARI INI (H).
-    Dipakai di Dashboard notifikasi (pink H-1 no button, red H w/ button).
+    """List recurring expense untuk widget dashboard:
+    - H-1 (besok jatuh tempo)         → card pink, tanpa tombol
+    - H (hari ini) / overdue -1 hari  → card merah + tombol Laksanakan Pembayaran
+    - Sudah auto-executed hari ini    → card hijau, tombol disabled "Sudah Dieksekusi"
     """
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
     tomorrow_end = today_start + timedelta(days=2)  # exclusive upper bound
-    docs = await db.recurring_expenses.find({
+
+    # (A) Yang masih pending (next_due dalam window kemarin/hari-ini/besok)
+    pending = await db.recurring_expenses.find({
         "active": True,
-        "next_due": {"$gte": today_start - timedelta(days=1), "$lt": tomorrow_end},  # include overdue by 1 day
+        "next_due": {"$gte": today_start - timedelta(days=1), "$lt": tomorrow_end},
         "$or": [{"end_date": None}, {"end_date": {"$gte": now}}],
     }).sort("next_due", 1).to_list(200)
+
+    # (B) Yang sudah auto-executed hari ini (last_executed_at di rentang hari ini)
+    executed_today = await db.recurring_expenses.find({
+        "last_executed_at": {"$gte": today_start, "$lt": today_start + timedelta(days=1)},
+    }).sort("last_executed_at", -1).to_list(200)
+
+    seen_ids = set()
     out = []
-    for d in docs:
+
+    for d in pending:
         due = d.get("next_due")
         if not due:
             continue
-        # Normalize ke naive supaya arithmetic aman (Mongo return naive datetime)
         if getattr(due, "tzinfo", None) is not None:
             due = due.replace(tzinfo=None)
         due_date = due.replace(hour=0, minute=0, second=0, microsecond=0)
         delta = (due_date - today_start).days
-        # delta: -1 kemarin (overdue 1 hari), 0 today, 1 tomorrow
         if delta < -1 or delta > 1:
             continue
         s = serialize(d)
-        s["days_until_due"] = delta       # -1, 0, atau 1
+        s["days_until_due"] = delta
         s["is_today"] = delta == 0
         s["is_tomorrow"] = delta == 1
         s["is_overdue"] = delta < 0
+        s["already_executed"] = False
         out.append(s)
+        seen_ids.add(s["id"])
+
+    for d in executed_today:
+        s = serialize(d)
+        if s["id"] in seen_ids:
+            continue
+        # Cari expense record hari ini utk info waktu eksekusi
+        last_exec = d.get("last_executed_at")
+        if last_exec and getattr(last_exec, "tzinfo", None) is None:
+            last_exec = last_exec.replace(tzinfo=timezone.utc)
+        s["days_until_due"] = 0
+        s["is_today"] = True
+        s["is_tomorrow"] = False
+        s["is_overdue"] = False
+        s["already_executed"] = True
+        s["last_executed_at"] = last_exec.isoformat() if last_exec else None
+        s["auto_execute"] = bool(d.get("auto_execute", True))
+        out.append(s)
+        seen_ids.add(s["id"])
+
     return out
 
 @app.post("/api/recurring-expenses/{rid}/execute-once")
