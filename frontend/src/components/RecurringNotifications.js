@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { fmtIDR } from "../lib/utils";
+import { useModulePerms } from "../lib/useCan";
 import { AlertCircle, Calendar, PlayCircle, CheckCircle2 } from "lucide-react";
 
 /**
@@ -13,10 +14,13 @@ import { AlertCircle, Calendar, PlayCircle, CheckCircle2 } from "lucide-react";
  */
 export default function RecurringNotifications() {
   const navigate = useNavigate();
+  const expensePerms = useModulePerms("fixed_costs");
+  const hasExpenseAccess = expensePerms && Object.values(expensePerms).some(Boolean);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const load = () => {
+    if (!hasExpenseAccess) { setLoading(false); return; }
     setLoading(true);
     api.get("/recurring-expenses/upcoming")
       .then((r) => setRows(r.data || []))
@@ -24,8 +28,9 @@ export default function RecurringNotifications() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [hasExpenseAccess]);
 
+  if (!hasExpenseAccess) return null;
   if (loading) return null;
   if (!rows || rows.length === 0) return null;
 
