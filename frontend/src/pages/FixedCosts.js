@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
@@ -164,6 +165,40 @@ export default function FixedCosts() {
   const [importResult, setImportResult] = useState(null);    // actual result
   const [editingId, setEditingId] = useState(null);  // null = create mode, id = edit mode
   const [form, setForm] = useState({ category: "", description: "", amount: "", expense_date: new Date().toISOString().slice(0, 10) });
+
+  // Recurring execute modal — dibuka via deep-link ?recurring={id} dari Dashboard notification
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [recExec, setRecExec] = useState(null);  // { id, name, amount, category, next_due } | null
+  const [recBusy, setRecBusy] = useState(false);
+
+  useEffect(() => {
+    const rid = searchParams.get("recurring");
+    if (!rid) return;
+    // Load recurring detail
+    api.get("/recurring-expenses")
+      .then((r) => {
+        const rec = (r.data || []).find((x) => x.id === rid);
+        if (rec) setRecExec(rec);
+        else toast.error("Recurring expense tidak ditemukan");
+        // Clean URL param setelah load supaya refresh tidak reopen
+        setSearchParams({}, { replace: true });
+      })
+      .catch(() => toast.error("Gagal memuat recurring expense"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const executeRecurring = async () => {
+    if (!recExec) return;
+    setRecBusy(true);
+    try {
+      const r = await api.post(`/recurring-expenses/${recExec.id}/execute-once`);
+      toast.success(`Pembayaran ${recExec.name} berhasil dieksekusi — ${errMsg({response:{data:{}}}) || ""}`);
+      toast.success(`Expense tercatat Rp ${(r.data.amount || 0).toLocaleString("id-ID")}`);
+      setRecExec(null);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setRecBusy(false); }
+  };
 
   // Permission check (granular per feature via useCan)
   // const { user: authUser } = useAuth(); // deprecated — useCan reads from auth context directly
@@ -608,6 +643,52 @@ export default function FixedCosts() {
                   </div>
                 </div>
               )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ========== RECURRING EXECUTE MODAL — dibuka via deep-link dari Dashboard ========== */}
+      {recExec && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4" data-testid="recurring-exec-modal">
+          <Card className="w-full max-w-md">
+            <div className="flex items-start justify-between p-5 border-b border-slate-200">
+              <div>
+                <h3 className="font-heading font-bold text-lg text-slate-900 inline-flex items-center gap-2">
+                  <Banknote size={18} className="text-red-600"/> Laksanakan Pembayaran
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">Konfirmasi eksekusi recurring expense berikut.</p>
+              </div>
+              <button type="button" onClick={() => setRecExec(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="bg-red-50 border border-red-200 rounded p-3">
+                <div className="text-[10px] uppercase font-bold text-red-700 tracking-wider">Recurring Expense</div>
+                <div className="font-bold text-slate-900 text-base mt-0.5">{recExec.name}</div>
+                <div className="text-xs text-slate-600 mt-0.5">{recExec.category}</div>
+                <div className="text-2xl font-bold text-red-700 mt-2">{fmtIDR(recExec.amount)}</div>
+              </div>
+              <div className="text-xs text-slate-600 space-y-1">
+                <div>Frequency: <strong>{recExec.frequency}</strong></div>
+                <div>Jatuh Tempo: <strong>{recExec.next_due ? new Date(recExec.next_due).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" }) : "-"}</strong></div>
+                {recExec.description && <div className="italic text-slate-500">&ldquo;{recExec.description}&rdquo;</div>}
+              </div>
+              <div className="text-[11px] text-slate-500 bg-slate-50 rounded p-2 border border-slate-200">
+                Klik <strong>Eksekusi Sekarang</strong> akan membuat entry expense baru + auto-post ke jurnal
+                (Dr. {recExec.account_code || "6199"} / Cr. {recExec.cash_account_code || "1101"}) dan
+                advance jadwal ke tanggal jatuh tempo berikutnya.
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-200 bg-slate-50 flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setRecExec(null)} disabled={recBusy}><X size={14}/> Batal</Button>
+              <Button
+                data-testid="recurring-exec-confirm"
+                onClick={executeRecurring}
+                disabled={recBusy}
+                className="!bg-red-600 hover:!bg-red-700 !text-white"
+              >
+                {recBusy ? "Memproses…" : "Eksekusi Sekarang"}
+              </Button>
             </div>
           </Card>
         </div>

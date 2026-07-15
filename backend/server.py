@@ -8475,6 +8475,93 @@ async def list_recurring_expenses(user: dict = Depends(require_role("operation",
     docs = await db.recurring_expenses.find({}).sort("created_at", -1).to_list(500)
     return [serialize(d) for d in docs]
 
+@app.get("/api/recurring-expenses/upcoming")
+async def list_upcoming_recurring(user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """List recurring expense yang jatuh tempo BESOK (H-1) atau HARI INI (H).
+    Dipakai di Dashboard notifikasi (pink H-1 no button, red H w/ button).
+    """
+    now = datetime.now(timezone.utc)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    tomorrow_end = today_start + timedelta(days=2)  # exclusive upper bound
+    docs = await db.recurring_expenses.find({
+        "active": True,
+        "next_due": {"$gte": today_start - timedelta(days=1), "$lt": tomorrow_end},  # include overdue by 1 day
+        "$or": [{"end_date": None}, {"end_date": {"$gte": now}}],
+    }).sort("next_due", 1).to_list(200)
+    out = []
+    for d in docs:
+        due = d.get("next_due")
+        if not due:
+            continue
+        # Normalize ke naive supaya arithmetic aman (Mongo return naive datetime)
+        if getattr(due, "tzinfo", None) is not None:
+            due = due.replace(tzinfo=None)
+        due_date = due.replace(hour=0, minute=0, second=0, microsecond=0)
+        delta = (due_date - today_start).days
+        # delta: -1 kemarin (overdue 1 hari), 0 today, 1 tomorrow
+        if delta < -1 or delta > 1:
+            continue
+        s = serialize(d)
+        s["days_until_due"] = delta       # -1, 0, atau 1
+        s["is_today"] = delta == 0
+        s["is_tomorrow"] = delta == 1
+        s["is_overdue"] = delta < 0
+        out.append(s)
+    return out
+
+@app.post("/api/recurring-expenses/{rid}/execute-once")
+async def execute_recurring_once(rid: str, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Eksekusi 1 recurring expense secara manual (dari klik tombol Laksanakan Pembayaran).
+    Membuat expense di fixed_costs + jurnal + advance next_due.
+    """
+    rec = await db.recurring_expenses.find_one({"_id": _oid(rid)})
+    if not rec:
+        raise HTTPException(404, "Recurring expense tidak ditemukan")
+    if not rec.get("active"):
+        raise HTTPException(400, "Recurring expense sudah tidak aktif")
+    now = datetime.now(timezone.utc)
+    exp_date = (rec.get("next_due") or now).strftime("%Y-%m-%d")
+    ex_doc = {
+        "category": rec["category"],
+        "posting_type": rec.get("posting_type", "expense"),
+        "account_code": rec.get("account_code"),
+        "description": (rec.get("description") or "") + f" [Recurring: {rec['name']}]",
+        "amount": float(rec["amount"]),
+        "expense_date": exp_date,
+        "period_month": (rec.get("next_due") or now).strftime("%Y-%m"),
+        "cash_account_code": rec.get("cash_account_code", "1101"),
+        "recurring_id": str(rec["_id"]),
+        "created_by": user["id"],
+        "created_at": now,
+    }
+    r = await db.fixed_costs.insert_one(ex_doc)
+    # Post journal
+    try:
+        expense_code = rec.get("account_code") or "6199"
+        label = "Beban Operasional" if rec.get("posting_type") == "cogs" else "Beban"
+        await post_journal(
+            date=rec.get("next_due") or now,
+            description=f"{label} {rec['category']} - {exp_date} (Manual: {rec['name']})",
+            lines=[
+                {"account_code": expense_code, "debit": float(rec["amount"]), "credit": 0, "memo": rec.get("description") or rec["name"]},
+                {"account_code": rec.get("cash_account_code", "1101"), "debit": 0, "credit": float(rec["amount"]), "memo": rec["name"]},
+            ],
+            reference_type="fixed_cost", reference_id=str(r.inserted_id), posted_by=user["id"],
+        )
+    except HTTPException:
+        pass
+    # Advance next_due & occurrence count
+    next_due = _compute_next_due(rec["frequency"], rec.get("next_due") or now, rec.get("execute_day"))
+    upd = {"$set": {"next_due": next_due, "last_executed_at": now}, "$inc": {"occurrence_count": 1}}
+    # Deactivate jika sudah max_occurrences
+    new_count = (rec.get("occurrence_count") or 0) + 1
+    if rec.get("max_occurrences") and new_count >= rec["max_occurrences"]:
+        upd["$set"]["active"] = False
+    await db.recurring_expenses.update_one({"_id": rec["_id"]}, upd)
+    await log_activity(user, "manual_execute", "recurring_expense", rid,
+                       f"Manually executed {rec['name']} amount={rec['amount']}")
+    return {"ok": True, "expense_id": str(r.inserted_id), "next_due": next_due, "amount": float(rec["amount"])}
+
 @app.post("/api/recurring-expenses")
 async def create_recurring_expense(data: RecurringExpenseIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
     cat = await get_expense_category(data.category)

@@ -9,6 +9,7 @@ import {
   TrendingUp, TrendingDown, FileCheck2, FileText, FileSpreadsheet,
   PackageCheck, PackagePlus, Wallet, ArrowUpRight, Hourglass
 } from "lucide-react";
+import RecurringNotifications from "../components/RecurringNotifications";
 
 const StatCard = ({ icon: Icon, label, value, accent = "text-slate-900", sub }) => (
   <Card className="p-4">
@@ -52,6 +53,8 @@ export default function Dashboard() {
         title={`Halo, ${user?.full_name || user?.username}`}
         subtitle={`Anda masuk sebagai role ${user?.role?.toUpperCase()}. Berikut ringkasan operasional terkini.`}
       />
+
+      <RecurringNotifications />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <StatCard icon={PackagePlus} label="AWB Open" value={k?.status_counts?.Open ?? "-"} accent="text-blue-700" />
