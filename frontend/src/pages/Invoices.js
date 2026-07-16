@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../lib/api";
-import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
+import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
@@ -20,6 +20,7 @@ export default function Invoices() {
   // Filters
   const [q, setQ] = useState("");
   const [customerId, setCustomerId] = useState("");
+  const [month, setMonth] = useState(""); // YYYY-MM — kosong = semua bulan
   const [filterMode, setFilterMode] = useState("AND");
 
   // Bulk-create popup: choose AWB groupings
@@ -45,11 +46,32 @@ export default function Invoices() {
     const fns = [];
     if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.customer_name || ""} ${r.origin || ""} ${r.destination || ""}`.toLowerCase().includes(qStr));
     if (customerId) fns.push((r) => r.customer_id === customerId);
+    if (month) fns.push((r) => {
+      if (!r.created_at) return false;
+      const d = new Date(r.created_at);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      return ym === month;
+    });
     if (fns.length === 0) return reconciled;
     return reconciled.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
-  }, [reconciled, q, customerId, filterMode]);
+  }, [reconciled, q, customerId, month, filterMode]);
 
-  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${filterMode}` });
+  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${month}|${filterMode}` });
+
+  // Daftar bulan (YYYY-MM) yang tersedia di data reconciled
+  const monthOptions = useMemo(() => {
+    const INDO = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const set = new Map();
+    for (const r of reconciled) {
+      if (!r.created_at) continue;
+      const d = new Date(r.created_at);
+      const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      if (!set.has(ym)) set.set(ym, `${INDO[d.getMonth()]} ${d.getFullYear()}`);
+    }
+    return [...set.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([value, label]) => ({ value, label }));
+  }, [reconciled]);
 
   const createInvoice = async (awb_id) => {
     try { await api.post("/invoices", { awb_id }); toast.success("Invoice dibuat (nomor only — tanggal saat cetak)"); load(); }
@@ -136,9 +158,9 @@ export default function Invoices() {
               storageKey="invoice-creation"
               mode={filterMode}
               setMode={setFilterMode}
-              currentFilters={{ q, customerId }}
-              onLoadPreset={(f) => { setQ(f.q || ""); setCustomerId(f.customerId || ""); }}
-              activeCount={[q.trim(), customerId].filter(Boolean).length}
+              currentFilters={{ q, customerId, month }}
+              onLoadPreset={(f) => { setQ(f.q || ""); setCustomerId(f.customerId || ""); setMonth(f.month || ""); }}
+              activeCount={[q.trim(), customerId, month].filter(Boolean).length}
             />
             <div className="flex flex-wrap items-end gap-3">
               <div className="flex-1 min-w-[260px]">
@@ -147,6 +169,19 @@ export default function Invoices() {
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
                   <Input data-testid="invoice-creation-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="contoh: AWB-..." className="pl-9"/>
                 </div>
+              </div>
+              <div className="min-w-[180px]">
+                <Label>Bulan Pickup</Label>
+                <Select
+                  data-testid="invoice-creation-month-filter"
+                  value={month}
+                  onChange={(e) => setMonth(e.target.value)}
+                >
+                  <option value="">Semua Bulan</option>
+                  {monthOptions.map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </Select>
               </div>
               <div className="min-w-[220px]">
                 <Label>Customer</Label>
