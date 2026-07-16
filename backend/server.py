@@ -3757,9 +3757,11 @@ class EmployeeIn(BaseModel):
     emergency1_name: Optional[str] = None
     emergency1_phone: Optional[str] = None
     emergency1_relation: Optional[str] = None
+    emergency1_address: Optional[str] = None
     emergency2_name: Optional[str] = None
     emergency2_phone: Optional[str] = None
     emergency2_relation: Optional[str] = None
+    emergency2_address: Optional[str] = None
     # --- Data Keluarga (list) ---
     family: List[FamilyMember] = []
     # --- Kepegawaian (existing) ---

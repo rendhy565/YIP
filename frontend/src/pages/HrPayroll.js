@@ -12,8 +12,8 @@ const EMPTY_EMP = {
   no_hp: "", alamat_ktp: "", alamat_domisili: "", nik: "", no_kk: "", npwp: "", email: "",
   kendaraan_operasional: "", sim_c: "", sim_a: "", sim_lain: "",
   bank_type: "", bank_account: "",
-  emergency1_name: "", emergency1_phone: "", emergency1_relation: "",
-  emergency2_name: "", emergency2_phone: "", emergency2_relation: "",
+  emergency1_name: "", emergency1_phone: "", emergency1_relation: "", emergency1_address: "",
+  emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
   position: "", bpjs_no: "", base_salary: 0, allowance: 0, join_date: "", active: true,
 };
@@ -186,15 +186,23 @@ export default function HrPayroll() {
               {/* --- SECTION: Kontak Darurat --- */}
               <div>
                 <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Kontak Darurat</h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-                  <div><Label>Nama Kontak Darurat 1</Label><Input value={form.emergency1_name} onChange={(e) => setForm({ ...form, emergency1_name: e.target.value })}/></div>
-                  <div><Label>No. HP</Label><Input value={form.emergency1_phone} onChange={(e) => setForm({ ...form, emergency1_phone: e.target.value })}/></div>
-                  <div><Label>Hubungan</Label><Input value={form.emergency1_relation} onChange={(e) => setForm({ ...form, emergency1_relation: e.target.value })} placeholder="Mis. Istri, Ayah"/></div>
+                <div className="rounded border border-slate-200 p-3 mb-3">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 mb-2">Kontak Darurat 1</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-2">
+                    <div><Label>Nama</Label><Input data-testid="emp-emergency1-name" value={form.emergency1_name} onChange={(e) => setForm({ ...form, emergency1_name: e.target.value })}/></div>
+                    <div><Label>No. HP</Label><Input value={form.emergency1_phone} onChange={(e) => setForm({ ...form, emergency1_phone: e.target.value })}/></div>
+                    <div><Label>Hubungan</Label><Input value={form.emergency1_relation} onChange={(e) => setForm({ ...form, emergency1_relation: e.target.value })} placeholder="Mis. Bapak, Kakak"/></div>
+                  </div>
+                  <div><Label>Alamat KTP</Label><Input data-testid="emp-emergency1-address" value={form.emergency1_address} onChange={(e) => setForm({ ...form, emergency1_address: e.target.value })}/></div>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div><Label>Nama Kontak Darurat 2</Label><Input value={form.emergency2_name} onChange={(e) => setForm({ ...form, emergency2_name: e.target.value })}/></div>
-                  <div><Label>No. HP</Label><Input value={form.emergency2_phone} onChange={(e) => setForm({ ...form, emergency2_phone: e.target.value })}/></div>
-                  <div><Label>Hubungan</Label><Input value={form.emergency2_relation} onChange={(e) => setForm({ ...form, emergency2_relation: e.target.value })}/></div>
+                <div className="rounded border border-slate-200 p-3">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 mb-2">Kontak Darurat 2</div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-2">
+                    <div><Label>Nama</Label><Input data-testid="emp-emergency2-name" value={form.emergency2_name} onChange={(e) => setForm({ ...form, emergency2_name: e.target.value })}/></div>
+                    <div><Label>No. HP</Label><Input value={form.emergency2_phone} onChange={(e) => setForm({ ...form, emergency2_phone: e.target.value })}/></div>
+                    <div><Label>Hubungan</Label><Input value={form.emergency2_relation} onChange={(e) => setForm({ ...form, emergency2_relation: e.target.value })}/></div>
+                  </div>
+                  <div><Label>Alamat KTP</Label><Input data-testid="emp-emergency2-address" value={form.emergency2_address} onChange={(e) => setForm({ ...form, emergency2_address: e.target.value })}/></div>
                 </div>
               </div>
 
