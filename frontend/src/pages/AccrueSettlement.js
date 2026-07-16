@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { CheckCircle2, Wallet, Search, Undo2, BarChart3, ChevronDown, ChevronRight, FileSpreadsheet } from "lucide-react";
+import { CheckCircle2, Wallet, Search, Undo2, BarChart3, ChevronDown, ChevronRight, FileSpreadsheet, Layers } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
 export default function AccrueSettlement() {
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [paidRows, setPaidRows] = useState([]);
   const [aging, setAging] = useState(null);
@@ -82,7 +84,15 @@ export default function AccrueSettlement() {
 
   return (
     <div data-testid="accrue-settlement-page">
-      <PageHeader title="Settle Hutang Vendor" subtitle="Update Hutang Vendor → Paid; daftar Paid Vendor dengan tombol Reclass untuk revisi." />
+      <PageHeader
+        title="Settle Hutang Vendor"
+        subtitle="Update Hutang Vendor → Paid; daftar Paid Vendor dengan tombol Reclass untuk revisi."
+        action={
+          <Button variant="secondary" data-testid="goto-prorata-btn" onClick={() => navigate("/costs?prorata=1")}>
+            <Layers size={14}/> Prorata Vendor
+          </Button>
+        }
+      />
 
       <Card className="p-5 mb-5 bg-orange-50 border-orange-200">
         <div className="flex items-center gap-3 flex-wrap">

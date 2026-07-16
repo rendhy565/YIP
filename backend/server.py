@@ -1872,6 +1872,251 @@ async def delete_cost(cid: str, confirm: bool = False, user: dict = Depends(get_
     return {"ok": True, "reversal": reversal_info}
 
 # ---------------------------------------------------------------------------
+# Cost Groups — Prorata Vendor Cost across multiple AWBs
+# 1 tagihan vendor Rp X untuk N AWB → sistem split proporsional berdasarkan
+# grand_total (sales) tiap AWB. Setiap AWB dapat 1 baris cost (child) di
+# awb_costs dengan is_prorata=True + cost_group_id ref. Journal per-child
+# (DR 5101 / CR 2101). Settle per-child (existing flow).
+# Refresh: kalau grand_total AWB berubah, klik Refresh → recalculate porsi
+# (blocked jika ada child yg sudah settled).
+# ---------------------------------------------------------------------------
+class CostGroupIn(BaseModel):
+    vendor_name: str
+    period_month: str          # YYYY-MM
+    total_amount: float
+    awb_ids: List[str]         # must be at least 2 AWBs to prorate
+    description: Optional[str] = None
+
+async def _generate_prorata_children(group_id: ObjectId, group: dict, user_id: str):
+    """Fetch AWBs by ids, compute proportional amounts by grand_total,
+    insert child awb_costs (Vendor / Accrue) and post per-child journal."""
+    awb_oids = [_oid(x) for x in group["awb_ids"]]
+    awbs = await db.awb_orders.find({"_id": {"$in": awb_oids}}).to_list(1000)
+    if len(awbs) < 2:
+        raise HTTPException(400, "Prorata minimal 2 AWB")
+    # Sum grand_total (sales)
+    def _sales(a): return float(a.get("grand_total") or a.get("total_tariff") or 0)
+    total_sales = sum(_sales(a) for a in awbs)
+    if total_sales <= 0:
+        raise HTTPException(400, "Total sales AWB = 0, tidak bisa prorata (grand_total kosong semua)")
+    total_amount = float(group["total_amount"])
+    vendor_name = group["vendor_name"]
+    now = datetime.now(timezone.utc)
+    header = f"[Prorata Vendor: {vendor_name} — Total Rp {int(total_amount):,}]".replace(",", ".")
+    user_desc = group.get("description") or ""
+
+    # Compute amounts with rounding — last row absorbs residual for exact sum
+    portions = []
+    running = 0.0
+    for i, awb in enumerate(awbs):
+        share = _sales(awb) / total_sales
+        if i == len(awbs) - 1:
+            amt = round(total_amount - running, 2)
+        else:
+            amt = round(total_amount * share, 2)
+            running += amt
+        portions.append((awb, amt, share))
+
+    created_ids = []
+    for awb, amt, share in portions:
+        share_pct = round(share * 100, 2)
+        desc = f"{header} {share_pct}% dari sales {int(_sales(awb)):,}".replace(",", ".")
+        if user_desc:
+            desc = f"{desc} — {user_desc}"
+        doc = {
+            "awb_id": awb["_id"],
+            "cost_category": "Vendor",
+            "payment_type": "Accrue",
+            "amount": amt,
+            "description": desc,
+            "vendor_name": vendor_name,
+            "is_settled": False,
+            "is_prorata": True,
+            "cost_group_id": group_id,
+            "prorata_share_pct": share_pct,
+            "created_by_role": "operation",
+            "created_by": user_id,
+            "cash_account_code": None,
+            "created_at": now,
+        }
+        r = await db.awb_costs.insert_one(doc)
+        created_ids.append(str(r.inserted_id))
+        # Per-child journal: DR 5101 / CR 2101
+        try:
+            await post_journal(
+                date=now,
+                description=f"Akrual biaya vendor (Prorata) {awb['awb_number']} - {vendor_name}",
+                lines=[
+                    {"account_code": "5101", "debit": amt, "credit": 0, "memo": f"{awb['awb_number']} - {vendor_name}"},
+                    {"account_code": "2101", "debit": 0, "credit": amt, "memo": f"Prorata {vendor_name}"},
+                ],
+                reference_type="cost", reference_id=str(r.inserted_id), posted_by=user_id,
+            )
+        except HTTPException:
+            pass
+        # Trigger revenue recognition (PSAK 72) — first cost = jasa jalan
+        try:
+            await recognize_revenue_for_awb(awb["_id"], user_id, trigger_date=now)
+        except Exception:
+            pass
+    return created_ids
+
+async def _delete_prorata_children(group_id: ObjectId):
+    """Delete unsettled children of a group + cascade their journals.
+    Return count of children still settled (which blocks deletion)."""
+    settled = await db.awb_costs.count_documents({"cost_group_id": group_id, "is_settled": True})
+    if settled > 0:
+        return settled
+    children = await db.awb_costs.find({"cost_group_id": group_id}).to_list(1000)
+    child_ids = [str(c["_id"]) for c in children]
+    for cid in child_ids:
+        await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": cid})
+    await db.awb_costs.delete_many({"cost_group_id": group_id})
+    return 0
+
+@app.get("/api/cost-groups")
+async def list_cost_groups(period_month: Optional[str] = None, vendor_name: Optional[str] = None,
+                          user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    q = {}
+    if period_month: q["period_month"] = period_month
+    if vendor_name: q["vendor_name"] = vendor_name
+    docs = await db.cost_groups.find(q).sort("created_at", -1).to_list(500)
+    out = []
+    for d in docs:
+        s = serialize(d)
+        # Attach children summary
+        children = await db.awb_costs.find({"cost_group_id": d["_id"]}).to_list(1000)
+        settled_cnt = sum(1 for c in children if c.get("is_settled"))
+        s["awb_count"] = len(children)
+        s["settled_count"] = settled_cnt
+        s["all_settled"] = settled_cnt == len(children) and len(children) > 0
+        s["awb_ids"] = [str(x) for x in d.get("awb_ids", [])]
+        # Detail rows
+        awb_map = {}
+        awb_docs = await db.awb_orders.find({"_id": {"$in": [c["awb_id"] for c in children]}}).to_list(1000)
+        for a in awb_docs:
+            awb_map[a["_id"]] = a
+        s["children"] = [
+            {
+                "cost_id": str(c["_id"]),
+                "awb_id": str(c["awb_id"]),
+                "awb_number": (awb_map.get(c["awb_id"]) or {}).get("awb_number"),
+                "grand_total": float((awb_map.get(c["awb_id"]) or {}).get("grand_total") or 0),
+                "amount": float(c.get("amount") or 0),
+                "share_pct": float(c.get("prorata_share_pct") or 0),
+                "is_settled": bool(c.get("is_settled")),
+            }
+            for c in children
+        ]
+        out.append(s)
+    return out
+
+@app.post("/api/cost-groups")
+async def create_cost_group(data: CostGroupIn, user: dict = Depends(require_role("operation", "administrator"))):
+    if len(data.awb_ids) < 2:
+        raise HTTPException(400, "Minimal 2 AWB untuk fitur prorata")
+    if data.total_amount <= 0:
+        raise HTTPException(400, "Total amount harus > 0")
+    if not data.vendor_name.strip():
+        raise HTTPException(400, "Vendor name wajib diisi")
+    now = datetime.now(timezone.utc)
+    doc = {
+        "vendor_name": data.vendor_name.strip(),
+        "period_month": data.period_month,
+        "total_amount": float(data.total_amount),
+        "awb_ids": [_oid(x) for x in data.awb_ids],
+        "description": data.description,
+        "created_by": user["id"],
+        "created_at": now,
+    }
+    r = await db.cost_groups.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    child_ids = await _generate_prorata_children(r.inserted_id, doc, user["id"])
+    return {"ok": True, "cost_group_id": str(r.inserted_id), "children_created": len(child_ids)}
+
+@app.put("/api/cost-groups/{gid}")
+async def update_cost_group(gid: str, data: CostGroupIn,
+                            user: dict = Depends(require_role("operation", "administrator"))):
+    group = await db.cost_groups.find_one({"_id": _oid(gid)})
+    if not group:
+        raise HTTPException(404, "Cost group tidak ditemukan")
+    # Delete + regenerate children (block if any settled)
+    still_settled = await _delete_prorata_children(_oid(gid))
+    if still_settled > 0:
+        raise HTTPException(400, f"Tidak bisa update — {still_settled} child cost sudah settled. Batalkan settlement dulu.")
+    # Update group
+    upd = {
+        "vendor_name": data.vendor_name.strip(),
+        "period_month": data.period_month,
+        "total_amount": float(data.total_amount),
+        "awb_ids": [_oid(x) for x in data.awb_ids],
+        "description": data.description,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    await db.cost_groups.update_one({"_id": _oid(gid)}, {"$set": upd})
+    new_group = {**group, **upd, "_id": _oid(gid)}
+    child_ids = await _generate_prorata_children(_oid(gid), new_group, user["id"])
+    return {"ok": True, "children_recreated": len(child_ids)}
+
+@app.post("/api/cost-groups/{gid}/refresh")
+async def refresh_cost_group(gid: str, user: dict = Depends(require_role("operation", "administrator"))):
+    """Recalculate proportional split based on CURRENT grand_total of the AWBs in group.
+    Delete + regenerate children (blocked if any settled)."""
+    group = await db.cost_groups.find_one({"_id": _oid(gid)})
+    if not group:
+        raise HTTPException(404, "Cost group tidak ditemukan")
+    still_settled = await _delete_prorata_children(_oid(gid))
+    if still_settled > 0:
+        raise HTTPException(400, f"Tidak bisa refresh — {still_settled} child cost sudah settled. Batalkan settlement dulu.")
+    child_ids = await _generate_prorata_children(_oid(gid), group, user["id"])
+    await db.cost_groups.update_one({"_id": _oid(gid)}, {"$set": {"updated_at": datetime.now(timezone.utc)}})
+    return {"ok": True, "children_recreated": len(child_ids)}
+
+@app.delete("/api/cost-groups/{gid}")
+async def delete_cost_group(gid: str, user: dict = Depends(require_role("operation", "administrator"))):
+    group = await db.cost_groups.find_one({"_id": _oid(gid)})
+    if not group:
+        raise HTTPException(404, "Cost group tidak ditemukan")
+    still_settled = await _delete_prorata_children(_oid(gid))
+    if still_settled > 0:
+        raise HTTPException(400, f"Tidak bisa hapus — {still_settled} child cost sudah settled.")
+    await db.cost_groups.delete_one({"_id": _oid(gid)})
+    return {"ok": True}
+
+@app.get("/api/cost-groups/candidate-awbs")
+async def prorata_candidate_awbs(period_month: Optional[str] = None,
+                                 user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """List AWB yang eligible untuk dijadikan target prorata:
+    status Open atau Reconciled, punya grand_total > 0.
+    Filter opsional period_month (YYYY-MM) match created_at."""
+    q = {"status": {"$in": ["Open", "Reconciled"]}}
+    docs = await db.awb_orders.find(q).sort("created_at", -1).to_list(3000)
+    out = []
+    for d in docs:
+        if period_month:
+            ca = d.get("created_at")
+            if not ca:
+                continue
+            ym = ca.strftime("%Y-%m") if hasattr(ca, "strftime") else str(ca)[:7]
+            if ym != period_month:
+                continue
+        gt = float(d.get("grand_total") or 0)
+        if gt <= 0:
+            continue
+        out.append({
+            "id": str(d["_id"]),
+            "awb_number": d.get("awb_number"),
+            "customer_name": d.get("customer_name"),
+            "origin": d.get("origin"),
+            "destination": d.get("destination"),
+            "grand_total": gt,
+            "status": d.get("status"),
+            "created_at": d.get("created_at"),
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Recap & Reconciliation (Module 3 & 4)
 # ---------------------------------------------------------------------------
 class ReconcileIn(BaseModel):

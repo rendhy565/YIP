@@ -1,63 +1,78 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
-## Original problem statement (latest thread)
-User meminta:
-1. **Bug filter tanggal analitik** — filter s.d tanggal 6 harus inklusif (fixed ✅).
-2. **Perbaikan TMS**: PPN 1.1%, dropdown armada standar, cek duplikat AWB, format ribuan, jadwal keberangkatan, tracking history.
-3. **Invoice header** — logo kiri, alamat AR Cargo center (HTML & Excel).
-4. **HR Master Karyawan** — form lengkap.
-5. **PKS Word document** — generate via python-docx.
-6. **Import Invoice Number** — grouping multi-AWB, cap error responses.
-7. **Notifikasi Recurring Expense di Dashboard**:
-   - H-1 (besok) → card pink, tanpa tombol
-   - Hari H (belum dibayar) → card merah + tombol "Laksanakan Pembayaran"
-   - Hari H (sudah auto-executed) → card hijau + tombol disabled "Sudah Dieksekusi"
-   - Tombol laksanakan → buka modal Expense (halaman FixedCosts), auto/manual keduanya post ke expense collection.
+## Latest thread requirements
+1. Total Sales terfilter tampil di Daftar AWB ✅
+2. Prorata Vendor: 1 tagihan vendor split proporsional ke banyak AWB berdasarkan sales ✅
 
 ## Architecture
-- Frontend: React + TailwindCSS, halaman di `/app/frontend/src/pages`, komponen di `/app/frontend/src/components`
-- Backend: FastAPI monolith `server.py` (~9k lines) + PyMongo
-- MongoDB collections: `awb_orders`, `invoices`, `fixed_costs` (=expense), `recurring_expenses`, `employees`, `settings`
-- Auth: JWT + granular permission via `permission_actions[module][feature]`
+- Frontend: React + TailwindCSS, halaman di `/app/frontend/src/pages`
+- Backend: FastAPI monolith `server.py` (~9200 lines) + PyMongo
+- MongoDB collections: `awb_orders`, `awb_costs`, `cost_groups` (new), `invoices`, `fixed_costs`, `recurring_expenses`, `employees`, `settings`
+- Auth: JWT + granular permission
 
-## Completed features (as of Feb 2026)
-- ✅ Analytics date inclusive filter (end_of_day)
-- ✅ PPN 1.1%
-- ✅ Armada dropdown (21 opsi standar) + FCL container variants
-- ✅ AWB inline duplicate check (blur) — **blocking modal masih belum**
-- ✅ Live thousand separator IDR input
-- ✅ Order Departure Schedule (closing, ETD, ETA, plan ETA)
-- ✅ Tracking History modal (read + append)
+## Completed features (Feb 2026)
+- ✅ Analytics date inclusive filter
+- ✅ PPN 1.1%, Armada dropdown, FCL variants
+- ✅ AWB inline duplicate check (blur) — blocking modal masih pending
+- ✅ Live thousand separator, Order Schedule, Tracking History modal
 - ✅ Invoice header revamp (HTML & Excel)
-- ✅ HR Master Karyawan form
-- ✅ PKS Word document generator (`/app/docs/generate_pks.py`)
-- ✅ Import Invoice Number (multi-AWB grouping + cap errors 50)
-- ✅ Payments module: kolom Invoice No + retain Paid AWBs
-- ✅ **Recurring Expense Dashboard Widget (3 varian: pink H-1 / merah H / hijau executed)**
-- ✅ Deep-link `?recurring=id` → auto-open modal Laksanakan Pembayaran di halaman Expense
+- ✅ HR Master Karyawan (dengan Alamat KTP kontak darurat)
+- ✅ Import Invoice Number multi-AWB grouping
+- ✅ Payments module (kolom Invoice No + retain Paid AWBs)
+- ✅ Recurring Expense Dashboard Widget (3 varian pink/merah/hijau) + permission gate `fixed_costs`
+- ✅ Deep-link `?recurring=id` → auto-open modal Laksanakan Pembayaran
+- ✅ Filter Bulan di Pembuatan Invoice
+- ✅ **Total Sales/Cost/Margin/Qty terfilter di Daftar AWB**
+- ✅ **Prorata Vendor Cost: 1 tagihan Rp X split proporsional ke N AWB berdasarkan grand_total (sales)**
+  - Backend: `cost_groups` collection + endpoints POST/PUT/DELETE/refresh + candidate-awbs
+  - Frontend: modal Prorata di Plotting Biaya + entry point tombol di Settle Hutang Vendor (deep-link `?prorata=1`)
+  - Child cost tagged `is_prorata=true` + `cost_group_id` + `prorata_share_pct`
+  - Journal per-child (DR 5101 / CR 2101), settle per-child (existing flow)
+  - Refresh recompute berdasarkan grand_total AWB saat ini (blocked jika ada child settled)
 
 ## Pending / Backlog
 ### P1
-- [ ] Blocking modal duplicate AWB (saat submit) — inline sudah ada, modal blocking belum
-- [ ] FTL Multidrop mechanics — perlu klarifikasi arsitektur (1 parent AWB multi-destinasi atau multi-AWB group ID)
+- [ ] Blocking modal duplicate AWB (saat submit)
+- [ ] FTL Multidrop mechanics — klarifikasi
 
 ### P2
-- [ ] Schedule fields khusus Air (flight no, MAWB, HAWB) dan Land (truck plate, driver)
-- [ ] Refactor `server.py` monolith → modules di `/app/backend/routes/`
-- [ ] Widget notifikasi juga ditampilkan di dashboard untuk H-2, H-3 (butuh konfirmasi user)
+- [ ] Schedule fields Air (MAWB/HAWB/flight) & Land (truck plate/driver)
+- [ ] Filter bulan di halaman Invoice Tercetak
+- [ ] Fitur Export Word "Form Data Karyawan" (Elvina template)
+- [ ] Refactor `server.py` monolith
 
 ## Key files of reference
-- Backend: `/app/backend/server.py` (endpoint `/api/recurring-expenses/upcoming`, `/execute-once`, `/run-due`)
-- Frontend widget: `/app/frontend/src/components/RecurringNotifications.js`
-- Dashboard host: `/app/frontend/src/pages/Dashboard.js`
-- Expense/FixedCosts (modal target): `/app/frontend/src/pages/FixedCosts.js` (baris 169-201: deep-link handler)
+- Backend: `/app/backend/server.py`
+  - Prorata: baris ~1880-2110 (cost_groups endpoints)
+  - Recurring: baris ~8478 (upcoming)
+- Frontend: 
+  - `/app/frontend/src/pages/Costs.js` (prorata modal + groups panel)
+  - `/app/frontend/src/pages/AccrueSettlement.js` (entry point tombol)
+  - `/app/frontend/src/pages/OrdersList.js` (filtered totals bar)
+  - `/app/frontend/src/pages/Invoices.js` (filter bulan)
+  - `/app/frontend/src/pages/HrPayroll.js` (form karyawan)
+  - `/app/frontend/src/components/RecurringNotifications.js`
 
-## API Endpoints
-- `GET /api/recurring-expenses/upcoming` — returns pending H-1/H/overdue + already-executed-today items
-- `POST /api/recurring-expenses/{id}/execute-once` — manual execute, insert to `fixed_costs` + journal
-- `POST /api/recurring-expenses/run-due` — cron auto-execute
+## Key API Endpoints
+- `GET /api/cost-groups` — list groups + children preview
+- `POST /api/cost-groups` — create + auto-generate proportional children
+- `PUT /api/cost-groups/{id}` — update + regenerate (block if any settled)
+- `POST /api/cost-groups/{id}/refresh` — recompute (block if settled)
+- `DELETE /api/cost-groups/{id}` — delete + cascade children (block if settled)
+- `GET /api/cost-groups/candidate-awbs?period_month=YYYY-MM` — list AWB eligible
+- `GET /api/recurring-expenses/upcoming` — dashboard notif widget
+- `POST /api/recurring-expenses/{id}/execute-once`
 - `GET /api/orders/check-awb` — duplicate check
-- `POST /api/invoices/import-numbers` — bulk invoice create with grouping
+- `POST /api/invoices/import-numbers` — bulk grouping
+
+## Prorata Logic (Critical Info)
+- Fetch AWBs by IDs → sum `grand_total` = total_sales
+- Per AWB amount = `total_amount * (awb.grand_total / total_sales)`
+- Last row absorbs rounding residual to guarantee SUM=exact total
+- Each child: `awb_costs` record with cost_category="Vendor", payment_type="Accrue", is_settled=false, is_prorata=true, cost_group_id (ref), prorata_share_pct
+- Description: `[Prorata Vendor: X — Total Rp Y] Z% dari sales — user_description`
+- Journal per child: DR 5101 / CR 2101
+- Triggers revenue recognition (PSAK 72) per AWB
 
 ## Test credentials
 See `/app/memory/test_credentials.md`

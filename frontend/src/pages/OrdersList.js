@@ -297,6 +297,33 @@ export default function OrdersList() {
           </div>
           <div className="text-xs text-slate-500 ml-auto">{filteredRows.length} dari {rows.length} baris</div>
         </div>
+        <div className="mt-3 pt-3 border-t border-slate-200 flex flex-wrap items-center gap-4">
+          <div className="text-[10px] uppercase tracking-[0.14em] font-bold text-slate-500">Total Terfilter:</div>
+          <div className="text-sm">
+            <span className="text-slate-500 mr-1">Sales</span>
+            <span className="font-mono font-bold text-emerald-700" data-testid="filtered-total-sales">
+              {fmtIDR(filteredRows.reduce((s, r) => s + (Number(r.grand_total) || 0), 0))}
+            </span>
+          </div>
+          <div className="text-sm">
+            <span className="text-slate-500 mr-1">Cost</span>
+            <span className="font-mono font-bold text-rose-700" data-testid="filtered-total-cost">
+              {fmtIDR(filteredRows.reduce((s, r) => s + (Number(r._total_cost) || 0), 0))}
+            </span>
+          </div>
+          <div className="text-sm">
+            <span className="text-slate-500 mr-1">Margin</span>
+            <span className="font-mono font-bold text-blue-700" data-testid="filtered-total-margin">
+              {fmtIDR(filteredRows.reduce((s, r) => s + ((Number(r.grand_total) || 0) - (Number(r._total_cost) || 0)), 0))}
+            </span>
+          </div>
+          <div className="text-sm">
+            <span className="text-slate-500 mr-1">Qty</span>
+            <span className="font-mono font-bold text-slate-800" data-testid="filtered-total-qty">
+              {filteredRows.reduce((s, r) => s + (Number(r.qty_kg) || 0), 0).toLocaleString("id-ID")} Kg
+            </span>
+          </div>
+        </div>
       </Card>
 
       <Card>
