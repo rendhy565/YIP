@@ -19,10 +19,17 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem("tms_token");
-      localStorage.removeItem("tms_user");
-      if (window.location.pathname !== "/login") {
-        window.location.href = (process.env.PUBLIC_URL || "") + "/login";
+      // Do NOT hijack login attempts — let the login form surface the error itself.
+      const url = err.config?.url || "";
+      const isLoginRequest = /\/auth\/login\b/.test(url);
+      if (!isLoginRequest) {
+        localStorage.removeItem("tms_token");
+        localStorage.removeItem("tms_user");
+        const loginPath = (process.env.PUBLIC_URL || "") + "/login";
+        // Handle app served under a sub-path (e.g. /arc) — check exact loginPath.
+        if (window.location.pathname !== loginPath) {
+          window.location.href = loginPath;
+        }
       }
     }
     return Promise.reject(err);
