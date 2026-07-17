@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, StatusBadge } from "../components/ui";
 import { fmtIDR } from "../lib/utils";
 import { useAuth } from "../lib/auth";
-import { useCan } from "../lib/useCan";
+import { useCan, useModulePerms } from "../lib/useCan";
 import {
   TrendingUp, TrendingDown, FileCheck2, FileText, FileSpreadsheet,
   PackageCheck, PackagePlus, Wallet, ArrowUpRight, Hourglass
@@ -39,13 +39,41 @@ export default function Dashboard() {
   const canPayMulti = useCan("payments", "multi_payment");
   const canPayments = canPayMark || canPayMulti;
   const canPnlExport = useCan("pnl", "export");
+
+  // ─── Card-level permission gates (each useModulePerms MUST be called at top level, consistent order) ───
+  const permOrdersList = useModulePerms("orders_list");
+  const permInvoicesCreated = useModulePerms("invoices_created");
+  const permInvoicesMain = useModulePerms("invoices");
+  const permPayments = useModulePerms("payments");
+  const permPnl = useModulePerms("pnl");
+  const permCosts = useModulePerms("costs");
+  const permFixedCosts = useModulePerms("fixed_costs");
+  const permAccrue = useModulePerms("accrue");
+  const permAccounting = useModulePerms("accounting");
+  const hasAny = (p) => p && Object.values(p).some(Boolean);
+  const seeOrders    = hasAny(permOrdersList);
+  const seeInvoiced  = hasAny(permInvoicesCreated) || hasAny(permInvoicesMain);
+  const seePayments  = hasAny(permPayments);
+  const seeRevenue   = hasAny(permPnl) || hasAny(permInvoicesCreated) || hasAny(permInvoicesMain);
+  const seeCost      = hasAny(permCosts) || hasAny(permFixedCosts);
+  const seeAccrue    = hasAny(permAccrue);
+  const seeAccounting = hasAny(permAccounting);
+
+  const showStatusRow = seeOrders || seeInvoiced || seePayments;
+  const showKpiRow    = seeRevenue || seeCost || seeAccrue;
+  const showPymhdPanel = seeAccounting || seeRevenue;
+
   const { user } = useAuth();
   const [k, setK] = useState(null);
   const [pymhd, setPymhd] = useState(null);
   useEffect(() => {
-    api.get("/dashboard/kpis").then((r) => setK(r.data));
-    api.get("/dashboard/pymhd-pipeline").then((r) => setPymhd(r.data)).catch(() => setPymhd(null));
-  }, []);
+    if (showStatusRow || showKpiRow) {
+      api.get("/dashboard/kpis").then((r) => setK(r.data)).catch(() => {});
+    }
+    if (showPymhdPanel) {
+      api.get("/dashboard/pymhd-pipeline").then((r) => setPymhd(r.data)).catch(() => setPymhd(null));
+    }
+  }, [showStatusRow, showKpiRow, showPymhdPanel]);
 
   return (
     <div data-testid="dashboard-page">
@@ -56,21 +84,25 @@ export default function Dashboard() {
 
       <RecurringNotifications />
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard icon={PackagePlus} label="AWB Open" value={k?.status_counts?.Open ?? "-"} accent="text-blue-700" />
-        <StatCard icon={FileSpreadsheet} label="Rekonsiliasi" value={k?.status_counts?.Reconciled ?? "-"} accent="text-amber-700" />
-        <StatCard icon={FileText} label="Invoiced" value={k?.status_counts?.Invoiced ?? "-"} accent="text-purple-700" />
-        <StatCard icon={PackageCheck} label="Lunas" value={k?.status_counts?.Paid ?? "-"} accent="text-emerald-700" />
-      </div>
+      {showStatusRow && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          {seeOrders && <StatCard icon={PackagePlus} label="AWB Open" value={k?.status_counts?.Open ?? "-"} accent="text-blue-700" />}
+          {seeOrders && <StatCard icon={FileSpreadsheet} label="Rekonsiliasi" value={k?.status_counts?.Reconciled ?? "-"} accent="text-amber-700" />}
+          {seeInvoiced && <StatCard icon={FileText} label="Invoiced" value={k?.status_counts?.Invoiced ?? "-"} accent="text-purple-700" />}
+          {seePayments && <StatCard icon={PackageCheck} label="Lunas" value={k?.status_counts?.Paid ?? "-"} accent="text-emerald-700" />}
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <StatCard icon={TrendingUp} label="Total Pendapatan" value={fmtIDR(k?.total_revenue)} accent="text-emerald-700" sub="Akumulasi tarif AWB" />
-        <StatCard icon={TrendingDown} label="Total Biaya" value={fmtIDR(k?.total_cost)} accent="text-red-700" sub="Semua kategori biaya" />
-        <StatCard icon={Wallet} label="Hutang Vendor (Belum Settle)" value={fmtIDR(k?.outstanding_accrue)} accent="text-orange-700" sub="Status Accrue aktif" />
-      </div>
+      {showKpiRow && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          {seeRevenue && <StatCard icon={TrendingUp} label="Total Pendapatan" value={fmtIDR(k?.total_revenue)} accent="text-emerald-700" sub="Akumulasi tarif AWB" />}
+          {seeCost && <StatCard icon={TrendingDown} label="Total Biaya" value={fmtIDR(k?.total_cost)} accent="text-red-700" sub="Semua kategori biaya" />}
+          {seeAccrue && <StatCard icon={Wallet} label="Hutang Vendor (Belum Settle)" value={fmtIDR(k?.outstanding_accrue)} accent="text-orange-700" sub="Status Accrue aktif" />}
+        </div>
+      )}
 
       {/* ─── PYMHD Pipeline Panel (PSAK 72) ─── */}
-      {pymhd && pymhd.total_count > 0 && (
+      {showPymhdPanel && pymhd && pymhd.total_count > 0 && (
         <Card className="mb-6" data-testid="pymhd-pipeline-panel">
           <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-blue-50 to-indigo-50">
             <div className="flex items-center gap-2">
