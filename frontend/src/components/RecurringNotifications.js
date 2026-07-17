@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../lib/api";
 import { fmtIDR } from "../lib/utils";
-import { useModulePerms } from "../lib/useCan";
+import { useCan } from "../lib/useCan";
 import { AlertCircle, Calendar, PlayCircle, CheckCircle2 } from "lucide-react";
 
 /**
@@ -14,8 +14,7 @@ import { AlertCircle, Calendar, PlayCircle, CheckCircle2 } from "lucide-react";
  */
 export default function RecurringNotifications() {
   const navigate = useNavigate();
-  const expensePerms = useModulePerms("fixed_costs");
-  const hasExpenseAccess = expensePerms && Object.values(expensePerms).some(Boolean);
+  const hasExpenseAccess = useCan("dashboard", "view_recurring_widget");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
 

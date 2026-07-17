@@ -151,6 +151,7 @@ MODULES = [
     {"key": "settings", "label": "Pengaturan", "default_roles": ["operation", "finance"]},
     {"key": "purchase_orders", "label": "PO / Surat Perintah Vendor", "default_roles": ["operation", "finance"]},
     {"key": "user_management", "label": "User Management", "default_roles": []},
+    {"key": "dashboard", "label": "Dashboard", "default_roles": ["operation", "finance"]},
     # ---- Optional modules (toggled globally via feature flags). Permission per-user is still required. ----
     {"key": "accounting", "label": "Akunting (PSAK)", "default_roles": ["finance"], "is_feature": True},
     {"key": "hr", "label": "HR & Payroll", "default_roles": [], "is_feature": True},
@@ -166,6 +167,14 @@ MODULE_KEYS = [m["key"] for m in MODULES]
 # Used by Users.js permission matrix + useCan() hook in frontend
 # ---------------------------------------------------------------------------
 MODULE_FEATURES: dict = {
+    "dashboard": [
+        ("view_status_counts", "Kartu Status AWB (Open/Rekonsiliasi/Invoiced/Lunas)"),
+        ("view_revenue_kpi", "Kartu Total Pendapatan"),
+        ("view_cost_kpi", "Kartu Total Biaya"),
+        ("view_hutang_kpi", "Kartu Hutang Vendor"),
+        ("view_pymhd_panel", "Panel Pipeline PYMHD (PSAK 72)"),
+        ("view_recurring_widget", "Widget Notifikasi Recurring Expense"),
+    ],
     "orders_input": [
         ("create", "Tambah AWB Baru"),
     ],

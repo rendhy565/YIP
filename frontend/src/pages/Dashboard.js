@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, StatusBadge } from "../components/ui";
 import { fmtIDR } from "../lib/utils";
 import { useAuth } from "../lib/auth";
-import { useCan, useModulePerms } from "../lib/useCan";
+import { useCan } from "../lib/useCan";
 import {
   TrendingUp, TrendingDown, FileCheck2, FileText, FileSpreadsheet,
   PackageCheck, PackagePlus, Wallet, ArrowUpRight, Hourglass
@@ -40,28 +40,16 @@ export default function Dashboard() {
   const canPayments = canPayMark || canPayMulti;
   const canPnlExport = useCan("pnl", "export");
 
-  // ─── Card-level permission gates (each useModulePerms MUST be called at top level, consistent order) ───
-  const permOrdersList = useModulePerms("orders_list");
-  const permInvoicesCreated = useModulePerms("invoices_created");
-  const permInvoicesMain = useModulePerms("invoices");
-  const permPayments = useModulePerms("payments");
-  const permPnl = useModulePerms("pnl");
-  const permCosts = useModulePerms("costs");
-  const permFixedCosts = useModulePerms("fixed_costs");
-  const permAccrue = useModulePerms("accrue");
-  const permAccounting = useModulePerms("accounting");
-  const hasAny = (p) => p && Object.values(p).some(Boolean);
-  const seeOrders    = hasAny(permOrdersList);
-  const seeInvoiced  = hasAny(permInvoicesCreated) || hasAny(permInvoicesMain);
-  const seePayments  = hasAny(permPayments);
-  const seeRevenue   = hasAny(permPnl) || hasAny(permInvoicesCreated) || hasAny(permInvoicesMain);
-  const seeCost      = hasAny(permCosts) || hasAny(permFixedCosts);
-  const seeAccrue    = hasAny(permAccrue);
-  const seeAccounting = hasAny(permAccounting);
+  // ─── Card-level permission gates via explicit `dashboard` module features ───
+  const seeStatusCounts = useCan("dashboard", "view_status_counts");
+  const seeRevenue      = useCan("dashboard", "view_revenue_kpi");
+  const seeCost         = useCan("dashboard", "view_cost_kpi");
+  const seeAccrue       = useCan("dashboard", "view_hutang_kpi");
+  const seePymhd        = useCan("dashboard", "view_pymhd_panel");
 
-  const showStatusRow = seeOrders || seeInvoiced || seePayments;
+  const showStatusRow = seeStatusCounts;
   const showKpiRow    = seeRevenue || seeCost || seeAccrue;
-  const showPymhdPanel = seeAccounting || seeRevenue;
+  const showPymhdPanel = seePymhd;
 
   const { user } = useAuth();
   const [k, setK] = useState(null);
@@ -86,10 +74,10 @@ export default function Dashboard() {
 
       {showStatusRow && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-          {seeOrders && <StatCard icon={PackagePlus} label="AWB Open" value={k?.status_counts?.Open ?? "-"} accent="text-blue-700" />}
-          {seeOrders && <StatCard icon={FileSpreadsheet} label="Rekonsiliasi" value={k?.status_counts?.Reconciled ?? "-"} accent="text-amber-700" />}
-          {seeInvoiced && <StatCard icon={FileText} label="Invoiced" value={k?.status_counts?.Invoiced ?? "-"} accent="text-purple-700" />}
-          {seePayments && <StatCard icon={PackageCheck} label="Lunas" value={k?.status_counts?.Paid ?? "-"} accent="text-emerald-700" />}
+          <StatCard icon={PackagePlus} label="AWB Open" value={k?.status_counts?.Open ?? "-"} accent="text-blue-700" />
+          <StatCard icon={FileSpreadsheet} label="Rekonsiliasi" value={k?.status_counts?.Reconciled ?? "-"} accent="text-amber-700" />
+          <StatCard icon={FileText} label="Invoiced" value={k?.status_counts?.Invoiced ?? "-"} accent="text-purple-700" />
+          <StatCard icon={PackageCheck} label="Lunas" value={k?.status_counts?.Paid ?? "-"} accent="text-emerald-700" />
         </div>
       )}
 
