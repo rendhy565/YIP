@@ -385,6 +385,8 @@ class OrderIn(BaseModel):
     etd: Optional[str] = None                # YYYY-MM-DD Estimated Time Departure dari asal/pelabuhan
     eta: Optional[str] = None                # YYYY-MM-DD Estimated Time Arrival di tujuan/pelabuhan
     plan_eta_customer: Optional[str] = None  # YYYY-MM-DD rencana ETA di gudang customer
+    # --- Notes / Keterangan bebas untuk internal reference ---
+    notes: Optional[str] = None
 
 class CostIn(BaseModel):
     awb_id: str
@@ -1588,6 +1590,7 @@ async def create_order(data: OrderIn, user: dict = Depends(require_role("operati
         "etd": (data.etd or "").strip() or None,
         "eta": (data.eta or "").strip() or None,
         "plan_eta_customer": (data.plan_eta_customer or "").strip() or None,
+        "notes": (data.notes or "").strip() or None,
         "status": "Open",
         "revenue_recognized": False,
         "created_by": user["id"],

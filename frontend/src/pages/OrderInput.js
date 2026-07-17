@@ -114,6 +114,7 @@ export default function OrderInput() {
     etd: "",
     eta: "",
     plan_eta_customer: "",
+    notes: "",
   });
 
   // AWB duplicate real-time check
@@ -246,6 +247,7 @@ export default function OrderInput() {
         eta: form.eta || null,
         plan_eta_customer: form.plan_eta_customer || null,
         contract_id: form.contract_id || null,
+        notes: (form.notes || "").trim() || null,
       };
       const r = await api.post("/orders", payload);
       toast.success(`AWB ${r.data.awb_number} berhasil dibuat`);
@@ -621,6 +623,21 @@ export default function OrderInput() {
                 Lead Time: {leadTimeDays} hari (ETD → Plan ETA Customer)
               </p>
             )}
+          </div>
+
+          {/* === Keterangan (Notes) === */}
+          <div className="mt-6 pt-6 border-t border-slate-200">
+            <h3 className="font-heading font-bold text-lg mb-3">Keterangan</h3>
+            <Label>Catatan Tambahan</Label>
+            <textarea
+              data-testid="order-notes"
+              value={form.notes}
+              onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              rows={4}
+              placeholder="Contoh: barang fragile, hanya dibongkar pagi hari, minta konfirmasi via WA sebelum pickup, dll."
+              className="w-full rounded border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y"
+            />
+            <p className="text-[11px] text-slate-500 mt-1.5">Keterangan bebas untuk internal reference / instruksi khusus terkait AWB ini.</p>
           </div>
         </Card>
 
