@@ -347,6 +347,7 @@ class CustomerIn(BaseModel):
     company_details: Optional[str] = None
     address: Optional[str] = None
     npwp: Optional[str] = None
+    tracking_code: Optional[str] = None  # short human-friendly public tracking code (unique, editable)
 
 class ContractIn(BaseModel):
     customer_id: str
@@ -1260,6 +1261,46 @@ async def me(user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 # Customers
 # ---------------------------------------------------------------------------
+import re as _re
+import secrets as _secrets
+
+_TRK_ALLOWED = _re.compile(r"^[A-Z0-9\-]{6,20}$")
+
+def _slugify_name(name: str) -> str:
+    """Turn 'PT Anugerah Rejeki Cargo' → 'ANUG' (max 4 alnum-uppercase)."""
+    if not name:
+        return "CUST"
+    cleaned = _re.sub(r"[^A-Za-z0-9]", "", name).upper()
+    return (cleaned[:4] or "CUST").ljust(4, "X")[:4]
+
+async def _generate_unique_tracking_code(name: str, exclude_id=None) -> str:
+    """Generate 'ARC-XXXX-1234' where XXXX from name and 1234 random. Retry until unique."""
+    for _ in range(20):
+        code = f"ARC-{_slugify_name(name)}-{_secrets.randbelow(9000) + 1000}"
+        q: dict = {"tracking_code": code}
+        if exclude_id is not None:
+            q["_id"] = {"$ne": exclude_id}
+        exists = await db.customers.find_one(q)
+        if not exists:
+            return code
+    raise HTTPException(500, "Gagal generate unique tracking_code, coba lagi")
+
+async def _normalize_tracking_code(raw: Optional[str], name: str, exclude_id) -> str:
+    """Normalize user input tracking_code (uppercase, validate format, ensure unique).
+    If empty → auto-generate."""
+    if raw and raw.strip():
+        code = raw.strip().upper().replace(" ", "-")
+        if not _TRK_ALLOWED.match(code):
+            raise HTTPException(400, "Tracking code harus 6-20 karakter, hanya A-Z, 0-9, dan tanda hubung '-'")
+        q: dict = {"tracking_code": code}
+        if exclude_id is not None:
+            q["_id"] = {"$ne": exclude_id}
+        exists = await db.customers.find_one(q)
+        if exists:
+            raise HTTPException(400, f"Tracking code '{code}' sudah dipakai customer lain")
+        return code
+    return await _generate_unique_tracking_code(name, exclude_id)
+
 @app.get("/api/customers")
 async def list_customers(user: dict = Depends(get_current_user)):
     docs = await db.customers.find().sort("name", 1).to_list(1000)
@@ -1269,13 +1310,16 @@ async def list_customers(user: dict = Depends(get_current_user)):
 async def create_customer(data: CustomerIn, user: dict = Depends(require_role("operation", "finance"))):
     doc = data.model_dump()
     doc["created_at"] = datetime.now(timezone.utc)
+    doc["tracking_code"] = await _normalize_tracking_code(data.tracking_code, name=data.name, exclude_id=None)
     r = await db.customers.insert_one(doc)
     new = await db.customers.find_one({"_id": r.inserted_id})
     return serialize(new)
 
 @app.put("/api/customers/{cid}")
 async def update_customer(cid: str, data: CustomerIn, user: dict = Depends(require_role("operation", "finance"))):
-    await db.customers.update_one({"_id": _oid(cid)}, {"$set": data.model_dump()})
+    payload = data.model_dump()
+    payload["tracking_code"] = await _normalize_tracking_code(data.tracking_code, name=data.name, exclude_id=_oid(cid))
+    await db.customers.update_one({"_id": _oid(cid)}, {"$set": payload})
     new = await db.customers.find_one({"_id": _oid(cid)})
     return serialize(new)
 
@@ -1283,6 +1327,105 @@ async def update_customer(cid: str, data: CustomerIn, user: dict = Depends(requi
 async def delete_customer(cid: str, user: dict = Depends(require_role("operation", "finance"))):
     await db.customers.delete_one({"_id": _oid(cid)})
     return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# Public Tracking API — dipakai oleh ARCWEB (customer-facing website).
+# TIDAK butuh JWT auth; validasi hanya via tracking_code milik customer.
+# Rate-limited via simple in-memory sliding window (30 req/menit per IP).
+# ---------------------------------------------------------------------------
+from collections import defaultdict as _dd, deque as _dq
+_rate_bucket: dict = _dd(_dq)
+
+def _rate_limit(ip: str, limit: int = 30, window_sec: int = 60):
+    now = datetime.now(timezone.utc).timestamp()
+    q = _rate_bucket[ip]
+    while q and now - q[0] > window_sec:
+        q.popleft()
+    if len(q) >= limit:
+        raise HTTPException(429, f"Rate limit tercapai — max {limit} request per {window_sec} detik")
+    q.append(now)
+
+def _public_awb_status(o: dict) -> tuple[str, str]:
+    """Map internal status → customer-friendly label + step key.
+    Steps: order_received | in_transit | delivered | invoiced | paid."""
+    status = (o.get("status") or "Open").lower()
+    delivered = bool(o.get("pod_received_at") or o.get("received_at") or o.get("delivered_at") or status in ("reconciled", "invoiced", "paid"))
+    if status == "paid":
+        return ("Lunas / Selesai", "paid")
+    if status == "invoiced":
+        return ("Invoice Terbit", "invoiced")
+    if delivered:
+        return ("Sudah Sampai Tujuan", "delivered")
+    if o.get("etd") or o.get("closing_date"):
+        return ("Dalam Perjalanan", "in_transit")
+    return ("Order Diterima", "order_received")
+
+def _iso(v):
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+@app.get("/api/public/tracking/{code}")
+async def public_tracking(code: str, request: Request):
+    """Public endpoint (NO AUTH) — dipakai website AR Cargo untuk tracking customer.
+    Returns customer info + list AWB dengan customer-facing fields saja.
+    Rate limited 30 req/menit per IP."""
+    ip = request.client.host if request.client else "unknown"
+    _rate_limit(ip, limit=30, window_sec=60)
+
+    code_norm = (code or "").strip().upper()
+    if not code_norm:
+        raise HTTPException(400, "Tracking code kosong")
+    cust = await db.customers.find_one({"tracking_code": code_norm})
+    if not cust:
+        raise HTTPException(404, "Tracking code tidak ditemukan. Silakan cek kembali atau hubungi AR Cargo.")
+
+    awbs = await db.awb_orders.find({"customer_id": cust["_id"]}).sort("created_at", -1).to_list(500)
+
+    out_awbs = []
+    for o in awbs:
+        label, step = _public_awb_status(o)
+        history = []
+        for h in (o.get("tracking_history") or []):
+            history.append({
+                "date": _iso(h.get("date")),
+                "location": h.get("location"),
+                "note": h.get("note"),
+                "status": h.get("status"),
+            })
+        out_awbs.append({
+            "awb_number": o.get("awb_number"),
+            "created_at": _iso(o.get("created_at")),
+            "pickup_date": _iso(o.get("pickup_date")),
+            "closing_date": _iso(o.get("closing_date")),
+            "etd": _iso(o.get("etd")),
+            "eta": _iso(o.get("eta")),
+            "plan_eta_customer": _iso(o.get("plan_eta_customer")),
+            "origin": o.get("origin"),
+            "destination": o.get("destination"),
+            "item_description": o.get("item_description"),
+            "goods_content": o.get("goods_content"),
+            "qty_kg": o.get("qty_kg"),
+            "koli_count": o.get("koli_count"),
+            "service": o.get("service"),
+            "armada": o.get("armada"),
+            "grand_total": o.get("grand_total"),
+            "status_label": label,
+            "status_step": step,
+            "invoice_number": o.get("invoice_number") or None,
+            "po_number": o.get("po_number") or None,
+            "tracking_history": history,
+            "notes": o.get("notes"),
+        })
+
+    return {
+        "customer": {
+            "name": cust.get("name"),
+            "company_details": cust.get("company_details"),
+            "tracking_code": cust.get("tracking_code"),
+        },
+        "awb_count": len(out_awbs),
+        "awbs": out_awbs,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 # ---------------------------------------------------------------------------
 # Contracts
@@ -4531,6 +4674,29 @@ async def _startup_migrate_revenue_recognition():
     )
     if r.modified_count:
         print(f"[migration] Marked {r.modified_count} existing AWBs as revenue_recognized=True")
+
+
+@app.on_event("startup")
+async def _startup_backfill_tracking_codes():
+    """Backfill unique tracking_code untuk semua customer existing.
+    Idempotent: hanya customer tanpa tracking_code yang di-update."""
+    missing = await db.customers.find(
+        {"$or": [{"tracking_code": {"$exists": False}}, {"tracking_code": None}, {"tracking_code": ""}]}
+    ).to_list(10000)
+    if not missing:
+        return
+    # Also ensure unique sparse index
+    try:
+        await db.customers.create_index("tracking_code", unique=True, sparse=True, name="tracking_code_1")
+    except Exception:
+        pass
+    for c in missing:
+        try:
+            code = await _generate_unique_tracking_code(c.get("name") or "CUST", exclude_id=c["_id"])
+            await db.customers.update_one({"_id": c["_id"]}, {"$set": {"tracking_code": code}})
+        except Exception as e:
+            print(f"[backfill tracking_code] failed for {c.get('name')}: {e}")
+    print(f"[migration] Backfilled tracking_code untuk {len(missing)} customer")
 
 
 # ===========================================================================
