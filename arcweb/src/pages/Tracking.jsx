@@ -6,7 +6,9 @@ import { useLang } from "@/lib/i18n";
 import { motion, AnimatePresence } from "framer-motion";
 import axios from "axios";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+// Base API URL: pakai REACT_APP_BACKEND_URL kalau diset, fallback ke same-origin.
+// Dengan same-origin (ARCWEB served bareng ARC backend), tidak perlu CORS.
+const API = `${process.env.REACT_APP_BACKEND_URL || ""}/api`;
 
 function formatDate(iso, lang) {
   try {

@@ -1,5 +1,5 @@
 import React from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { HashRouter, Routes, Route } from "react-router-dom";
 import { Toaster } from "sonner";
 import "@/App.css";
 import { LangProvider } from "@/lib/i18n";
@@ -14,7 +14,7 @@ function App() {
   return (
     <div className="App">
       <LangProvider>
-        <BrowserRouter basename="/arcweb">
+        <HashRouter>
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/services" element={<Services />} />
@@ -23,7 +23,7 @@ function App() {
             <Route path="/contact" element={<Contact />} />
             <Route path="/tracking" element={<Tracking />} />
           </Routes>
-        </BrowserRouter>
+        </HashRouter>
         <Toaster
           position="bottom-right"
           theme="dark"
