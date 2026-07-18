@@ -34,9 +34,9 @@
   },
   "scripts": {
     "start": "craco start",
-    "build": "yarn build:arcweb && craco build",
-    "build:arc": "yarn build:arcweb && PUBLIC_URL=/arc craco build",
-    "build:arcweb": "cd ../arcweb && yarn install --frozen-lockfile && yarn build && rm -rf ../frontend/public/arcweb && mkdir -p ../frontend/public/arcweb && cp -r ./build/* ../frontend/public/arcweb/",
+    "build": "craco build",
+    "build:arc": "PUBLIC_URL=/arc craco build",
+    "build:arcweb": "cd ../arcweb && (yarn install --frozen-lockfile || npm ci || npm install) && (yarn build || npm run build) && rm -rf ../frontend/public/arcweb && mkdir -p ../frontend/public/arcweb && cp -r ./build/* ../frontend/public/arcweb/",
     "test": "craco test"
   },
   "eslintConfig": {
