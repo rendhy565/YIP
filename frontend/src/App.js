@@ -88,7 +88,7 @@ export default function App() {
   return (
     <AuthProvider>
       <FeatureFlagsProvider>
-        <BrowserRouter basename="/arc">
+        <BrowserRouter basename={window.location.pathname.startsWith('/arc/') || window.location.pathname === '/arc' ? '/arc' : '/'}>
           <Toaster position="top-right" richColors />
           <Routes>
             <Route path="/login" element={<Login />} />
