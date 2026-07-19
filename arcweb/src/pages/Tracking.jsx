@@ -78,6 +78,16 @@ export default function Tracking() {
   const [sortDir, setSortDir] = useState("desc");
   const [expandedIdx, setExpandedIdx] = useState(null);
 
+  // Pagination state
+  const [pageSize, setPageSize] = useState(10);
+  const [page, setPage] = useState(1);
+
+  // Reset ke page 1 kalau filter/search berubah
+  React.useEffect(() => {
+    setPage(1);
+    setExpandedIdx(null);
+  }, [search, statusFilter, paymentFilter, pageSize, result]);
+
   const onSubmit = async (e) => {
     e.preventDefault();
     if (!tid || tid.trim().length < 4) {
@@ -142,6 +152,17 @@ export default function Tracking() {
 
     return arr;
   }, [result, search, statusFilter, paymentFilter, sortBy, sortDir]);
+
+  // Pagination derived
+  const totalRows = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRows = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, currentPage, pageSize]);
+  const rangeStart = totalRows === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const rangeEnd = Math.min(currentPage * pageSize, totalRows);
 
   const toggleSort = (col) => {
     if (sortBy === col) setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -363,14 +384,15 @@ export default function Tracking() {
                         </tr>
                       </thead>
                       <tbody className="font-mono text-[12px] text-[#F4F4F5]">
-                        {rows.map((awb, idx) => {
-                          const isOpen = expandedIdx === idx;
+                        {pagedRows.map((awb, idx) => {
+                          const globalIdx = (currentPage - 1) * pageSize + idx;
+                          const isOpen = expandedIdx === globalIdx;
                           const delivClass = DELIV_COLORS[awb.status_step] || "text-[#FF5A00]";
                           return (
                             <React.Fragment key={awb.awb_number || idx}>
                               <tr
                                 data-testid={`tracking-row-${idx}`}
-                                onClick={() => setExpandedIdx(isOpen ? null : idx)}
+                                onClick={() => setExpandedIdx(isOpen ? null : globalIdx)}
                                 className={`border-t border-[#272A30] hover:bg-[#1A1D24]/60 cursor-pointer transition-colors ${isOpen ? "bg-[#1A1D24]/60" : ""}`}
                               >
                                 <td className="px-4 py-3 font-semibold whitespace-nowrap">
@@ -448,6 +470,52 @@ export default function Tracking() {
                         })}
                       </tbody>
                     </table>
+                  </div>
+                )}
+
+                {/* Pagination Bar */}
+                {rows.length > 0 && (
+                  <div className="flex flex-col md:flex-row items-center justify-between gap-4 border border-[#272A30] px-4 py-3 bg-[#1A1D24]/40" data-testid="pagination-bar">
+                    <div className="font-mono text-[11px] text-[#A1A1AA]">
+                      Menampilkan <span className="text-[#F4F4F5]">{rangeStart}-{rangeEnd}</span> dari <span className="text-[#F4F4F5]">{totalRows}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 font-mono text-[11px] text-[#A1A1AA]">
+                        <span>Per halaman:</span>
+                        <select
+                          data-testid="pagination-size"
+                          value={pageSize}
+                          onChange={(e) => setPageSize(Number(e.target.value))}
+                          className="bg-[#0F1115] border border-[#272A30] px-2 py-1 text-[#F4F4F5] font-mono text-xs focus:outline-none focus:border-[#FF5A00]"
+                        >
+                          <option value={10}>10</option>
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={100}>100</option>
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-1 font-mono text-[11px]">
+                        <button
+                          data-testid="pagination-prev"
+                          onClick={() => setPage((pg) => Math.max(1, pg - 1))}
+                          disabled={currentPage <= 1}
+                          className="px-3 py-1 border border-[#272A30] text-[#F4F4F5] hover:border-[#FF5A00] hover:text-[#FF5A00] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:border-[#272A30] disabled:hover:text-[#F4F4F5]"
+                        >
+                          ← Prev
+                        </button>
+                        <div className="px-3 py-1 text-[#A1A1AA]">
+                          <span className="text-[#F4F4F5]">{currentPage}</span> / {totalPages}
+                        </div>
+                        <button
+                          data-testid="pagination-next"
+                          onClick={() => setPage((pg) => Math.min(totalPages, pg + 1))}
+                          disabled={currentPage >= totalPages}
+                          className="px-3 py-1 border border-[#272A30] text-[#F4F4F5] hover:border-[#FF5A00] hover:text-[#FF5A00] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:border-[#272A30] disabled:hover:text-[#F4F4F5]"
+                        >
+                          Next →
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </motion.div>
