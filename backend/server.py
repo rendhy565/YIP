@@ -1412,6 +1412,8 @@ async def public_tracking(code: str, request: Request):
             "status_step": step,
             "invoice_number": o.get("invoice_number") or None,
             "po_number": o.get("po_number") or None,
+            "payment_status": o.get("status") or ("Invoiced" if o.get("invoice_number") else "Open"),
+            "paid_at": _iso(o.get("paid_at")),
             "tracking_history": history,
             "notes": o.get("notes"),
         })
