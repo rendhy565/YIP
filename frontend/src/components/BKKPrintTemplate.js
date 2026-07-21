@@ -39,15 +39,6 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName }) {
 
   const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
-  // Signatures dari approval steps
-  const stepByName = {};
-  (approval?.steps || []).forEach((s) => {
-    // Match berdasarkan nama step
-    const key = (s.name || "").toLowerCase();
-    if (key.includes("cek")) stepByName.checker = s;
-    else if (key.includes("approval") || key.includes("mgr") || key.includes("manager")) stepByName.approver = s;
-  });
-
   const formatDate = (iso) => {
     if (!iso) return "";
     const d = new Date(iso);
@@ -60,6 +51,36 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName }) {
     const sign = n < 0 ? "-" : "";
     return `${sign}Rp ${abs.toLocaleString("id-ID")}`;
   };
+
+  // Build dynamic signature boxes:
+  // 1. DIAJUKAN OLEH (pengaju)
+  // 2..N. Sesuai approval steps (nama step + orang yang approve)
+  // Last. PENERIMAAN KLAIM (= pengaju juga, sesuai request user)
+  const approvalSteps = approval?.steps || [];
+  const signatures = [
+    {
+      label: "DIAJUKAN OLEH",
+      name: requesterName || "-",
+      date: panjar.advance_date,
+    },
+    ...approvalSteps.map((s) => ({
+      label: (s.name || "APPROVER").toUpperCase(),
+      name: s.approved_by_name || "",
+      date: s.approved_at,
+    })),
+    {
+      label: "PENERIMAAN KLAIM",
+      name: requesterName || "-",
+      date: null,
+    },
+  ];
+
+  // Grid columns responsive based on total signatures
+  const totalSigs = signatures.length;
+  const gridCols = totalSigs <= 3 ? "grid-cols-3" :
+                   totalSigs === 4 ? "grid-cols-4" :
+                   totalSigs === 5 ? "grid-cols-5" :
+                   "grid-cols-6";
 
   return (
     <div className="bkk-print bg-white text-black p-8 font-sans" style={{ width: "210mm", minHeight: "148mm" }}>
@@ -124,28 +145,16 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName }) {
         </tbody>
       </table>
 
-      {/* Signatures */}
-      <div className="grid grid-cols-4 gap-2 mt-4 text-xs">
-        <SigBox
-          label="DIAJUKAN OLEH"
-          name={requesterName || "-"}
-          date={panjar.advance_date}
-        />
-        <SigBox
-          label="DI CEK OLEH"
-          name={stepByName.checker?.approved_by_name || ""}
-          date={stepByName.checker?.approved_at}
-        />
-        <SigBox
-          label="APPROVEL OLEH (MGR)"
-          name={stepByName.approver?.approved_by_name || ""}
-          date={stepByName.approver?.approved_at}
-        />
-        <SigBox
-          label="PENERIMAAN KLAIM"
-          name={panjar.recipient_name}
-          date=""
-        />
+      {/* Signatures — dynamic based on approval flow */}
+      <div className={`grid ${gridCols} gap-2 mt-4 text-xs`}>
+        {signatures.map((sig, i) => (
+          <SigBox
+            key={i}
+            label={sig.label}
+            name={sig.name}
+            date={sig.date}
+          />
+        ))}
       </div>
 
       {/* Footer notes (optional) */}
