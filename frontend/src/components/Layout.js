@@ -29,6 +29,10 @@ const NAV = [
   { to: "/purchase-orders", label: "PO / Surat Perintah Vendor", icon: FileText, perm: "purchase_orders" },
   { to: "/fixed-costs", label: "Expense", icon: Banknote, perm: "fixed_costs" },
 
+  { type: "section", label: "Approval" },
+  { to: "/approvals", label: "Approval", icon: ClipboardCheck, perm: "*", badge: "approval_pending" },
+  { to: "/approvals/config", label: "Konfigurasi Approval", icon: SettingsIcon, perm: "*", adminOnly: true },
+
   { type: "section", label: "Master & Laporan" },
   { to: "/analytics", label: "Dashboard Analitik", icon: BarChart3, perm: "pnl" },
   { to: "/customers", label: "Customer", icon: Users, perm: "customers" },
@@ -96,8 +100,25 @@ export default function Layout({ children }) {
   const { flags } = useFeatureFlags();
   const loc = useLocation();
   const [open, setOpen] = useState(false);
+  const [approvalPending, setApprovalPending] = useState(0);
 
   useEffect(() => { setOpen(false); }, [loc.pathname]);
+
+  // Poll approval pending count for badge
+  useEffect(() => {
+    if (!user) return;
+    let mounted = true;
+    const fetch = async () => {
+      try {
+        const api = (await import("../lib/api")).default;
+        const { data } = await api.get("/approvals/pending-count");
+        if (mounted) setApprovalPending(data.count || 0);
+      } catch (_e) { /* ignore */ }
+    };
+    fetch();
+    const iv = setInterval(fetch, 45000); // refresh every 45s
+    return () => { mounted = false; clearInterval(iv); };
+  }, [user, loc.pathname]);
 
   const SidebarBody = (
     <>
@@ -152,11 +173,17 @@ export default function Layout({ children }) {
             }
             const Icon = item.icon;
             const active = loc.pathname === item.to;
+            const badgeCount = item.badge === "approval_pending" ? approvalPending : 0;
             return (
               <Link key={item.to} to={item.to} data-testid={`nav-${item.to.replace(/\//g, "-")}`}
                 className={`flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors ${active ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
                 <Icon size={16} />
-                <span>{item.label}</span>
+                <span className="flex-1">{item.label}</span>
+                {badgeCount > 0 && (
+                  <span data-testid={`badge-${item.to.replace(/\//g, "-")}`} className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold">
+                    {badgeCount > 99 ? "99+" : badgeCount}
+                  </span>
+                )}
               </Link>
             );
           });

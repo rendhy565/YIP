@@ -43,6 +43,8 @@ import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import PanjarKerja from "./pages/PanjarKerja";
 import InvoicesCreated from "./pages/InvoicesCreated";
 import PurchaseOrders from "./pages/PurchaseOrders";
+import Approvals from "./pages/Approvals";
+import ApprovalConfig from "./pages/ApprovalConfig";
 
 function Protected({ children, roles, module }) {
   const { user } = useAuth();
@@ -133,6 +135,8 @@ export default function App() {
             <Route path="/analytics" element={<Protected module="pnl"><Shell><AnalyticsDashboard /></Shell></Protected>} />
             <Route path="/panjar" element={<Protected module="fixed_costs"><Shell><PanjarKerja /></Shell></Protected>} />
             <Route path="/purchase-orders" element={<Protected module="purchase_orders"><Shell><PurchaseOrders /></Shell></Protected>} />
+            <Route path="/approvals" element={<Protected><Shell><Approvals /></Shell></Protected>} />
+            <Route path="/approvals/config" element={<Protected roles={["administrator"]}><Shell><ApprovalConfig /></Shell></Protected>} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

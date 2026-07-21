@@ -4658,6 +4658,206 @@ async def match_candidates(bid: str, user: dict = Depends(require_feature("bank_
                 break
     return {"line": serialize(line), "candidates": candidates}
 
+# ---------------------------------------------------------------------------
+# APPROVAL WORKFLOW (Generic)
+# ---------------------------------------------------------------------------
+# Configurable per document_type (e.g. "cash_advance", "invoice", etc).
+# Each config = list of steps; each step has name + list of approver user_ids.
+# Runtime: when document created, create Approval record with copy of steps.
+# Actions: approve/reject with note. Sequential — must approve step-by-step.
+# ---------------------------------------------------------------------------
+
+class ApprovalStepConfig(BaseModel):
+    name: str  # e.g. "Di Cek Oleh", "Approval MGR"
+    approver_ids: List[str]  # user ids yang boleh approve step ini
+
+class ApprovalConfigIn(BaseModel):
+    document_type: str  # "cash_advance", etc
+    enabled: bool = True
+    steps: List[ApprovalStepConfig]
+
+class ApprovalActionIn(BaseModel):
+    note: Optional[str] = None
+
+async def _get_active_approval_config(doc_type: str):
+    cfg = await db.approval_configs.find_one({"document_type": doc_type, "enabled": True})
+    return cfg
+
+async def _create_approval_request(doc_type: str, doc_id: str, doc_number: str, doc_snapshot: dict, requester_id: str):
+    """Create pending approval based on active config for doc_type. Returns approval doc or None if no config."""
+    cfg = await _get_active_approval_config(doc_type)
+    if not cfg or not cfg.get("steps"):
+        return None
+    steps = []
+    for s in cfg["steps"]:
+        steps.append({
+            "name": s.get("name"),
+            "approver_ids": [str(a) for a in (s.get("approver_ids") or [])],
+            "status": "Pending",  # Pending / Approved / Rejected
+            "approved_by": None,
+            "approved_by_name": None,
+            "approved_at": None,
+            "note": None,
+        })
+    doc = {
+        "document_type": doc_type,
+        "document_id": doc_id,
+        "document_number": doc_number,
+        "document_snapshot": doc_snapshot,
+        "status": "Pending",
+        "current_step_idx": 0,
+        "steps": steps,
+        "requested_by": requester_id,
+        "requested_at": datetime.now(timezone.utc),
+        "completed_at": None,
+    }
+    r = await db.approvals.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return doc
+
+@app.get("/api/approval-configs")
+async def list_approval_configs(user: dict = Depends(get_current_user)):
+    docs = await db.approval_configs.find({}).to_list(200)
+    return [serialize(d) for d in docs]
+
+@app.get("/api/approval-configs/{doc_type}")
+async def get_approval_config(doc_type: str, user: dict = Depends(get_current_user)):
+    doc = await db.approval_configs.find_one({"document_type": doc_type})
+    if not doc:
+        return None
+    return serialize(doc)
+
+@app.post("/api/approval-configs")
+async def upsert_approval_config(data: ApprovalConfigIn, user: dict = Depends(require_role("administrator"))):
+    payload = {
+        "document_type": data.document_type,
+        "enabled": data.enabled,
+        "steps": [{"name": s.name, "approver_ids": s.approver_ids} for s in data.steps],
+        "updated_at": datetime.now(timezone.utc),
+        "updated_by": user["id"],
+    }
+    await db.approval_configs.update_one(
+        {"document_type": data.document_type},
+        {"$set": payload, "$setOnInsert": {"created_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return serialize(await db.approval_configs.find_one({"document_type": data.document_type}))
+
+@app.delete("/api/approval-configs/{doc_type}")
+async def delete_approval_config(doc_type: str, user: dict = Depends(require_role("administrator"))):
+    await db.approval_configs.delete_one({"document_type": doc_type})
+    return {"ok": True}
+
+@app.get("/api/approvals")
+async def list_approvals(
+    scope: Optional[str] = None,  # "pending_for_me" | "mine" | "all"
+    document_type: Optional[str] = None,
+    status_v: Optional[str] = None,  # Pending / Approved / Rejected
+    user: dict = Depends(get_current_user),
+):
+    q: dict = {}
+    if document_type:
+        q["document_type"] = document_type
+    if status_v:
+        q["status"] = status_v
+    if scope == "mine":
+        q["requested_by"] = user["id"]
+    elif scope == "pending_for_me":
+        q["status"] = "Pending"
+        # We need approvals where user is approver of the current step
+        # Handled with post-filter since Mongo query on dynamic index is expensive
+        docs = await db.approvals.find(q).sort("requested_at", -1).to_list(2000)
+        out = []
+        for d in docs:
+            idx = d.get("current_step_idx", 0)
+            steps = d.get("steps") or []
+            if 0 <= idx < len(steps):
+                approver_ids = steps[idx].get("approver_ids") or []
+                if user["id"] in approver_ids:
+                    out.append(serialize(d))
+        return out
+    docs = await db.approvals.find(q).sort("requested_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.get("/api/approvals/pending-count")
+async def approvals_pending_count(user: dict = Depends(get_current_user)):
+    docs = await db.approvals.find({"status": "Pending"}).to_list(2000)
+    n = 0
+    for d in docs:
+        idx = d.get("current_step_idx", 0)
+        steps = d.get("steps") or []
+        if 0 <= idx < len(steps):
+            approver_ids = steps[idx].get("approver_ids") or []
+            if user["id"] in approver_ids:
+                n += 1
+    return {"count": n}
+
+@app.get("/api/approvals/{aid}")
+async def get_approval(aid: str, user: dict = Depends(get_current_user)):
+    doc = await db.approvals.find_one({"_id": _oid(aid)})
+    if not doc:
+        raise HTTPException(404, "Approval not found")
+    return serialize(doc)
+
+async def _apply_approval_action(aid: str, user: dict, action: str, note: Optional[str]):
+    doc = await db.approvals.find_one({"_id": _oid(aid)})
+    if not doc:
+        raise HTTPException(404, "Approval not found")
+    if doc.get("status") != "Pending":
+        raise HTTPException(400, f"Approval sudah {doc.get('status')}")
+    idx = doc.get("current_step_idx", 0)
+    steps = doc.get("steps") or []
+    if idx < 0 or idx >= len(steps):
+        raise HTTPException(400, "Step index invalid")
+    step = steps[idx]
+    approver_ids = step.get("approver_ids") or []
+    if user["id"] not in approver_ids:
+        raise HTTPException(403, "Anda tidak berwenang approve step ini")
+
+    now = datetime.now(timezone.utc)
+    step_upd = {
+        "status": "Approved" if action == "approve" else "Rejected",
+        "approved_by": user["id"],
+        "approved_by_name": user.get("full_name") or user.get("username"),
+        "approved_at": now,
+        "note": (note or "").strip() or None,
+    }
+    steps[idx] = {**step, **step_upd}
+
+    upd: dict = {"steps": steps}
+    if action == "reject":
+        upd["status"] = "Rejected"
+        upd["completed_at"] = now
+    else:
+        # Move to next step (or complete)
+        if idx + 1 >= len(steps):
+            upd["status"] = "Approved"
+            upd["completed_at"] = now
+        else:
+            upd["current_step_idx"] = idx + 1
+
+    await db.approvals.update_one({"_id": _oid(aid)}, {"$set": upd})
+
+    # Sync back to source document (cash_advance for now)
+    if doc.get("document_type") == "cash_advance":
+        awb_upd = {"approval_status": upd.get("status", "Pending"), "approval_id": str(doc["_id"])}
+        await db.cash_advances.update_one({"_id": _oid(doc["document_id"])}, {"$set": awb_upd})
+
+    return serialize(await db.approvals.find_one({"_id": _oid(aid)}))
+
+@app.post("/api/approvals/{aid}/approve")
+async def approve_action(aid: str, data: ApprovalActionIn, user: dict = Depends(get_current_user)):
+    return await _apply_approval_action(aid, user, "approve", data.note)
+
+@app.post("/api/approvals/{aid}/reject")
+async def reject_action(aid: str, data: ApprovalActionIn, user: dict = Depends(get_current_user)):
+    return await _apply_approval_action(aid, user, "reject", data.note)
+
+
+# ---------------------------------------------------------------------------
+# END APPROVAL WORKFLOW
+# ---------------------------------------------------------------------------
+
 # Ensure feature flags seeded on startup
 @app.on_event("startup")
 async def _startup_feature_flags():
@@ -6317,6 +6517,24 @@ async def create_cash_advance(data: CashAdvanceIn, user: dict = Depends(require_
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.cash_advances.insert_one(doc)
+    # Auto-create approval request if configured
+    approval = await _create_approval_request(
+        doc_type="cash_advance",
+        doc_id=str(r.inserted_id),
+        doc_number=doc["number"],
+        doc_snapshot={
+            "recipient_name": doc["recipient_name"],
+            "amount": doc["amount"],
+            "purpose": doc.get("purpose"),
+            "advance_date": adv_date.isoformat(),
+        },
+        requester_id=user["id"],
+    )
+    if approval:
+        await db.cash_advances.update_one(
+            {"_id": r.inserted_id},
+            {"$set": {"approval_status": "Pending", "approval_id": str(approval["_id"])}},
+        )
     # Journal: DR 1108 Panjar Kerja / CR Cash
     try:
         await post_journal(

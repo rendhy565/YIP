@@ -4,9 +4,10 @@ import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from ".
 import SearchableSelect from "../components/SearchableSelect";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, X, Wallet, CheckCircle2, Trash2, History } from "lucide-react";
+import { Plus, X, Wallet, CheckCircle2, Trash2, History, Printer } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
+import BKKPrintTemplate from "../components/BKKPrintTemplate";
 
 function todayStr() {
   const d = new Date();
@@ -33,13 +34,16 @@ export default function PanjarKerja() {
   const [historyFor, setHistoryFor] = useState(null);
   const [breakdown, setBreakdown] = useState([]); // [{awb_id, amount, description}]
   const [settling, setSettling] = useState(false);
+  const [printFor, setPrintFor] = useState(null); // { panjar, approval, requester_name }
+  const [users, setUsers] = useState([]);
 
   const load = async () => {
-    const [ca, os] = await Promise.all([
+    const [ca, os, usr] = await Promise.all([
       api.get("/cash-advances"),
       api.get("/orders"),  // ALL AWBs (any status)
+      api.get("/users").catch(() => ({ data: [] })),
     ]);
-    setRows(ca.data); setAllOrders(os.data);
+    setRows(ca.data); setAllOrders(os.data); setUsers(usr.data || []);
   };
   useEffect(() => { load(); }, []);
 
@@ -134,6 +138,28 @@ export default function PanjarKerja() {
     return s + Math.max(0, (r.amount || 0) - consumed);
   }, 0);
 
+  const openPrint = async (r) => {
+    try {
+      let approval = null;
+      if (r.approval_id) {
+        approval = (await api.get(`/approvals/${r.approval_id}`)).data;
+      }
+      const requester = users.find((u) => u.id === r.created_by);
+      setPrintFor({
+        panjar: r,
+        approval,
+        requester_name: requester?.full_name || requester?.username || "-",
+      });
+    } catch (e) {
+      toast.error(errMsg(e));
+    }
+  };
+
+  const doPrint = () => {
+    // Print HTML via browser
+    window.print();
+  };
+
   return (
     <div data-testid="panjar-page">
       <PageHeader
@@ -158,7 +184,7 @@ export default function PanjarKerja() {
           <thead><tr>
             <Th>No.</Th><Th>Tanggal</Th><Th>Penerima</Th><Th>Keperluan</Th>
             <Th className="text-right">Panjar</Th><Th className="text-right">Aktual</Th><Th className="text-right">Refund</Th>
-            <Th>Status</Th><Th>Breakdown AWB</Th><Th className="text-right">Aksi</Th>
+            <Th>Status</Th><Th>Approval</Th><Th>Breakdown AWB</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
             {rows.map((r) => {
@@ -192,6 +218,13 @@ export default function PanjarKerja() {
                     </div>
                   )}
                 </Td>
+                <Td>
+                  {r.approval_status ? (
+                    <ApprovalStatusPill status={r.approval_status} />
+                  ) : (
+                    <span className="text-slate-400 text-[10px]">—</span>
+                  )}
+                </Td>
                 <Td className="text-xs">
                   {r.awb_breakdown && r.awb_breakdown.length > 0 ? (
                     <div className="space-y-0.5">
@@ -203,6 +236,11 @@ export default function PanjarKerja() {
                 </Td>
                 <Td className="text-right whitespace-nowrap">
                   <div className="flex gap-1 justify-end">
+                    {r.approval_status === "Approved" && (
+                      <button data-testid={`print-panjar-${r.number}`} onClick={() => openPrint(r)} title="Print BKK (setelah disetujui)" className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-indigo-100 text-indigo-800 hover:bg-indigo-200 inline-flex items-center gap-1">
+                        <Printer size={11}/> Print
+                      </button>
+                    )}
                     {r.settle_history && r.settle_history.length > 0 && (
                       <button data-testid={`history-panjar-${r.number}`} onClick={() => setHistoryFor(r)} title="Lihat history settle" className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-blue-100 text-blue-800 hover:bg-blue-200 inline-flex items-center gap-1">
                         <History size={11}/> History ({r.settle_history.length})
@@ -221,7 +259,7 @@ export default function PanjarKerja() {
               </tr>
               );
             })}
-            {rows.length === 0 && <tr><Td colSpan={10} className="text-center text-slate-500 py-8">Belum ada panjar kerja.</Td></tr>}
+            {rows.length === 0 && <tr><Td colSpan={11} className="text-center text-slate-500 py-8">Belum ada panjar kerja.</Td></tr>}
           </tbody>
         </Table>
       </Card>
@@ -446,6 +484,45 @@ export default function PanjarKerja() {
           </Card>
         </div>
       )}
+
+      {printFor && (
+        <div className="fixed inset-0 bg-slate-900/80 z-50 flex items-start justify-center overflow-y-auto p-4" data-testid="print-panjar-modal">
+          <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full my-8">
+            <div className="flex items-center justify-between px-4 py-3 border-b no-print">
+              <div>
+                <div className="font-heading font-bold text-lg">Preview BKK — {printFor.panjar.number}</div>
+                <div className="text-xs text-slate-500">Ctrl+P atau tombol Print untuk cetak. Save as PDF juga tersedia dari dialog print browser.</div>
+              </div>
+              <div className="flex gap-2">
+                <Button data-testid="print-bkk-btn" onClick={doPrint}>
+                  <Printer size={14} className="mr-1"/> Print / Save PDF
+                </Button>
+                <Button variant="secondary" onClick={() => setPrintFor(null)}>Tutup</Button>
+              </div>
+            </div>
+            <div className="p-4">
+              <BKKPrintTemplate
+                panjar={printFor.panjar}
+                approval={printFor.approval}
+                requesterName={printFor.requester_name}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function ApprovalStatusPill({ status }) {
+  const cls = {
+    Pending: "bg-amber-100 text-amber-800 border-amber-300",
+    Approved: "bg-emerald-100 text-emerald-800 border-emerald-300",
+    Rejected: "bg-red-100 text-red-800 border-red-300",
+  }[status] || "bg-slate-100 text-slate-700 border-slate-300";
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${cls}`}>
+      {status}
+    </span>
   );
 }

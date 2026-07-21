@@ -92,3 +92,63 @@
 
 ## Test credentials
 See `/app/memory/test_credentials.md`
+
+---
+
+## 2026-02-21: Approval Workflow Module + BKK Print
+
+### Delivered
+- **Generic Approval Workflow** (backend + frontend):
+  - Configurable per `document_type` in admin settings
+  - Multi-step sequential approval (e.g., "Di Cek Oleh" → "Approval MGR")
+  - Approvers selected by USER (bukan role) — per step
+  - Auto-create approval when panjar dibuat
+  - Approve/Reject actions with mandatory note on reject
+  - Sidebar badge count (polling 45s) untuk pending approvals user
+  - Pages:
+    - `/approvals` — list & take action (tabs: Pending Saya / Pengajuan Saya / Semua)
+    - `/approvals/config` — admin only, configure per doc_type
+- **BKK (Bukti Kas Keluar) Print** untuk Panjar Kerja:
+  - Template mimicking form fisik PT ABIRAMA MITRA PRATAMA
+  - Layout: header + tabel Referensi/Rincian/Nominal + 4 signature boxes
+  - Baris pertama: Keperluan (positive) + amount pengajuan
+  - Baris berikutnya (kalau ada awb_breakdown saat settle): AWB dengan amount NEGATIF (pengurang)
+  - JUMLAH TOTAL = SUM baris (positif - negatif)
+  - Signatures auto-fill: Diajukan Oleh, Di Cek Oleh, Approval MGR (dari approval), Penerimaan Klaim (recipient)
+  - Print button HANYA MUNCUL jika `approval_status == "Approved"`
+  - Print via `window.print()` (browser dialog → bisa save PDF)
+  - CSS @media print + @page A5 landscape
+
+### Files Added/Modified
+- **NEW**: `/app/backend/server.py` — 200 lines approval module (lines ~4661+)
+  - Models: `ApprovalStepConfig`, `ApprovalConfigIn`, `ApprovalActionIn`
+  - Endpoints:
+    - `GET/POST /api/approval-configs` (admin only for POST)
+    - `GET /api/approval-configs/{doc_type}`
+    - `DELETE /api/approval-configs/{doc_type}` (admin only)
+    - `GET /api/approvals?scope=pending_for_me|mine|all`
+    - `GET /api/approvals/pending-count` — sidebar badge
+    - `GET /api/approvals/{aid}`
+    - `POST /api/approvals/{aid}/approve|reject`
+  - Helper: `_create_approval_request(doc_type, doc_id, ...)` — hook into panjar create
+- **NEW**: `/app/frontend/src/pages/Approvals.js`
+- **NEW**: `/app/frontend/src/pages/ApprovalConfig.js`
+- **NEW**: `/app/frontend/src/components/BKKPrintTemplate.js`
+- **MODIFIED**: `/app/frontend/src/pages/PanjarKerja.js` — add Print button, Approval column, ApprovalStatusPill
+- **MODIFIED**: `/app/frontend/src/components/Layout.js` — sidebar section "Approval" with badge count polling
+- **MODIFIED**: `/app/frontend/src/App.js` — routes `/approvals` & `/approvals/config`
+- **MODIFIED**: `/app/backend/server.py` `create_cash_advance` — auto-create approval
+
+### DB Collections (New)
+- `approval_configs`: `{document_type, enabled, steps:[{name, approver_ids[]}], updated_by, created_at, updated_at}`
+- `approvals`: `{document_type, document_id, document_number, document_snapshot, status, current_step_idx, steps:[{name, approver_ids[], status, approved_by, approved_by_name, approved_at, note}], requested_by, requested_at, completed_at}`
+
+### AWB Order Related Cascade
+- `cash_advances` now has `approval_id` + `approval_status` fields (nullable)
+
+### Extension Path
+- Bisa reuse untuk dokumen lain (invoice, PO, dll) — cukup:
+  1. Create approval config di admin UI (tambah entry di DOC_TYPES di ApprovalConfig.js)
+  2. Panggil `_create_approval_request()` saat dokumen dibuat
+  3. Show `approval_status` di list dokumen
+  4. Gate action (print, submit, dll) berdasarkan status Approved
