@@ -119,6 +119,8 @@ export default function OrderInput() {
 
   // AWB duplicate real-time check
   const [awbDup, setAwbDup] = useState({ checking: false, exists: false, msg: "" });
+  // Blocking modal saat submit dengan AWB duplikat
+  const [dupModal, setDupModal] = useState(false);
 
   // Sender suggestions for selected customer
   const [senderSuggestions, setSenderSuggestions] = useState([]);
@@ -212,10 +214,22 @@ export default function OrderInput() {
 
   const submit = async (e) => {
     e.preventDefault();
-    // Cegah submit jika AWB duplikat
+    // Cegah submit jika AWB duplikat — tampilkan blocking modal
     if (awbDup.exists) {
-      toast.error(awbDup.msg || "Nomor AWB sudah dipakai");
+      setDupModal(true);
       return;
+    }
+    // Kalau belum check duplikat (misal user tidak blur), re-check dulu di sini
+    const awbVal = (form.awb_number || "").trim();
+    if (awbVal) {
+      try {
+        const r = await api.get("/orders/check-awb", { params: { awb_number: awbVal } });
+        if (r.data?.exists) {
+          setAwbDup({ checking: false, exists: true, msg: `Nomor AWB "${awbVal}" sudah dipakai — pakai nomor lain.` });
+          setDupModal(true);
+          return;
+        }
+      } catch { /* ignore, continue */ }
     }
     // Validate koli mandatory
     if (!form.koli_count || parseInt(form.koli_count, 10) <= 0) {
@@ -681,12 +695,46 @@ export default function OrderInput() {
               </div>
             )}
           </div>
-          <Button data-testid="submit-order-btn" className="w-full mt-5" type="submit">
+          <Button data-testid="submit-order-btn" className="w-full mt-5" type="submit"
+            onClick={(e) => {
+              // Intercept sebelum HTML5 validation: kalau AWB duplikat, blok & show modal
+              if (awbDup.exists) {
+                e.preventDefault();
+                setDupModal(true);
+              }
+            }}>
             <Save size={16}/> Simpan AWB
           </Button>
           <p className="text-[11px] text-slate-500 mt-3">Pastikan No. AWB unik. Status Pengiriman kosong tidak akan ditampilkan di invoice.</p>
         </Card>
       </form>
+
+      {/* === Blocking Modal: AWB Duplikat === */}
+      {dupModal && (
+        <div className="fixed inset-0 bg-slate-900/70 z-50 flex items-center justify-center p-4" data-testid="dup-awb-modal">
+          <Card className="w-full max-w-md p-6 border-2 border-rose-500">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center flex-shrink-0">
+                <span className="text-rose-600 text-xl font-black">!</span>
+              </div>
+              <div>
+                <h3 className="font-heading font-bold text-lg text-rose-800">Nomor AWB Sudah Digunakan</h3>
+                <p className="text-sm text-slate-600 mt-1">
+                  Nomor AWB <b className="font-mono">{form.awb_number}</b> sudah tercatat di sistem.
+                </p>
+                <p className="text-xs text-slate-500 mt-2">
+                  Silakan ganti dengan nomor AWB yang berbeda sebelum menyimpan.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button data-testid="dup-modal-ok" onClick={() => setDupModal(false)}>
+                Ganti Nomor AWB
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* === Quick Add Customer Modal === */}
       {showCust && (

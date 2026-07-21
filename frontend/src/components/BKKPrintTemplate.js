@@ -14,11 +14,22 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName, sett
   if (!panjar) return null;
 
   const amount = Number(panjar.amount || 0);
-  const breakdown = panjar.awb_breakdown || [];
+  // Flatten breakdown dari semua settle_history entries (support partial settle multi-batch)
+  const settleHistory = panjar.settle_history || [];
+  const breakdown = [];
+  settleHistory.forEach((h) => {
+    (h.breakdown || []).forEach((b) => breakdown.push(b));
+  });
+  // Fallback: kalau ada awb_breakdown top-level (schema lama), pakai itu
+  if (breakdown.length === 0 && (panjar.awb_breakdown || []).length > 0) {
+    (panjar.awb_breakdown || []).forEach((b) => breakdown.push(b));
+  }
+  const totalRefund = (panjar.refund_amount || 0);
   const settled = (panjar.settled_amount || 0) > 0 || breakdown.length > 0;
 
   // Row: Baris pertama = pengajuan positif (referensi = keperluan/purpose)
   // Rows berikutnya (kalau ada breakdown) = per-AWB dengan amount NEGATIF
+  // Baris refund (kalau ada) = negatif
   const rows = [];
   rows.push({
     ref: panjar.purpose || "Panjar Kerja",
@@ -28,10 +39,17 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName, sett
   if (settled && breakdown.length > 0) {
     breakdown.forEach((b) => {
       rows.push({
-        ref: b.awb_number || (b.target === "operation" ? "OPERATION" : ""),
+        ref: b.awb_number || (b.target === "operation" ? "OPERATION" : "-"),
         detail: b.description || "",
         amount: -Math.abs(Number(b.amount || 0)), // NEGATIF karena pengurang
       });
+    });
+  }
+  if (settled && totalRefund > 0) {
+    rows.push({
+      ref: "REFUND",
+      detail: "Dana kembali",
+      amount: -Math.abs(totalRefund),
     });
   }
 

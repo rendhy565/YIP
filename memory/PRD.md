@@ -152,3 +152,33 @@ See `/app/memory/test_credentials.md`
   2. Panggil `_create_approval_request()` saat dokumen dibuat
   3. Show `approval_status` di list dokumen
   4. Gate action (print, submit, dll) berdasarkan status Approved
+
+---
+
+## 2026-02-21 (evening): BKK Enhancements + Order Input Fixes
+
+### Delivered
+- **Signature Boxes dinamis** — auto-adjust ke jumlah approval steps + label sesuai config
+  - Layout: `[Diajukan Oleh] + [1..N steps] + [Penerimaan Klaim]`
+  - Grid columns responsive (3-6 cols)
+  - Penerimaan Klaim = pengaju (bukan recipient, sesuai spec)
+- **Logo BKK dari settings** — fetch `invoice_logo_b64` + `kop_address` dari `/api/settings`
+  - Fallback text placeholder "AR CG" kalau logo kosong
+- **BKK Auto-populate saat settled**:
+  - Row 1: purpose (positive amount = pengajuan)
+  - Rows 2+: dari `settle_history[].breakdown` (support partial settle multi-batch)
+    - Referensi = `awb_number` atau "OPERATION"
+    - Nominal = NEGATIF (pengurang)
+  - Row Refund: kalau `refund_amount > 0` (juga negatif)
+  - Total = Positive - Sum(Negative) = residual (biasanya 0 kalau fully settled)
+- **Duplicate AWB Blocking Modal** (Order Input)
+  - Inline warning tetap ada (real-time on blur/change)
+  - Modal blocking muncul saat click Simpan AWB kalau AWB duplikat
+  - Interceptor di `onClick` submit button — bypass HTML5 form validation
+  - Modal single-action: "Ganti Nomor AWB" (close & fokus lagi ke input)
+- **ETA "01 Jan 1970" fix** — sudah tercakup di formatDate baru (year <2000 return "-")
+
+### Files Modified
+- `/app/frontend/src/components/BKKPrintTemplate.js` — dynamic signatures, logo from settings, breakdown flatten from settle_history
+- `/app/frontend/src/pages/PanjarKerja.js` — fetch settings, pass to BKKPrintTemplate
+- `/app/frontend/src/pages/OrderInput.js` — dup modal + interceptor
