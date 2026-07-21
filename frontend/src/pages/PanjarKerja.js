@@ -36,14 +36,23 @@ export default function PanjarKerja() {
   const [settling, setSettling] = useState(false);
   const [printFor, setPrintFor] = useState(null); // { panjar, approval, requester_name }
   const [users, setUsers] = useState([]);
+  const [settings, setSettings] = useState({});
 
   const load = async () => {
-    const [ca, os, usr] = await Promise.all([
+    const [ca, os, usr, st] = await Promise.all([
       api.get("/cash-advances"),
       api.get("/orders"),  // ALL AWBs (any status)
       api.get("/users").catch(() => ({ data: [] })),
+      api.get("/settings").catch(() => ({ data: [] })),
     ]);
     setRows(ca.data); setAllOrders(os.data); setUsers(usr.data || []);
+    // Build settings map: { logo_b64, kop_address, ... }
+    const sm = {};
+    (st.data || []).forEach((s) => {
+      if (s.key_name === "invoice_logo_b64") sm.logo_b64 = s.key_value;
+      else sm[s.key_name] = s.key_value;
+    });
+    setSettings(sm);
   };
   useEffect(() => { load(); }, []);
 
@@ -505,6 +514,7 @@ export default function PanjarKerja() {
                 panjar={printFor.panjar}
                 approval={printFor.approval}
                 requesterName={printFor.requester_name}
+                settings={settings}
               />
             </div>
           </div>

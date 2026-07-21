@@ -8,8 +8,9 @@ import React from "react";
  *  - panjar: { number, recipient_name, purpose, amount, advance_date, awb_breakdown, notes }
  *  - approval: { steps: [{name, approved_by_name, approved_at, note}, ...], status }
  *  - requester_name: string  (nama pengaju - Diajukan Oleh)
+ *  - settings: { logo_b64, kop_address } (dari GET /api/settings)
  */
-export default function BKKPrintTemplate({ panjar, approval, requesterName }) {
+export default function BKKPrintTemplate({ panjar, approval, requesterName, settings }) {
   if (!panjar) return null;
 
   const amount = Number(panjar.amount || 0);
@@ -82,6 +83,12 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName }) {
                    totalSigs === 5 ? "grid-cols-5" :
                    "grid-cols-6";
 
+  // Logo dari settings (invoice_logo_b64)
+  const logoRaw = settings?.logo_b64 || "";
+  const logoSrc = logoRaw
+    ? (logoRaw.startsWith("data:") ? logoRaw : `data:image/png;base64,${logoRaw}`)
+    : null;
+
   return (
     <div className="bkk-print bg-white text-black p-8 font-sans" style={{ width: "210mm", minHeight: "148mm" }}>
       <style>{`
@@ -101,12 +108,16 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName }) {
       {/* Header */}
       <div className="flex items-start justify-between border-b-2 border-blue-900 pb-2 mb-4">
         <div className="flex items-center gap-3">
-          <div className="w-14 h-14 rounded-full border-2 border-blue-900 flex items-center justify-center font-black text-blue-900 text-xl">
-            AR<br/>CG
-          </div>
+          {logoSrc ? (
+            <img src={logoSrc} alt="Logo" className="h-14 max-w-[100px] object-contain"/>
+          ) : (
+            <div className="w-14 h-14 rounded-full border-2 border-blue-900 flex items-center justify-center font-black text-blue-900 text-xl">
+              AR<br/>CG
+            </div>
+          )}
           <div>
             <div className="font-black text-lg text-blue-900 tracking-tight leading-tight">PT. ABIRAMA MITRA PRATAMA</div>
-            <div className="text-[10px] text-blue-800">Blok RSK 6 No. 73</div>
+            <div className="text-[10px] text-blue-800">{settings?.kop_address || "Blok RSK 6 No. 73"}</div>
           </div>
         </div>
         <div className="text-right text-xs">
