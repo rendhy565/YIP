@@ -123,7 +123,8 @@ export default function Tracking() {
     if (q) arr = arr.filter((a) => (a.awb_number || "").toUpperCase().includes(q));
 
     // Filter delivery status
-    if (statusFilter !== "all") arr = arr.filter((a) => a.status_step === statusFilter);
+    // Filter delivery status (match status_label persis seperti yang ditampilkan di tabel)
+    if (statusFilter !== "all") arr = arr.filter((a) => a.status_label === statusFilter);
 
     // Filter payment status
     if (paymentFilter !== "all") arr = arr.filter((a) => (a.payment_status || "Open") === paymentFilter);
@@ -172,9 +173,9 @@ export default function Tracking() {
     }
   };
 
-  const uniqueSteps = useMemo(() => {
+  const uniqueStatuses = useMemo(() => {
     const set = new Set();
-    (result?.awbs || []).forEach((a) => a.status_step && set.add(a.status_step));
+    (result?.awbs || []).forEach((a) => a.status_label && set.add(a.status_label));
     return Array.from(set);
   }, [result]);
 
@@ -247,9 +248,11 @@ export default function Tracking() {
                 {loading ? p.loading : p.cta}
               </AccentButton>
             </div>
-            <div className="mt-3 font-mono text-[10px] text-[#A1A1AA]">
-              {p.demo}
-            </div>
+            {p.demo && (
+              <div className="mt-3 font-mono text-[10px] text-[#A1A1AA]">
+                {p.demo}
+              </div>
+            )}
           </form>
         </div>
       </section>
@@ -328,10 +331,8 @@ export default function Tracking() {
                     className="bg-[#0F1115] border border-[#272A30] px-4 py-3 text-[#F4F4F5] font-mono text-sm focus:outline-none focus:border-[#FF5A00]"
                   >
                     <option value="all">Semua Status</option>
-                    {uniqueSteps.map((s) => (
-                      <option key={s} value={s}>
-                        {s.replace(/_/g, " ")}
-                      </option>
+                    {uniqueStatuses.map((s) => (
+                      <option key={s} value={s}>{s}</option>
                     ))}
                   </select>
                   <select
@@ -531,9 +532,11 @@ export default function Tracking() {
                 <div className="font-display text-3xl md:text-5xl text-[#F4F4F5]/40 mb-3">
                   ARC—XXXXX
                 </div>
-                <div className="font-mono text-[11px] text-[#A1A1AA]">
-                  {p.demo}
-                </div>
+                {p.demo && (
+                  <div className="font-mono text-[11px] text-[#A1A1AA]">
+                    {p.demo}
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
