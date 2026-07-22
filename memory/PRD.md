@@ -182,3 +182,66 @@ See `/app/memory/test_credentials.md`
 - `/app/frontend/src/components/BKKPrintTemplate.js` — dynamic signatures, logo from settings, breakdown flatten from settle_history
 - `/app/frontend/src/pages/PanjarKerja.js` — fetch settings, pass to BKKPrintTemplate
 - `/app/frontend/src/pages/OrderInput.js` — dup modal + interceptor
+
+---
+
+## 2026-02-22: HR Module — Attendance + Custom Payroll Rules
+
+### Delivered
+- **Attendance / Absensi Module** (new):
+  - 4 status: Hadir, Sakit, Izin, Alfa
+  - Manual entry via UI (add/edit/delete)
+  - **Import Excel (.xlsx) / CSV** dengan auto-detect format:
+    - Format A: employee_id / nik / nama, tanggal, status
+    - Format B: employee_id / nik / nama, tanggal, check_in, check_out (status derived: ada check_in → Hadir, kosong → Alfa)
+  - Auto-match employee by employee_id → NIK → nama
+  - Upsert per (employee, date) — bisa overwrite duplicate
+  - Download template CSV button
+  - Summary chips: Hadir/Sakit/Izin/Alfa counts
+  - Filter by month + karyawan
+- **Employee Table dengan Column Toggle**:
+  - Wajib tampil: Nama, Posisi, Gaji Pokok, Status, Aksi
+  - Toggleable (17 kolom): Nickname, Tanggal Lahir, Jenis Kelamin, Status Pernikahan, No HP, Email, Alamat KTP/Domisili, NIK, NPWP, Kendaraan, SIM, Bank, BPJS, Join Date, Meal Allowance, Allowance
+  - Modal "Atur Kolom Tabel" (icon Settings)
+  - Persistence via `localStorage` (per-browser)
+  - Default: Nickname + No HP + Bank
+- **Payroll Custom Rules** (rewrite):
+  - Working days auto-calc dari calendar (Sen-Sabtu = kerja, Minggu libur)
+  - Untuk tiap karyawan aktif:
+    - `hari_hadir` = count(Hadir); `hari_sakit`, `hari_izin`, `hari_alfa` = count masing2
+    - `hari_missing` = working_days - recorded → default treated as Hadir (optimis)
+    - **Deduction Alfa** = (base_salary / working_days) × hari_alfa (proporsional)
+    - **Uang Makan** = meal_allowance × hari_hadir_effective (HANYA dibayar saat Hadir)
+    - Sakit / Izin (disetujui) → base_salary tetap penuh, tapi uang makan tidak dibayar
+    - Gross = Net = gaji_pokok_net + uang_makan (tidak ada tunjangan lain di logic, tidak ada pajak)
+  - Journal auto-post: Dr 6101 (Beban Gaji) / Cr 1101 (Kas)
+- **Employee Model**:
+  - Field baru: `meal_allowance` (uang makan HARIAN, default 0)
+  - Field lama `allowance` tetap ada tapi TIDAK dipakai di payroll (bisa dihapus manual nanti)
+
+### Files Modified
+- **NEW**: `/app/frontend/src/pages/Attendance.js`
+- **MODIFIED**: `/app/backend/server.py` — Employee.meal_allowance, payroll logic rewrite, attendance endpoints + import
+- **MODIFIED**: `/app/frontend/src/pages/HrPayroll.js` — Column toggle system, meal_allowance form field
+- **MODIFIED**: `/app/frontend/src/App.js` — route `/hr/attendance`
+- **MODIFIED**: `/app/frontend/src/components/Layout.js` — sidebar "Absensi"
+
+### DB Collections (New)
+- `attendance`: `{employee_id, date (YYYY-MM-DD), status, check_in?, check_out?, note?, created_at, created_by}`
+  - Unique per (employee_id, date) — upsert on duplicate
+
+### API Endpoints (New)
+- `GET /api/hr/attendance?month=YYYY-MM&employee_id=...`
+- `POST /api/hr/attendance`
+- `PUT /api/hr/attendance/{aid}`
+- `DELETE /api/hr/attendance/{aid}`
+- `POST /api/hr/attendance/import` (multipart file upload)
+
+### Test Sample (verified end-to-end)
+- Employee: base 5jt, meal 25rb/hari
+- Feb 2026: 24 working days | 20 Hadir + 2 Sakit + 1 Izin + 1 Alfa
+- Calculation:
+  - Deduction alfa = (5jt / 24) × 1 = Rp 208.333,33
+  - Gaji pokok net = Rp 4.791.666,67
+  - Uang makan = 25rb × 20 = Rp 500.000
+  - **Total = Rp 5.291.666,67** ✅

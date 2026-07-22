@@ -35,6 +35,7 @@ import LaporanArusKas from "./pages/LaporanArusKas";
 import SaldoAwal from "./pages/SaldoAwal";
 // Optional module pages
 import HrPayroll from "./pages/HrPayroll";
+import Attendance from "./pages/Attendance";
 import TaxModule from "./pages/TaxModule";
 import AssetModule from "./pages/AssetModule";
 import BankReconciliation from "./pages/BankReconciliation";
@@ -127,6 +128,7 @@ export default function App() {
 
             {/* Optional modules */}
             <Route path="/hr" element={<Protected module="hr"><FeatureGate feature="hr"><Shell><HrPayroll /></Shell></FeatureGate></Protected>} />
+            <Route path="/hr/attendance" element={<Protected module="hr"><FeatureGate feature="hr"><Shell><Attendance /></Shell></FeatureGate></Protected>} />
             <Route path="/tax" element={<Protected module="tax"><FeatureGate feature="tax"><Shell><TaxModule /></Shell></FeatureGate></Protected>} />
             <Route path="/assets" element={<Protected module="asset"><FeatureGate feature="asset"><Shell><AssetModule /></Shell></FeatureGate></Protected>} />
             <Route path="/bank-recon" element={<Protected module="bank_recon"><FeatureGate feature="bank_recon"><Shell><BankReconciliation /></Shell></FeatureGate></Protected>} />

@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users } from "lucide-react";
+import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 const EMPTY_EMP = {
@@ -15,8 +15,31 @@ const EMPTY_EMP = {
   emergency1_name: "", emergency1_phone: "", emergency1_relation: "", emergency1_address: "",
   emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
-  position: "", bpjs_no: "", base_salary: 0, allowance: 0, join_date: "", active: true,
+  position: "", bpjs_no: "", base_salary: 0, allowance: 0, meal_allowance: 0, join_date: "", active: true,
 };
+
+// Kolom yang bisa toggle di table karyawan (fixed cols not in this list)
+const TOGGLABLE_COLS = [
+  { key: "nickname", label: "Nama Panggilan" },
+  { key: "tanggal_lahir", label: "Tanggal Lahir" },
+  { key: "jenis_kelamin", label: "Jenis Kelamin" },
+  { key: "status_pernikahan", label: "Status Pernikahan" },
+  { key: "no_hp", label: "No. HP" },
+  { key: "email", label: "Email" },
+  { key: "alamat_ktp", label: "Alamat KTP" },
+  { key: "alamat_domisili", label: "Alamat Domisili" },
+  { key: "nik", label: "No. KTP (NIK)" },
+  { key: "npwp", label: "NPWP" },
+  { key: "kendaraan_operasional", label: "Kendaraan" },
+  { key: "sim", label: "SIM (A/C/Lain)" },
+  { key: "bank", label: "Bank & Rekening" },
+  { key: "bpjs_no", label: "BPJS No." },
+  { key: "join_date", label: "Tanggal Masuk" },
+  { key: "meal_allowance", label: "Uang Makan/Hari" },
+  { key: "allowance", label: "Tunjangan Lain" },
+];
+
+const DEFAULT_VISIBLE_COLS = ["nickname", "no_hp", "bank"];
 
 export default function HrPayroll() {
   const { user } = useAuth();
@@ -28,6 +51,20 @@ export default function HrPayroll() {
   const [form, setForm] = useState({ ...EMPTY_EMP });
   const [cashAcc, setCashAcc] = useState("1101");
   const [cashAccounts, setCashAccounts] = useState([]);
+  // Kolom visibility toggle (persisted in localStorage)
+  const [visibleCols, setVisibleCols] = useState(() => {
+    try {
+      const saved = localStorage.getItem("arc-hr-emp-cols");
+      return saved ? JSON.parse(saved) : DEFAULT_VISIBLE_COLS;
+    } catch { return DEFAULT_VISIBLE_COLS; }
+  });
+  const [showColSettings, setShowColSettings] = useState(false);
+  useEffect(() => {
+    try { localStorage.setItem("arc-hr-emp-cols", JSON.stringify(visibleCols)); } catch { /* ignore */ }
+  }, [visibleCols]);
+  const toggleCol = (key) => {
+    setVisibleCols((v) => v.includes(key) ? v.filter((k) => k !== key) : [...v, key]);
+  };
 
   const loadEmps = () => api.get("/hr/employees").then((r) => setEmps(r.data));
   const loadPayrolls = () => api.get("/hr/payroll").then((r) => setPayrolls(r.data));
@@ -42,6 +79,7 @@ export default function HrPayroll() {
         ...form,
         base_salary: Number(form.base_salary || 0),
         allowance: Number(form.allowance || 0),
+        meal_allowance: Number(form.meal_allowance || 0),
         family: (form.family || []).filter((f) => (f.nama || "").trim() || (f.hubungan || "").trim()),
       };
       if (editing === "new") await api.post("/hr/employees", payload);
@@ -83,19 +121,47 @@ export default function HrPayroll() {
         <Card>
           <div className="px-4 py-3 border-b border-slate-200 flex justify-between items-center">
             <h3 className="font-bold">Master Karyawan</h3>
-            <Button data-testid="hr-emp-add" onClick={openNew}><Plus size={14}/> Tambah</Button>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setShowColSettings(true)} data-testid="hr-col-settings"><Settings size={14}/> Kolom</Button>
+              <Button data-testid="hr-emp-add" onClick={openNew}><Plus size={14}/> Tambah</Button>
+            </div>
           </div>
+          <div className="overflow-x-auto">
           <Table>
-            <thead><tr><Th>Nama Lengkap</Th><Th>Panggilan</Th><Th>No. HP</Th><Th>Posisi</Th><Th>Bank</Th><Th className="text-right">Gaji Pokok</Th><Th>Status</Th><Th className="text-right">Aksi</Th></tr></thead>
+            <thead><tr>
+              <Th>Nama Lengkap</Th>
+              {visibleCols.map((k) => {
+                const c = TOGGLABLE_COLS.find((x) => x.key === k);
+                return c ? <Th key={k}>{c.label}</Th> : null;
+              })}
+              <Th>Posisi</Th>
+              <Th className="text-right">Gaji Pokok</Th>
+              <Th>Status</Th>
+              <Th className="text-right">Aksi</Th>
+            </tr></thead>
             <tbody>
-              {emps.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-400 py-6">Belum ada karyawan</Td></tr>}
+              {emps.length === 0 && <tr><Td colSpan={4 + visibleCols.length} className="text-center text-slate-400 py-6">Belum ada karyawan</Td></tr>}
               {emps.map((e) => (
                 <tr key={e.id}>
                   <Td className="font-bold">{e.full_name}</Td>
-                  <Td>{e.nickname || "-"}</Td>
-                  <Td className="font-mono text-xs">{e.no_hp || "-"}</Td>
+                  {visibleCols.map((k) => {
+                    let content = "-";
+                    if (k === "sim") {
+                      const parts = [e.sim_a && `A:${e.sim_a}`, e.sim_c && `C:${e.sim_c}`, e.sim_lain && `Lain:${e.sim_lain}`].filter(Boolean);
+                      content = parts.length ? parts.join(" ") : "-";
+                    } else if (k === "bank") {
+                      content = e.bank_type ? `${e.bank_type} ${e.bank_account || ""}` : "-";
+                    } else if (k === "meal_allowance" || k === "allowance") {
+                      content = e[k] ? fmtIDR(e[k]) : "-";
+                    } else if (k === "jenis_kelamin") {
+                      content = e[k] === "L" ? "Laki-laki" : e[k] === "P" ? "Perempuan" : "-";
+                    } else {
+                      content = e[k] || "-";
+                    }
+                    const isMono = ["no_hp", "nik", "npwp", "bpjs_no"].includes(k);
+                    return <Td key={k} className={`text-xs${isMono ? " font-mono" : ""}`}>{content}</Td>;
+                  })}
                   <Td>{e.position || "-"}</Td>
-                  <Td className="text-xs">{e.bank_type ? `${e.bank_type} ${e.bank_account || ""}` : "-"}</Td>
                   <Td className="text-right font-mono">{fmtIDR(e.base_salary)}</Td>
                   <Td><span className={`inline-block px-2 py-0.5 rounded text-[10px] uppercase font-bold ${e.active ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>{e.active ? "Aktif" : "Nonaktif"}</span></Td>
                   <Td className="text-right"><div className="flex gap-1 justify-end"><Button data-testid={`hr-emp-edit-${e.id}`} variant="secondary" onClick={() => openEdit(e)}><Edit2 size={13}/></Button><Button variant="danger" onClick={() => del(e.id)}><Trash2 size={13}/></Button></div></Td>
@@ -103,7 +169,40 @@ export default function HrPayroll() {
               ))}
             </tbody>
           </Table>
+          </div>
         </Card>
+      )}
+
+      {/* ========== COLUMN VISIBILITY MODAL ========== */}
+      {showColSettings && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4" data-testid="hr-col-modal">
+          <Card className="w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+              <h3 className="font-heading font-bold text-lg">Atur Kolom Tabel</h3>
+              <button type="button" onClick={() => setShowColSettings(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="p-5 max-h-[70vh] overflow-y-auto">
+              <p className="text-xs text-slate-500 mb-3">Kolom <b>Nama, Posisi, Gaji Pokok, Status, Aksi</b> selalu tampil. Pilih kolom tambahan yang ingin ditampilkan:</p>
+              <div className="space-y-2">
+                {TOGGLABLE_COLS.map((c) => (
+                  <label key={c.key} className={`flex items-center gap-2 px-3 py-2 rounded cursor-pointer text-sm ${visibleCols.includes(c.key) ? "bg-blue-50 border border-blue-200" : "hover:bg-slate-50 border border-slate-200"}`}>
+                    <input
+                      type="checkbox"
+                      data-testid={`col-toggle-${c.key}`}
+                      checked={visibleCols.includes(c.key)}
+                      onChange={() => toggleCol(c.key)}
+                    />
+                    <span className="font-medium">{c.label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-4 pt-4 border-t flex justify-between">
+                <Button variant="secondary" onClick={() => setVisibleCols(DEFAULT_VISIBLE_COLS)}>Reset Default</Button>
+                <Button onClick={() => setShowColSettings(false)}>Selesai</Button>
+              </div>
+            </div>
+          </Card>
+        </div>
       )}
 
       {/* ========== EMPLOYEE MODAL — Full form (sesuai Form Data Karyawan AR) ========== */}
@@ -240,7 +339,8 @@ export default function HrPayroll() {
                   <div><Label>No. BPJS</Label><Input value={form.bpjs_no} onChange={(e) => setForm({ ...form, bpjs_no: e.target.value })}/></div>
                   <div><Label>Tanggal Bergabung</Label><Input type="date" value={form.join_date} onChange={(e) => setForm({ ...form, join_date: e.target.value })}/></div>
                   <div><Label>Gaji Pokok (IDR)</Label><Input type="number" value={form.base_salary} onChange={(e) => setForm({ ...form, base_salary: e.target.value })}/></div>
-                  <div><Label>Tunjangan (IDR)</Label><Input type="number" value={form.allowance} onChange={(e) => setForm({ ...form, allowance: e.target.value })}/></div>
+                  <div><Label>Uang Makan / Hari (IDR)</Label><Input type="number" value={form.meal_allowance} onChange={(e) => setForm({ ...form, meal_allowance: e.target.value })} placeholder="Mis. 25000"/></div>
+                  <div><Label>Tunjangan Lain (IDR)</Label><Input type="number" value={form.allowance} onChange={(e) => setForm({ ...form, allowance: e.target.value })}/></div>
                   <div><Label>Status</Label>
                     <Select value={form.active ? "1" : "0"} onChange={(e) => setForm({ ...form, active: e.target.value === "1" })}>
                       <option value="1">Aktif</option>

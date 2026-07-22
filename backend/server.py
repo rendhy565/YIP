@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Literal
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Request, status
+from fastapi import FastAPI, HTTPException, Depends, Request, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict
@@ -4171,6 +4171,7 @@ class EmployeeIn(BaseModel):
     bpjs_no: Optional[str] = None
     base_salary: float = 0
     allowance: float = 0
+    meal_allowance: float = 0  # Uang makan harian (dibayar hanya kalau HADIR)
     join_date: Optional[str] = None           # YYYY-MM-DD
     active: bool = True
 
@@ -4227,40 +4228,92 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     employees = await db.employees.find({"active": True}).to_list(1000)
     if not employees:
         raise HTTPException(400, "Tidak ada karyawan aktif")
+
+    # Hitung hari kerja bulan ini: Senin-Sabtu (Sabtu = 5, Minggu = 6)
+    year, month = data.period_month.split("-")
+    year, month = int(year), int(month)
+    import calendar as _cal
+    last_day = _cal.monthrange(year, month)[1]
+    working_days = 0
+    for d in range(1, last_day + 1):
+        weekday = _cal.weekday(year, month, d)  # 0=Mon .. 6=Sun
+        if weekday <= 5:  # Mon-Sat
+            working_days += 1
+
+    # Ambil semua attendance periode ini
+    from datetime import date as _date
+    period_start = _date(year, month, 1)
+    period_end = _date(year, month, last_day)
+    attendance_docs = await db.attendance.find({
+        "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
+    }).to_list(50000)
+    # Index by employee_id -> {date: status}
+    att_by_emp = {}
+    for a in attendance_docs:
+        eid = str(a.get("employee_id"))
+        att_by_emp.setdefault(eid, {})[a.get("date")] = a.get("status")
+
     slips = []
-    total = 0.0
+    total_gross = 0.0
     for e in employees:
+        emp_id = str(e["_id"])
         base = float(e.get("base_salary", 0))
-        allowance = float(e.get("allowance", 0))
-        gross = base + allowance
-        # Sederhana: PPh21 final 5% jika gross >= 5jt
-        pph21 = round(gross * 0.05, 2) if gross >= 5000000 else 0.0
-        net = gross - pph21
+        meal_per_day = float(e.get("meal_allowance", 0))
+        att = att_by_emp.get(emp_id, {})
+
+        # Hitung per-status
+        hari_hadir = sum(1 for s in att.values() if s == "Hadir")
+        hari_sakit = sum(1 for s in att.values() if s == "Sakit")
+        hari_izin = sum(1 for s in att.values() if s == "Izin")
+        hari_alfa = sum(1 for s in att.values() if s == "Alfa")
+        hari_recorded = hari_hadir + hari_sakit + hari_izin + hari_alfa
+        # Hari yang belum ada record → dianggap Hadir (default optimis)
+        hari_missing = max(0, working_days - hari_recorded)
+        hari_hadir_effective = hari_hadir + hari_missing
+
+        # Deduction karena Alfa (potongan proporsional dari base salary)
+        deduction_alfa = round((base / working_days) * hari_alfa, 2) if working_days > 0 else 0
+        gaji_pokok_net = base - deduction_alfa
+        # Uang makan hanya dibayar untuk HADIR
+        uang_makan = round(meal_per_day * hari_hadir_effective, 2)
+        gross = gaji_pokok_net + uang_makan
+
         slips.append({
-            "employee_id": str(e["_id"]), "employee_name": e["full_name"],
-            "position": e.get("position"), "base_salary": base, "allowance": allowance,
-            "gross": gross, "pph21": pph21, "net": net,
+            "employee_id": emp_id,
+            "employee_name": e.get("full_name"),
+            "position": e.get("position"),
+            "base_salary": base,
+            "meal_allowance_per_day": meal_per_day,
+            "working_days": working_days,
+            "hari_hadir": hari_hadir_effective,
+            "hari_sakit": hari_sakit,
+            "hari_izin": hari_izin,
+            "hari_alfa": hari_alfa,
+            "hari_missing_treated_hadir": hari_missing,
+            "deduction_alfa": deduction_alfa,
+            "gaji_pokok_net": gaji_pokok_net,
+            "uang_makan": uang_makan,
+            "gross": gross,
+            "net": gross,  # No tax deduction untuk sekarang (user bilang tidak ada tunjangan/pajak logic)
         })
-        total += gross
+        total_gross += gross
+
     cash_acc = data.cash_account_code or "1101"
     payroll_doc = {
         "period_month": data.period_month,
+        "working_days": working_days,
         "slips": slips,
-        "total_gross": round(total, 2),
+        "total_gross": round(total_gross, 2),
         "cash_account_code": cash_acc,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.payroll.insert_one(payroll_doc)
-    # Post journal: Dr 6101 Beban Gaji / Cr Kas / Cr 2220 Hutang PPh
-    total_pph = sum(s["pph21"] for s in slips)
-    total_net = sum(s["net"] for s in slips)
+    # Post journal: Dr 6101 Beban Gaji / Cr Kas
     lines = [
-        {"account_code": "6101", "debit": total, "credit": 0, "memo": f"Payroll {data.period_month}"},
+        {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Payroll {data.period_month}"},
+        {"account_code": cash_acc, "debit": 0, "credit": total_gross, "memo": "Bayar gaji"},
     ]
-    if total_pph > 0:
-        lines.append({"account_code": "2220", "debit": 0, "credit": total_pph, "memo": "PPh21 dipotong"})
-    lines.append({"account_code": cash_acc, "debit": 0, "credit": total_net, "memo": "Bayar gaji"})
     try:
         await post_journal(
             date=datetime.now(timezone.utc),
@@ -4283,6 +4336,208 @@ async def delete_payroll(pid: str, user: dict = Depends(require_feature("hr"))):
     await db.journal_entries.delete_many({"reference_type": "payroll", "reference_id": pid})
     await db.payroll.delete_one({"_id": _oid(pid)})
     return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# ATTENDANCE (Absensi) — imported from HRIS
+# ---------------------------------------------------------------------------
+ALLOWED_ATT_STATUS = {"Hadir", "Sakit", "Izin", "Alfa"}
+
+class AttendanceIn(BaseModel):
+    employee_id: str
+    date: str  # YYYY-MM-DD
+    status: str  # Hadir | Sakit | Izin | Alfa
+    check_in: Optional[str] = None  # HH:MM
+    check_out: Optional[str] = None  # HH:MM
+    note: Optional[str] = None
+
+def _derive_status_from_times(check_in: Optional[str], check_out: Optional[str]) -> str:
+    """Kalau tidak ada check_in/out → Alfa. Kalau ada → Hadir (late tetap Hadir)."""
+    if check_in and check_in.strip():
+        return "Hadir"
+    return "Alfa"
+
+@app.get("/api/hr/attendance")
+async def list_attendance(
+    month: Optional[str] = None,  # YYYY-MM
+    employee_id: Optional[str] = None,
+    user: dict = Depends(require_feature("hr")),
+):
+    q: dict = {}
+    if employee_id:
+        q["employee_id"] = employee_id
+    if month:
+        year, mm = month.split("-")
+        year, mm = int(year), int(mm)
+        import calendar as _cal
+        last_day = _cal.monthrange(year, mm)[1]
+        q["date"] = {"$gte": f"{year}-{mm:02d}-01", "$lte": f"{year}-{mm:02d}-{last_day:02d}"}
+    docs = await db.attendance.find(q).sort("date", -1).to_list(50000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/hr/attendance")
+async def create_attendance(data: AttendanceIn, user: dict = Depends(require_feature("hr"))):
+    if data.status not in ALLOWED_ATT_STATUS:
+        raise HTTPException(400, f"Status invalid. Pilih: {', '.join(ALLOWED_ATT_STATUS)}")
+    # Cek employee exists
+    if not await db.employees.find_one({"_id": _oid(data.employee_id)}):
+        raise HTTPException(404, "Karyawan tidak ditemukan")
+    doc = data.model_dump()
+    doc["created_at"] = datetime.now(timezone.utc)
+    doc["created_by"] = user["id"]
+    # Upsert (unique per employee+date)
+    await db.attendance.update_one(
+        {"employee_id": doc["employee_id"], "date": doc["date"]},
+        {"$set": doc},
+        upsert=True,
+    )
+    res = await db.attendance.find_one({"employee_id": doc["employee_id"], "date": doc["date"]})
+    return serialize(res)
+
+@app.put("/api/hr/attendance/{aid}")
+async def update_attendance(aid: str, data: AttendanceIn, user: dict = Depends(require_feature("hr"))):
+    if data.status not in ALLOWED_ATT_STATUS:
+        raise HTTPException(400, f"Status invalid")
+    await db.attendance.update_one({"_id": _oid(aid)}, {"$set": data.model_dump()})
+    return serialize(await db.attendance.find_one({"_id": _oid(aid)}))
+
+@app.delete("/api/hr/attendance/{aid}")
+async def delete_attendance(aid: str, user: dict = Depends(require_feature("hr"))):
+    await db.attendance.delete_one({"_id": _oid(aid)})
+    return {"ok": True}
+
+@app.post("/api/hr/attendance/import")
+async def import_attendance(
+    file: UploadFile = File(...),
+    user: dict = Depends(require_feature("hr")),
+):
+    """
+    Import absensi dari Excel/CSV. Auto-detect format:
+    - Format A: employee_id/nik/nama_karyawan, tanggal, status
+    - Format B: employee_id/nik/nama_karyawan, tanggal, check_in, check_out
+      → status auto-derived (Hadir kalau ada check_in, else Alfa)
+    """
+    import io
+    filename = (file.filename or "").lower()
+    content = await file.read()
+    rows = []
+    if filename.endswith(".csv") or filename.endswith(".txt"):
+        import csv
+        text = content.decode("utf-8-sig", errors="ignore")
+        reader = csv.DictReader(io.StringIO(text))
+        for r in reader:
+            rows.append({k.strip().lower(): (v or "").strip() for k, v in r.items()})
+    elif filename.endswith(".xlsx") or filename.endswith(".xls"):
+        try:
+            import openpyxl
+        except ImportError:
+            raise HTTPException(500, "openpyxl belum terinstall")
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        ws = wb.active
+        headers = []
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0:
+                headers = [str(h or "").strip().lower() for h in row]
+                continue
+            item = {}
+            for j, val in enumerate(row):
+                if j < len(headers):
+                    item[headers[j]] = str(val).strip() if val is not None else ""
+            rows.append(item)
+    else:
+        raise HTTPException(400, "Format file tidak didukung. Pakai .xlsx atau .csv")
+
+    # Normalize field names
+    def _get(r, *keys):
+        for k in keys:
+            if k in r and r[k]:
+                return r[k]
+        return None
+
+    # Build employee lookup: {employee_id: emp_doc, nik: emp_doc, full_name (lower): emp_doc}
+    employees = await db.employees.find({}).to_list(5000)
+    emp_by_id = {str(e["_id"]): e for e in employees}
+    emp_by_nik = {e.get("nik"): e for e in employees if e.get("nik")}
+    emp_by_name = {(e.get("full_name") or "").strip().lower(): e for e in employees}
+
+    imported = 0
+    skipped = []
+    for idx, r in enumerate(rows):
+        # Find employee
+        emp_key = _get(r, "employee_id", "id_karyawan", "id")
+        nik = _get(r, "nik", "no_ktp")
+        name = _get(r, "nama", "nama_karyawan", "full_name", "name")
+        emp = None
+        if emp_key and emp_key in emp_by_id:
+            emp = emp_by_id[emp_key]
+        elif nik and nik in emp_by_nik:
+            emp = emp_by_nik[nik]
+        elif name:
+            emp = emp_by_name.get(name.strip().lower())
+        if not emp:
+            skipped.append({"row": idx + 2, "reason": f"Karyawan tidak ditemukan (id/nik/nama={emp_key or nik or name})"})
+            continue
+
+        # Parse date
+        date_raw = _get(r, "tanggal", "date", "tgl")
+        if not date_raw:
+            skipped.append({"row": idx + 2, "reason": "Tanggal kosong"})
+            continue
+        # Normalize date to YYYY-MM-DD
+        date_str = None
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y"):
+            try:
+                from datetime import datetime as _dt
+                date_str = _dt.strptime(date_raw.split(" ")[0], fmt).strftime("%Y-%m-%d")
+                break
+            except Exception:
+                continue
+        if not date_str:
+            skipped.append({"row": idx + 2, "reason": f"Format tanggal invalid: {date_raw}"})
+            continue
+
+        # Get status or derive from check_in/out
+        status_raw = _get(r, "status", "keterangan", "kondisi")
+        check_in = _get(r, "check_in", "jam_masuk", "in", "clock_in")
+        check_out = _get(r, "check_out", "jam_keluar", "out", "clock_out")
+        if status_raw:
+            # Normalize
+            s = status_raw.strip().title()
+            if s.lower() in ("h", "hadir", "present", "masuk"):
+                status = "Hadir"
+            elif s.lower() in ("s", "sakit", "sick"):
+                status = "Sakit"
+            elif s.lower() in ("i", "izin", "cuti", "leave"):
+                status = "Izin"
+            elif s.lower() in ("a", "alfa", "absent", "tanpa keterangan"):
+                status = "Alfa"
+            else:
+                status = "Hadir"  # default
+        else:
+            status = _derive_status_from_times(check_in, check_out)
+
+        # Upsert
+        doc = {
+            "employee_id": str(emp["_id"]),
+            "date": date_str,
+            "status": status,
+            "check_in": check_in,
+            "check_out": check_out,
+            "note": _get(r, "note", "catatan", "keterangan_detail"),
+            "created_at": datetime.now(timezone.utc),
+            "created_by": user["id"],
+        }
+        await db.attendance.update_one(
+            {"employee_id": doc["employee_id"], "date": doc["date"]},
+            {"$set": doc},
+            upsert=True,
+        )
+        imported += 1
+
+    return {
+        "imported": imported,
+        "skipped_count": len(skipped),
+        "skipped_details": skipped[:100],  # cap for UI
+    }
 
 # ===========================================================================
 # TAX MODULE  (toggle: tax)
