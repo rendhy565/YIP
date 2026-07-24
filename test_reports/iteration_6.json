@@ -1,5 +1,5 @@
 {
-  "summary": "Iteration-6 frontend e2e via Playwright on https://date-inclusion-bug.preview.emergentagent.com/arc/. All 4 acceptance areas PASS: (1) Receive Barang modal end-to-end on /arc/orders, (2) REPORT AR Excel download from /arc/recap, (3) Invoice single + bulk Excel downloads from /arc/invoices, (4) Per-Issuer settings section on /arc/settings with persistence after edit + reload.",
+  "summary": "Iteration-6 frontend e2e via Playwright on https://jni-project-test.preview.emergentagent.com/arc/. All 4 acceptance areas PASS: (1) Receive Barang modal end-to-end on /arc/orders, (2) REPORT AR Excel download from /arc/recap, (3) Invoice single + bulk Excel downloads from /arc/invoices, (4) Per-Issuer settings section on /arc/settings with persistence after edit + reload.",
   "backend_issues": {"critical": [], "minor": []},
   "frontend_issues": {
     "ui_bugs": [],

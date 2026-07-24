@@ -13,7 +13,7 @@ import pytest
 import requests
 import openpyxl
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://date-inclusion-bug.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://jni-project-test.preview.emergentagent.com").rstrip("/")
 
 
 # ---------- fixtures ----------
