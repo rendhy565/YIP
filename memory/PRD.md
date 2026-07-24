@@ -3,6 +3,7 @@
 ## Latest thread requirements
 1. Total Sales terfilter tampil di Daftar AWB ✅
 2. Prorata Vendor: 1 tagihan vendor split proporsional ke banyak AWB berdasarkan sales ✅
+3. Auto-backup MongoDB rolling 30 hari + upload Google Drive (cron 00:00 WIB) ✅
 
 ## Architecture
 - Frontend: React + TailwindCSS, halaman di `/app/frontend/src/pages`
@@ -11,6 +12,7 @@
 - Auth: JWT + granular permission
 
 ## Completed features (Feb 2026)
+- ✅ Auto-backup MongoDB harian (`/app/scripts/`): mongodump gzip → rolling 30 hari lokal + upload Google Drive via rclone, cron `0 0 * * *` `CRON_TZ=Asia/Jakarta`, installer + restore script + panduan
 - ✅ Analytics date inclusive filter
 - ✅ PPN 1.1%, Armada dropdown, FCL variants
 - ✅ AWB inline duplicate check (blur) — blocking modal masih pending
