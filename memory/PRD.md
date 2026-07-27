@@ -12,6 +12,12 @@
 - Auth: JWT + granular permission
 
 ## Completed features (Feb 2026)
+- ✅ **BPV (Bank Payment Voucher) replace BKK di Panjar Kerja** (Jan 2026):
+  - 2 master baru: `payment_recipients` & `payment_senders` (nama/bank/account) — CRUD lengkap
+  - `CashAdvanceIn` extended: recipient_id/bank/account, sender_id/name/bank/account (snapshot), ppn_amount, pph_amount, reff_number
+  - Form Panjar Kerja: dropdown Penerima + Add New inline modal, dropdown Rekening Pembayar + Add New, input PPN/PPH manual, REFF#
+  - `BPVPrintTemplate.js` baru (A4 landscape, header PT + logo, 2-kolom Dibayarkan Kepada/Dari, table DESCRIPTION/NILAI/PPN/PPH/TOTAL, tandatangan dinamis dari approval workflow: Dibuat/Diperiksa/Disetujui Oleh)
+  - `BKKPrintTemplate.js` deprecated (masih ada di repo untuk referensi)
 - ✅ Auto-backup MongoDB harian (`/app/scripts/`): mongodump gzip → rolling 30 hari lokal + upload Google Drive via rclone, cron `0 0 * * *` `CRON_TZ=Asia/Jakarta`, installer + restore script + panduan
 - ✅ Analytics date inclusive filter
 - ✅ PPN 1.1%, Armada dropdown, FCL variants

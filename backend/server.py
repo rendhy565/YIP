@@ -6695,6 +6695,76 @@ async def delete_saved_view(vid: str, user: dict = Depends(get_current_user)):
 # ===========================================================================
 # Panjar Kerja (Cash Advance) — operational cash given to staff/driver/etc
 # ===========================================================================
+
+# ---- Payment Recipients & Senders master (untuk Bank Payment Voucher) ----
+class PaymentPartyIn(BaseModel):
+    name: str
+    bank: str
+    account_number: str
+
+@app.get("/api/payment-recipients")
+async def list_payment_recipients(user: dict = Depends(get_current_user)):
+    docs = await db.payment_recipients.find({}).sort("name", 1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/payment-recipients")
+async def create_payment_recipient(data: PaymentPartyIn, user: dict = Depends(get_current_user)):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(400, "Nama wajib diisi")
+    doc = {
+        "name": name,
+        "bank": data.bank.strip(),
+        "account_number": data.account_number.strip(),
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.payment_recipients.insert_one(doc)
+    return serialize(await db.payment_recipients.find_one({"_id": r.inserted_id}))
+
+@app.put("/api/payment-recipients/{rid}")
+async def update_payment_recipient(rid: str, data: PaymentPartyIn, user: dict = Depends(get_current_user)):
+    upd = {"name": data.name.strip(), "bank": data.bank.strip(), "account_number": data.account_number.strip()}
+    await db.payment_recipients.update_one({"_id": _oid(rid)}, {"$set": upd})
+    return serialize(await db.payment_recipients.find_one({"_id": _oid(rid)}))
+
+@app.delete("/api/payment-recipients/{rid}")
+async def delete_payment_recipient(rid: str, user: dict = Depends(get_current_user)):
+    await db.payment_recipients.delete_one({"_id": _oid(rid)})
+    return {"ok": True}
+
+@app.get("/api/payment-senders")
+async def list_payment_senders(user: dict = Depends(get_current_user)):
+    docs = await db.payment_senders.find({}).sort("name", 1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/payment-senders")
+async def create_payment_sender(data: PaymentPartyIn, user: dict = Depends(get_current_user)):
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(400, "Nama wajib diisi")
+    doc = {
+        "name": name,
+        "bank": data.bank.strip(),
+        "account_number": data.account_number.strip(),
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.payment_senders.insert_one(doc)
+    return serialize(await db.payment_senders.find_one({"_id": r.inserted_id}))
+
+@app.put("/api/payment-senders/{sid}")
+async def update_payment_sender(sid: str, data: PaymentPartyIn, user: dict = Depends(get_current_user)):
+    upd = {"name": data.name.strip(), "bank": data.bank.strip(), "account_number": data.account_number.strip()}
+    await db.payment_senders.update_one({"_id": _oid(sid)}, {"$set": upd})
+    return serialize(await db.payment_senders.find_one({"_id": _oid(sid)}))
+
+@app.delete("/api/payment-senders/{sid}")
+async def delete_payment_sender(sid: str, user: dict = Depends(get_current_user)):
+    await db.payment_senders.delete_one({"_id": _oid(sid)})
+    return {"ok": True}
+
+
 class CashAdvanceIn(BaseModel):
     recipient_name: str
     purpose: Optional[str] = None
@@ -6702,6 +6772,17 @@ class CashAdvanceIn(BaseModel):
     advance_date: Optional[str] = None  # YYYY-MM-DD; default today
     cash_account_code: Optional[str] = None  # default 1101
     notes: Optional[str] = None
+    # ---- Bank Payment Voucher extras (opsional biar backward-compat) ----
+    recipient_id: Optional[str] = None       # ref payment_recipients
+    recipient_bank: Optional[str] = None     # snapshot
+    recipient_account: Optional[str] = None  # snapshot
+    sender_id: Optional[str] = None          # ref payment_senders
+    sender_name: Optional[str] = None        # snapshot (nama PT/entitas penyetor)
+    sender_bank: Optional[str] = None        # snapshot
+    sender_account: Optional[str] = None     # snapshot
+    ppn_amount: Optional[float] = 0
+    pph_amount: Optional[float] = 0
+    reff_number: Optional[str] = None        # mis. "INV CMB-311220240026"
 
 class CashAdvanceBreakdownItem(BaseModel):
     awb_id: Optional[str] = None  # None / "OPERATION" → direct cost ke operation (no AWB)
@@ -6768,6 +6849,17 @@ async def create_cash_advance(data: CashAdvanceIn, user: dict = Depends(require_
         "refund_amount": None,
         "settled_at": None,
         "notes": (data.notes or "").strip() or None,
+        # Bank Payment Voucher fields (snapshot supaya voucher lama tidak berubah kalau master di-edit)
+        "recipient_id": (data.recipient_id or None),
+        "recipient_bank": (data.recipient_bank or "").strip() or None,
+        "recipient_account": (data.recipient_account or "").strip() or None,
+        "sender_id": (data.sender_id or None),
+        "sender_name": (data.sender_name or "").strip() or None,
+        "sender_bank": (data.sender_bank or "").strip() or None,
+        "sender_account": (data.sender_account or "").strip() or None,
+        "ppn_amount": float(data.ppn_amount or 0),
+        "pph_amount": float(data.pph_amount or 0),
+        "reff_number": (data.reff_number or "").strip() or None,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc),
     }

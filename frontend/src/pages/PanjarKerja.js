@@ -7,14 +7,19 @@ import { toast } from "sonner";
 import { Plus, X, Wallet, CheckCircle2, Trash2, History, Printer } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
-import BKKPrintTemplate from "../components/BKKPrintTemplate";
+import BPVPrintTemplate from "../components/BPVPrintTemplate";
 
 function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-const empty = { recipient_name: "", purpose: "", amount: "", advance_date: todayStr(), notes: "" };
+const empty = {
+  recipient_name: "", purpose: "", amount: "", advance_date: todayStr(), notes: "",
+  recipient_id: "", recipient_bank: "", recipient_account: "",
+  sender_id: "", sender_name: "", sender_bank: "", sender_account: "",
+  ppn_amount: "", pph_amount: "", reff_number: "",
+};
 
 export default function PanjarKerja() {
   const canCreate = useCan("fixed_costs", "petty_cash_create");
@@ -37,15 +42,23 @@ export default function PanjarKerja() {
   const [printFor, setPrintFor] = useState(null); // { panjar, approval, requester_name }
   const [users, setUsers] = useState([]);
   const [settings, setSettings] = useState({});
+  const [recipients, setRecipients] = useState([]);
+  const [senders, setSenders] = useState([]);
+  const [showAddParty, setShowAddParty] = useState(null); // 'recipient' | 'sender' | null
+  const [partyForm, setPartyForm] = useState({ name: "", bank: "", account_number: "" });
+  const [savingParty, setSavingParty] = useState(false);
 
   const load = async () => {
-    const [ca, os, usr, st] = await Promise.all([
+    const [ca, os, usr, st, rec, snd] = await Promise.all([
       api.get("/cash-advances"),
       api.get("/orders"),  // ALL AWBs (any status)
       api.get("/users").catch(() => ({ data: [] })),
       api.get("/settings").catch(() => ({ data: [] })),
+      api.get("/payment-recipients").catch(() => ({ data: [] })),
+      api.get("/payment-senders").catch(() => ({ data: [] })),
     ]);
     setRows(ca.data); setAllOrders(os.data); setUsers(usr.data || []);
+    setRecipients(rec.data || []); setSenders(snd.data || []);
     // Build settings map: { logo_b64, kop_address, ... }
     const sm = {};
     (st.data || []).forEach((s) => {
@@ -56,11 +69,53 @@ export default function PanjarKerja() {
   };
   useEffect(() => { load(); }, []);
 
+  // Auto-fill snapshot fields when dropdown changes
+  const pickRecipient = (id) => {
+    const r = recipients.find((x) => x.id === id);
+    if (r) setForm((f) => ({ ...f, recipient_id: id, recipient_name: r.name, recipient_bank: r.bank, recipient_account: r.account_number }));
+    else setForm((f) => ({ ...f, recipient_id: "" }));
+  };
+  const pickSender = (id) => {
+    const s = senders.find((x) => x.id === id);
+    if (s) setForm((f) => ({ ...f, sender_id: id, sender_name: s.name, sender_bank: s.bank, sender_account: s.account_number }));
+    else setForm((f) => ({ ...f, sender_id: "" }));
+  };
+
+  const openAddParty = (kind) => {
+    setPartyForm({ name: "", bank: "", account_number: "" });
+    setShowAddParty(kind);
+  };
+  const saveParty = async (e) => {
+    e.preventDefault();
+    if (!partyForm.name.trim()) { toast.error("Nama wajib diisi"); return; }
+    setSavingParty(true);
+    try {
+      const endpoint = showAddParty === "recipient" ? "/payment-recipients" : "/payment-senders";
+      const r = await api.post(endpoint, partyForm);
+      toast.success("Tersimpan ke master");
+      if (showAddParty === "recipient") {
+        setRecipients((prev) => [...prev, r.data].sort((a, b) => a.name.localeCompare(b.name)));
+        pickRecipient(r.data.id);
+      } else {
+        setSenders((prev) => [...prev, r.data].sort((a, b) => a.name.localeCompare(b.name)));
+        pickSender(r.data.id);
+      }
+      setShowAddParty(null);
+    } catch (e2) { toast.error(errMsg(e2)); }
+    finally { setSavingParty(false); }
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.post("/cash-advances", { ...form, amount: parseFloat(form.amount) });
+      const payload = {
+        ...form,
+        amount: parseFloat(form.amount),
+        ppn_amount: parseFloat(form.ppn_amount) || 0,
+        pph_amount: parseFloat(form.pph_amount) || 0,
+      };
+      await api.post("/cash-advances", payload);
       toast.success("Panjar dibuat");
       setShowAdd(false); setForm(empty); load();
     } catch (e2) { toast.error(errMsg(e2)); }
@@ -246,8 +301,8 @@ export default function PanjarKerja() {
                 <Td className="text-right whitespace-nowrap">
                   <div className="flex gap-1 justify-end">
                     {r.approval_status === "Approved" && (
-                      <button data-testid={`print-panjar-${r.number}`} onClick={() => openPrint(r)} title="Print BKK (setelah disetujui)" className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-indigo-100 text-indigo-800 hover:bg-indigo-200 inline-flex items-center gap-1">
-                        <Printer size={11}/> Print
+                      <button data-testid={`print-panjar-${r.number}`} onClick={() => openPrint(r)} title="Print Bank Payment Voucher (setelah disetujui)" className="px-2 py-1 text-[10px] uppercase font-bold rounded bg-indigo-100 text-indigo-800 hover:bg-indigo-200 inline-flex items-center gap-1">
+                        <Printer size={11}/> Print BPV
                       </button>
                     )}
                     {r.settle_history && r.settle_history.length > 0 && (
@@ -275,22 +330,125 @@ export default function PanjarKerja() {
 
       {showAdd && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="add-panjar-modal">
-          <Card className="w-full max-w-lg p-6">
+          <Card className="w-full max-w-3xl p-6 max-h-[92vh] overflow-y-auto">
             <div className="flex items-start justify-between mb-4">
-              <h3 className="font-heading font-bold text-xl">Buat Panjar Kerja</h3>
+              <div>
+                <h3 className="font-heading font-bold text-xl">Buat Bank Payment Voucher</h3>
+                <p className="text-xs text-slate-500">Data ini akan tercetak di voucher setelah disetujui.</p>
+              </div>
               <button onClick={() => setShowAdd(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
-            <form onSubmit={submit} className="space-y-3">
-              <div><Label>Penerima *</Label><Input data-testid="panjar-recipient" value={form.recipient_name} onChange={(e) => setForm({ ...form, recipient_name: e.target.value })} required/></div>
-              <div><Label>Keperluan</Label><Input data-testid="panjar-purpose" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} placeholder="Mis. BBM truk B 1234 XYZ"/></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><Label>Jumlah (IDR) *</Label><Input data-testid="panjar-amount" type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required/></div>
-                <div><Label>Tanggal Panjar</Label><Input data-testid="panjar-date" type="date" value={form.advance_date} onChange={(e) => setForm({ ...form, advance_date: e.target.value })}/></div>
+            <form onSubmit={submit} className="space-y-4">
+              {/* Dibayarkan kepada */}
+              <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/60">
+                <div className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Dibayarkan Kepada</div>
+                <div className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-8">
+                    <Label>Penerima *</Label>
+                    <Select data-testid="panjar-recipient-select" value={form.recipient_id} onChange={(e) => pickRecipient(e.target.value)}>
+                      <option value="">— Pilih penerima —</option>
+                      {recipients.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name} · {r.bank} · {r.account_number}</option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="col-span-4">
+                    <Button type="button" variant="secondary" onClick={() => openAddParty("recipient")} data-testid="add-recipient-btn">
+                      <Plus size={14}/> Add New
+                    </Button>
+                  </div>
+                </div>
+                {form.recipient_id && (
+                  <div className="mt-2 text-[11px] font-mono text-slate-600 bg-white border border-slate-200 rounded px-2 py-1.5">
+                    <div><b>Nama:</b> {form.recipient_name}</div>
+                    <div><b>Bank:</b> {form.recipient_bank} · <b>No. Rek:</b> {form.recipient_account}</div>
+                  </div>
+                )}
+                {!form.recipient_id && (
+                  <div className="mt-2">
+                    <Label className="text-[10px]">Atau ketik manual (kalau tidak dari master):</Label>
+                    <Input data-testid="panjar-recipient" placeholder="Nama penerima" value={form.recipient_name} onChange={(e) => setForm({ ...form, recipient_name: e.target.value })} />
+                  </div>
+                )}
               </div>
-              <div><Label>Catatan</Label><Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></div>
-              <div className="flex justify-end gap-2 pt-2">
+
+              {/* Dibayarkan dari */}
+              <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/60">
+                <div className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Dibayarkan Dari (Rekening Perusahaan)</div>
+                <div className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-8">
+                    <Label>Penyetor *</Label>
+                    <Select data-testid="panjar-sender-select" value={form.sender_id} onChange={(e) => pickSender(e.target.value)}>
+                      <option value="">— Pilih rekening pembayar —</option>
+                      {senders.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name} · {s.bank} · {s.account_number}</option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="col-span-4">
+                    <Button type="button" variant="secondary" onClick={() => openAddParty("sender")} data-testid="add-sender-btn">
+                      <Plus size={14}/> Add New
+                    </Button>
+                  </div>
+                </div>
+                {form.sender_id && (
+                  <div className="mt-2 text-[11px] font-mono text-slate-600 bg-white border border-slate-200 rounded px-2 py-1.5">
+                    <div><b>Penyetor:</b> {form.sender_name}</div>
+                    <div><b>Bank:</b> {form.sender_bank} · <b>No. Rek:</b> {form.sender_account}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Detail transaksi */}
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Description / Keperluan *</Label><Input data-testid="panjar-purpose" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} placeholder="Mis. Pelunasan Biaya Pengiriman Surabaya-Kupang" required/></div>
+                <div><Label>REFF# (Nomor Referensi)</Label><Input data-testid="panjar-reff" value={form.reff_number} onChange={(e) => setForm({ ...form, reff_number: e.target.value })} placeholder="Mis. INV CMB-311220240026"/></div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-3">
+                <div><Label>Nilai (IDR) *</Label><Input data-testid="panjar-amount" type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required/></div>
+                <div><Label>PPN (IDR)</Label><Input data-testid="panjar-ppn" type="number" step="0.01" value={form.ppn_amount} onChange={(e) => setForm({ ...form, ppn_amount: e.target.value })} placeholder="0"/></div>
+                <div><Label>PPH (IDR)</Label><Input data-testid="panjar-pph" type="number" step="0.01" value={form.pph_amount} onChange={(e) => setForm({ ...form, pph_amount: e.target.value })} placeholder="0"/></div>
+                <div><Label>Tanggal</Label><Input data-testid="panjar-date" type="date" value={form.advance_date} onChange={(e) => setForm({ ...form, advance_date: e.target.value })}/></div>
+              </div>
+
+              <div><Label>Catatan Internal (opsional)</Label><Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t">
                 <Button variant="secondary" type="button" onClick={() => setShowAdd(false)}>Batal</Button>
-                <Button data-testid="save-panjar-btn" type="submit" disabled={saving}>{saving ? "Menyimpan..." : "Simpan"}</Button>
+                <Button data-testid="save-panjar-btn" type="submit" disabled={saving}>{saving ? "Menyimpan..." : "Simpan Voucher"}</Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* ===== Add New Recipient / Sender modal ===== */}
+      {showAddParty && (
+        <div className="fixed inset-0 bg-slate-900/70 z-[60] flex items-center justify-center p-4" data-testid="add-party-modal">
+          <Card className="w-full max-w-md p-5">
+            <div className="flex items-start justify-between mb-3">
+              <h4 className="font-heading font-bold text-lg">
+                Tambah {showAddParty === "recipient" ? "Penerima" : "Rekening Pembayar"} Baru
+              </h4>
+              <button onClick={() => setShowAddParty(null)} className="p-1 hover:bg-slate-100 rounded"><X size={16}/></button>
+            </div>
+            <form onSubmit={saveParty} className="space-y-3">
+              <div>
+                <Label>Nama *</Label>
+                <Input data-testid="party-name" value={partyForm.name} onChange={(e) => setPartyForm({ ...partyForm, name: e.target.value })} placeholder={showAddParty === "recipient" ? "Mis. CMB EXPRESS - JELIVANSES IMELDA LOBO" : "Mis. PT. ABIRAMA MITRA PRATAMA"} required autoFocus/>
+              </div>
+              <div>
+                <Label>Bank *</Label>
+                <Input data-testid="party-bank" value={partyForm.bank} onChange={(e) => setPartyForm({ ...partyForm, bank: e.target.value })} placeholder="Mis. Mandiri / BCA / BRI" required/>
+              </div>
+              <div>
+                <Label>No. Account *</Label>
+                <Input data-testid="party-account" value={partyForm.account_number} onChange={(e) => setPartyForm({ ...partyForm, account_number: e.target.value })} placeholder="Mis. 161 0002 702 517" required/>
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <Button variant="secondary" type="button" onClick={() => setShowAddParty(null)}>Batal</Button>
+                <Button data-testid="save-party-btn" type="submit" disabled={savingParty}>{savingParty ? "Menyimpan..." : "Simpan"}</Button>
               </div>
             </form>
           </Card>
@@ -496,21 +654,21 @@ export default function PanjarKerja() {
 
       {printFor && (
         <div className="fixed inset-0 bg-slate-900/80 z-50 flex items-start justify-center overflow-y-auto p-4" data-testid="print-panjar-modal">
-          <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full my-8">
+          <div className="bg-white rounded-lg shadow-2xl max-w-5xl w-full my-8">
             <div className="flex items-center justify-between px-4 py-3 border-b no-print">
               <div>
-                <div className="font-heading font-bold text-lg">Preview BKK — {printFor.panjar.number}</div>
+                <div className="font-heading font-bold text-lg">Preview Bank Payment Voucher — {printFor.panjar.number}</div>
                 <div className="text-xs text-slate-500">Ctrl+P atau tombol Print untuk cetak. Save as PDF juga tersedia dari dialog print browser.</div>
               </div>
               <div className="flex gap-2">
-                <Button data-testid="print-bkk-btn" onClick={doPrint}>
+                <Button data-testid="print-bpv-btn" onClick={doPrint}>
                   <Printer size={14} className="mr-1"/> Print / Save PDF
                 </Button>
                 <Button variant="secondary" onClick={() => setPrintFor(null)}>Tutup</Button>
               </div>
             </div>
-            <div className="p-4">
-              <BKKPrintTemplate
+            <div className="p-4 overflow-x-auto">
+              <BPVPrintTemplate
                 panjar={printFor.panjar}
                 approval={printFor.approval}
                 requesterName={printFor.requester_name}
