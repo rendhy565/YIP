@@ -53,8 +53,8 @@ export default function BKKPrintTemplate({ panjar, approval, requesterName, sett
     });
   }
 
-  // Pad to minimum 7 rows (biar tabel selalu terlihat penuh seperti form fisik)
-  while (rows.length < 7) rows.push({ ref: "", detail: "", amount: null });
+  // Pad to minimum 4 rows (biar tabel tetap terlihat rapi tanpa boros ruang)
+  while (rows.length < 4) rows.push({ ref: "", detail: "", amount: null });
 
   const total = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
@@ -204,9 +204,9 @@ function SigBox({ label, name, date }) {
     return d.toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
   };
   return (
-    <div className="border border-blue-900 p-2 min-h-[85px] flex flex-col">
+    <div className="border border-blue-900 p-2 min-h-[140px] flex flex-col">
       <div className="text-[10px] font-bold text-center text-blue-900 border-b border-blue-900 pb-1 mb-1">{label}</div>
-      <div className="flex-1 flex flex-col justify-end items-center">
+      <div className="flex-1 flex flex-col justify-end items-center pt-8">
         {name && <div className="text-[11px] font-bold">({name})</div>}
         {!name && <div className="text-[11px] text-slate-400">(_______________)</div>}
         {date && <div className="text-[9px] text-slate-500 mt-0.5">{formatDate(date)}</div>}
