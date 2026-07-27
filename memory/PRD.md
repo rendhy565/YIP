@@ -12,6 +12,7 @@
 - Auth: JWT + granular permission
 
 ## Completed features (Feb 2026)
+- ✅ **Carry-Over Sisa Panjar antar Penerima Sama** (Jan 2026): checkbox "Transfer sisa ke panjar berikutnya" di settle modal → sisa jadi carry-over (`carry_over_transferred=true`, `carry_over_amount=X`), status jadi Settled. Panjar baru dengan penerima sama bisa apply carry-over via checkboxes di settle modal — otomatis budget +carry saat validasi actual+refund. Marking source panjar `carry_over_consumed_by/consumed_number/consumed_at`. Journal balance rapi: CR 1108 di-split memo "Carry-over dari PNJ-X" + panjar sekarang. Validasi backend: penerima harus sama, source tidak boleh sudah consumed
 - ✅ **Custom Approval Flow per Panjar Kerja** (Jan 2026): `CashAdvanceIn.custom_approval_steps` optional; form Panjar punya builder alur (default dari template global `cash_advance`, tapi bisa add/edit/reorder/remove per pengajuan). BPV template selalu menambahkan **2 kolom FIXED "Disetujui Oleh: Amrullah" + "Disetujui Oleh: Abidin"** di akhir signature (untuk tanda tangan fisik owner). Preview alur ditampilkan live saat user edit
 - ✅ **Settle Panjar → Target Finance** (Jan 2026): breakdown row punya 3 opsi target — AWB / Operation / **Finance**. Untuk Finance, muncul dropdown kategori expense dengan tombol Add New inline (buat kategori baru + auto-create COA 62xx). Hasil settle Finance → auto-insert ke `fixed_costs` (halaman Expenses) + journal DR expense_account / CR 1108 → langsung tampil di P&L
 - ✅ **BPV (Bank Payment Voucher) replace BKK di Panjar Kerja** (Jan 2026):

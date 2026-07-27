@@ -6809,6 +6809,9 @@ class CashAdvanceSettleIn(BaseModel):
     cash_account_code: Optional[str] = None  # for refund; default 1101
     notes: Optional[str] = None
     awb_breakdown: Optional[List[CashAdvanceBreakdownItem]] = None  # list AWB + nominal; nilai jadi cost di AWB ybs
+    # ---- Carry-over sisa panjar ----
+    transfer_remaining_to_next: Optional[bool] = False    # kalau True: sisa disimpan sebagai carry-over untuk panjar berikutnya (status jadi Settled)
+    apply_carry_over_from: Optional[List[str]] = None     # list ID panjar sebelumnya (penerima sama) yang carry-over-nya diserap ke settle ini
 
 async def next_cash_advance_number() -> str:
     yyyymm = datetime.now(timezone.utc).strftime("%Y%m")
@@ -6974,18 +6977,40 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
     else:
         actual = float(data.actual_amount if data.actual_amount is not None else 0)
     refund = float(data.refund_amount or 0)
-    # ===== PARTIAL SETTLE: status tetap "Open" sampai total settled+refund == panjar amount =====
+    # ===== Apply carry-over dari panjar sebelumnya (penerima sama) =====
+    carry_over_applied = []       # [{panjar_id, panjar_number, amount}]
+    carry_over_applied_total = 0.0
+    if data.apply_carry_over_from:
+        for src_id in data.apply_carry_over_from:
+            src = await db.cash_advances.find_one({"_id": _oid(src_id)})
+            if not src:
+                raise HTTPException(400, f"Panjar carry-over {src_id} tidak ditemukan")
+            if (src.get("recipient_name") or "").strip().lower() != (ca.get("recipient_name") or "").strip().lower():
+                raise HTTPException(400, f"Carry-over dari {src.get('number')} tidak diperbolehkan — penerima berbeda ({src.get('recipient_name')} vs {ca.get('recipient_name')})")
+            if not src.get("carry_over_transferred") or src.get("carry_over_consumed_by"):
+                raise HTTPException(400, f"Panjar {src.get('number')} tidak memiliki carry-over yang tersedia")
+            amt = float(src.get("carry_over_amount") or 0)
+            if amt <= 0:
+                raise HTTPException(400, f"Panjar {src.get('number')} tidak memiliki sisa carry-over")
+            carry_over_applied.append({"panjar_id": str(src["_id"]), "panjar_number": src["number"], "amount": amt})
+            carry_over_applied_total = round(carry_over_applied_total + amt, 2)
+
+    # ===== PARTIAL SETTLE: status tetap "Open" sampai total settled+refund == panjar amount + carry_over =====
     panjar_amt = float(ca.get("amount") or 0)
     prev_settled = float(ca.get("settled_amount") or 0)
     prev_refund = float(ca.get("refund_amount") or 0)
     new_settled_total = round(prev_settled + actual, 2)
     new_refund_total = round(prev_refund + refund, 2)
     consumed = round(new_settled_total + new_refund_total, 2)
-    remaining = round(panjar_amt - consumed, 2)
+    total_budget = round(panjar_amt + carry_over_applied_total + float(ca.get("carry_over_applied_total") or 0), 2)
+    remaining = round(total_budget - consumed, 2)
     if remaining < -0.01:
-        raise HTTPException(400, f"Total settle ({consumed}) melebihi nilai panjar ({panjar_amt}). Sisa: {remaining}")
+        raise HTTPException(400, f"Total settle ({consumed}) melebihi total budget ({total_budget}). Sisa: {remaining}")
+
     is_full = abs(remaining) < 0.01
-    new_status = "Settled" if is_full else "Open"
+    # ===== Handle transfer_remaining_to_next checkbox =====
+    transfer_this_time = bool(data.transfer_remaining_to_next) and remaining > 0.01
+    new_status = "Settled" if (is_full or transfer_this_time) else "Open"
     if data.settle_date:
         try:
             y, m, d = [int(x) for x in data.settle_date.split("-")]
@@ -7004,24 +7029,43 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
         "notes": (data.notes or "").strip() or None,
         "settled_by": user["id"],
         "breakdown": [{**b, "awb_id": str(b["awb_id"]) if b.get("awb_id") else None} for b in breakdown] if breakdown else [],
+        "carry_over_applied": carry_over_applied,
+        "transfer_remaining": transfer_this_time,
     }
+
+    set_upd = {
+        "status": new_status,
+        "settled_amount": new_settled_total,
+        "refund_amount": new_refund_total,
+        "actual_amount": new_settled_total,  # back-compat
+        "remaining_amount": max(0.0, remaining),
+        "settled_at": sd if (is_full or transfer_this_time) else ca.get("settled_at"),
+        "settled_by": user["id"] if (is_full or transfer_this_time) else ca.get("settled_by"),
+        "settle_notes": (data.notes or "").strip() or ca.get("settle_notes"),
+        "carry_over_applied_total": round(float(ca.get("carry_over_applied_total") or 0) + carry_over_applied_total, 2),
+    }
+    if transfer_this_time:
+        # Sisa disimpan sebagai carry-over untuk panjar berikutnya (penerima sama)
+        set_upd["carry_over_transferred"] = True
+        set_upd["carry_over_amount"] = remaining
+        set_upd["carry_over_consumed_by"] = None
+        set_upd["carry_over_consumed_at"] = None
 
     await db.cash_advances.update_one(
         {"_id": _oid(cid)},
-        {
-            "$set": {
-                "status": new_status,
-                "settled_amount": new_settled_total,
-                "refund_amount": new_refund_total,
-                "actual_amount": new_settled_total,  # back-compat
-                "remaining_amount": max(0.0, remaining),
-                "settled_at": sd if is_full else ca.get("settled_at"),
-                "settled_by": user["id"] if is_full else ca.get("settled_by"),
-                "settle_notes": (data.notes or "").strip() or ca.get("settle_notes"),
-            },
-            "$push": {"settle_history": history_evt},
-        },
+        {"$set": set_upd, "$push": {"settle_history": history_evt}},
     )
+
+    # Mark source carry-over panjars as consumed
+    for src in carry_over_applied:
+        await db.cash_advances.update_one(
+            {"_id": _oid(src["panjar_id"])},
+            {"$set": {
+                "carry_over_consumed_by": cid,
+                "carry_over_consumed_number": ca["number"],
+                "carry_over_consumed_at": sd,
+            }},
+        )
     # Create awb_costs for AWB targets / direct journal for Operation targets / fixed_costs entry for Finance
     finance_expense_amount = 0.0        # for journal split
     finance_expense_lines = {}          # account_code → total amount (aggregate per COA)
@@ -7075,6 +7119,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
         #   AWB/Operation targets → 5102 (HPP Operational Pengiriman)
         #   Finance target       → per expense_account_code (dari expense_category)
         # Semua di-credit ke 1108 (Panjar Kerja) untuk actual + Cash untuk refund.
+        # Kalau ada carry-over: split CR 1108 antara panjar source (memo referensi) & panjar sekarang.
         hpp_amount = round(actual - finance_expense_amount, 2)
         lines = []
         if hpp_amount > 0.01:
@@ -7084,11 +7129,20 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                 lines.append({"account_code": acc_code, "debit": amt, "credit": 0, "memo": f"Panjar {ca['number']} (finance)"})
         if refund > 0:
             lines.append({"account_code": cash_acc, "debit": refund, "credit": 0, "memo": f"Refund panjar {ca['number']}"})
-        if (actual + refund) > 0:
-            lines.append({"account_code": "1108", "debit": 0, "credit": actual + refund, "memo": ca["number"]})
+        total_cr_needed = round(actual + refund, 2)
+        remaining_cr = total_cr_needed
+        # Konsumsi carry-over lebih dulu (dari panjar source, memo referensi)
+        for src in carry_over_applied:
+            take = min(src["amount"], remaining_cr)
+            if take > 0.01:
+                lines.append({"account_code": "1108", "debit": 0, "credit": take, "memo": f"Carry-over dari {src['panjar_number']}"})
+                remaining_cr = round(remaining_cr - take, 2)
+        if remaining_cr > 0.01:
+            lines.append({"account_code": "1108", "debit": 0, "credit": remaining_cr, "memo": ca["number"]})
+        if total_cr_needed > 0.01:
             await post_journal(
                 date=sd,
-                description=f"Settle panjar kerja {ca['number']}" + (" (partial)" if not is_full else " (final)"),
+                description=f"Settle panjar kerja {ca['number']}" + (" (partial)" if not (is_full or transfer_this_time) else (" (transfer sisa)" if transfer_this_time else " (final)")),
                 lines=lines,
                 reference_type="cash_advance_settle", reference_id=cid, posted_by=user["id"],
             )
