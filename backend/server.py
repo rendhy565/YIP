@@ -6786,9 +6786,10 @@ class CashAdvanceIn(BaseModel):
 
 class CashAdvanceBreakdownItem(BaseModel):
     awb_id: Optional[str] = None  # None / "OPERATION" → direct cost ke operation (no AWB)
-    target: Optional[str] = None  # "awb" | "operation"
+    target: Optional[str] = None  # "awb" | "operation" | "finance"
     amount: float
     description: Optional[str] = None
+    expense_category: Optional[str] = None  # required when target="finance" — name of category in db.expense_categories
 
 class CashAdvanceSettleIn(BaseModel):
     actual_amount: Optional[float] = None  # actual expense from the advance
@@ -6907,7 +6908,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
     # Validate AWB breakdown if provided
     breakdown = []
     if data.awb_breakdown:
-        # Each item: target="awb" (with awb_id) or target="operation" (direct cost, no AWB)
+        # Each item: target="awb" (with awb_id) OR target="operation" (direct HPP) OR target="finance" (expense with category)
         for it in data.awb_breakdown:
             target = (it.target or ("operation" if not it.awb_id else "awb")).lower()
             if target == "operation":
@@ -6917,6 +6918,26 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                     "awb_number": None,
                     "amount": float(it.amount),
                     "description": (it.description or "").strip() or None,
+                    "expense_category": None,
+                    "expense_account_code": None,
+                    "expense_posting_type": None,
+                })
+            elif target == "finance":
+                cat_name = (it.expense_category or "").strip()
+                if not cat_name:
+                    raise HTTPException(400, "expense_category wajib jika target=finance")
+                cat = await get_expense_category(cat_name)
+                if not cat:
+                    raise HTTPException(400, f"Kategori expense '{cat_name}' tidak ditemukan")
+                breakdown.append({
+                    "target": "finance",
+                    "awb_id": None,
+                    "awb_number": None,
+                    "amount": float(it.amount),
+                    "description": (it.description or "").strip() or None,
+                    "expense_category": cat["name"],
+                    "expense_account_code": cat.get("account_code"),
+                    "expense_posting_type": cat.get("posting_type", "expense"),
                 })
             else:
                 if not it.awb_id:
@@ -6930,6 +6951,9 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                     "awb_number": ao["awb_number"],
                     "amount": float(it.amount),
                     "description": (it.description or "").strip() or None,
+                    "expense_category": None,
+                    "expense_account_code": None,
+                    "expense_posting_type": None,
                 })
         total_breakdown_this_round = sum(b["amount"] for b in breakdown)
         actual = float(data.actual_amount if data.actual_amount is not None else total_breakdown_this_round)
@@ -6986,12 +7010,36 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
             "$push": {"settle_history": history_evt},
         },
     )
-    # Create awb_costs for AWB targets / direct journal for Operation targets
+    # Create awb_costs for AWB targets / direct journal for Operation targets / fixed_costs entry for Finance
+    finance_expense_amount = 0.0        # for journal split
+    finance_expense_lines = {}          # account_code → total amount (aggregate per COA)
     for b in breakdown:
         if b.get("target") == "operation":
-            # Direct cost (Operation, no AWB) — journal posted to HPP 5102 from 1108 (panjar accrual).
-            # Tidak perlu petty_cash entry tambahan — settle journal sudah debit 5102.
+            # Direct cost (Operation, no AWB) — journal DR 5102 / CR 1108. Handled below.
             pass
+        elif b.get("target") == "finance":
+            # Create fixed_costs entry (biar tampil di halaman Expenses & P&L)
+            period_m = sd.strftime("%Y-%m")
+            fc_doc = {
+                "category": b["expense_category"],
+                "posting_type": b.get("expense_posting_type", "expense"),
+                "account_code": b.get("expense_account_code"),
+                "description": (b["description"] or f"Panjar {ca['number']} - {ca['recipient_name']}"),
+                "amount": b["amount"],
+                "expense_date": sd.strftime("%Y-%m-%d"),
+                "period_month": period_m,
+                "cash_account_code": cash_acc,
+                "source": "cash_advance_settle",
+                "source_ref": cid,
+                "source_number": ca["number"],
+                "created_by": user["id"],
+                "created_at": sd,
+            }
+            await db.fixed_costs.insert_one(fc_doc)
+            # Aggregate journal DR by expense account_code
+            acc_code = b.get("expense_account_code") or "6199"
+            finance_expense_lines[acc_code] = round(finance_expense_lines.get(acc_code, 0) + b["amount"], 2)
+            finance_expense_amount = round(finance_expense_amount + b["amount"], 2)
         else:
             cdoc = {
                 "awb_id": b["awb_id"],
@@ -7011,11 +7059,17 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
             await db.awb_costs.insert_one(cdoc)
     # Journal per partial event
     try:
-        # Split actual: AWB-target → 5102 (per-AWB HPP) ; Operation-target → 5102 (HPP Operation direct)
-        # All go to 5102 anyway. Just credit 1108 for the consumed portion + cash for refund.
+        # Split actual:
+        #   AWB/Operation targets → 5102 (HPP Operational Pengiriman)
+        #   Finance target       → per expense_account_code (dari expense_category)
+        # Semua di-credit ke 1108 (Panjar Kerja) untuk actual + Cash untuk refund.
+        hpp_amount = round(actual - finance_expense_amount, 2)
         lines = []
-        if actual > 0:
-            lines.append({"account_code": "5102", "debit": actual, "credit": 0, "memo": f"Panjar {ca['number']} - {ca['recipient_name']}"})
+        if hpp_amount > 0.01:
+            lines.append({"account_code": "5102", "debit": hpp_amount, "credit": 0, "memo": f"Panjar {ca['number']} - {ca['recipient_name']}"})
+        for acc_code, amt in finance_expense_lines.items():
+            if amt > 0.01:
+                lines.append({"account_code": acc_code, "debit": amt, "credit": 0, "memo": f"Panjar {ca['number']} (finance)"})
         if refund > 0:
             lines.append({"account_code": cash_acc, "debit": refund, "credit": 0, "memo": f"Refund panjar {ca['number']}"})
         if (actual + refund) > 0:

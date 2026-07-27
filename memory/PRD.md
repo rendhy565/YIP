@@ -12,6 +12,7 @@
 - Auth: JWT + granular permission
 
 ## Completed features (Feb 2026)
+- ✅ **Settle Panjar → Target Finance** (Jan 2026): breakdown row punya 3 opsi target — AWB / Operation / **Finance**. Untuk Finance, muncul dropdown kategori expense dengan tombol Add New inline (buat kategori baru + auto-create COA 62xx). Hasil settle Finance → auto-insert ke `fixed_costs` (halaman Expenses) + journal DR expense_account / CR 1108 → langsung tampil di P&L
 - ✅ **BPV (Bank Payment Voucher) replace BKK di Panjar Kerja** (Jan 2026):
   - 2 master baru: `payment_recipients` & `payment_senders` (nama/bank/account) — CRUD lengkap
   - `CashAdvanceIn` extended: recipient_id/bank/account, sender_id/name/bank/account (snapshot), ppn_amount, pph_amount, reff_number

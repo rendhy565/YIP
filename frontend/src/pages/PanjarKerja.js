@@ -47,18 +47,24 @@ export default function PanjarKerja() {
   const [showAddParty, setShowAddParty] = useState(null); // 'recipient' | 'sender' | null
   const [partyForm, setPartyForm] = useState({ name: "", bank: "", account_number: "" });
   const [savingParty, setSavingParty] = useState(false);
+  const [expenseCats, setExpenseCats] = useState([]);
+  const [showAddCat, setShowAddCat] = useState(null); // { rowIdx } | null
+  const [catForm, setCatForm] = useState({ name: "", posting_type: "expense" });
+  const [savingCat, setSavingCat] = useState(false);
 
   const load = async () => {
-    const [ca, os, usr, st, rec, snd] = await Promise.all([
+    const [ca, os, usr, st, rec, snd, ec] = await Promise.all([
       api.get("/cash-advances"),
       api.get("/orders"),  // ALL AWBs (any status)
       api.get("/users").catch(() => ({ data: [] })),
       api.get("/settings").catch(() => ({ data: [] })),
       api.get("/payment-recipients").catch(() => ({ data: [] })),
       api.get("/payment-senders").catch(() => ({ data: [] })),
+      api.get("/expense-categories").catch(() => ({ data: [] })),
     ]);
     setRows(ca.data); setAllOrders(os.data); setUsers(usr.data || []);
     setRecipients(rec.data || []); setSenders(snd.data || []);
+    setExpenseCats(ec.data || []);
     // Build settings map: { logo_b64, kop_address, ... }
     const sm = {};
     (st.data || []).forEach((s) => {
@@ -125,12 +131,33 @@ export default function PanjarKerja() {
   const openSettle = (r) => {
     setSettleFor(r);
     setSettleForm({ refund_amount: "0", settle_date: todayStr(), notes: "" });
-    setBreakdown([{ target: "awb", awb_id: "", amount: "", description: "" }]);
+    setBreakdown([{ target: "awb", awb_id: "", amount: "", description: "", expense_category: "" }]);
   };
 
-  const addRow = (target = "awb") => setBreakdown([...breakdown, { target, awb_id: "", amount: "", description: "" }]);
+  const addRow = (target = "awb") => setBreakdown([...breakdown, { target, awb_id: "", amount: "", description: "", expense_category: "" }]);
   const removeRow = (idx) => setBreakdown(breakdown.filter((_, i) => i !== idx));
   const updateRow = (idx, key, val) => setBreakdown(breakdown.map((b, i) => i === idx ? { ...b, [key]: val } : b));
+
+  const openAddCat = (rowIdx) => {
+    setCatForm({ name: "", posting_type: "expense" });
+    setShowAddCat({ rowIdx });
+  };
+  const saveCategory = async (e) => {
+    e.preventDefault();
+    if (!catForm.name.trim()) { toast.error("Nama kategori wajib diisi"); return; }
+    setSavingCat(true);
+    try {
+      const r = await api.post("/expense-categories", catForm);
+      toast.success("Kategori baru dibuat");
+      const cats = (await api.get("/expense-categories").catch(() => ({ data: expenseCats }))).data || [];
+      setExpenseCats(cats);
+      if (showAddCat && typeof showAddCat.rowIdx === "number") {
+        updateRow(showAddCat.rowIdx, "expense_category", r.data.name);
+      }
+      setShowAddCat(null);
+    } catch (e2) { toast.error(errMsg(e2)); }
+    finally { setSavingCat(false); }
+  };
 
   const breakdownTotal = breakdown.reduce((s, b) => s + (parseFloat(b.amount) || 0), 0);
   const refund = parseFloat(settleForm.refund_amount) || 0;
@@ -151,6 +178,9 @@ export default function PanjarKerja() {
       }
       if ((b.target || "awb") === "awb" && !b.awb_id) {
         toast.error("Untuk target AWB, pilih AWB-nya"); return;
+      }
+      if (b.target === "finance" && !b.expense_category) {
+        toast.error("Untuk target Finance, pilih kategori expense-nya"); return;
       }
     }
     if (settleTotal <= 0) {
@@ -176,9 +206,10 @@ export default function PanjarKerja() {
         notes: settleForm.notes,
         awb_breakdown: breakdown.map((b) => ({
           target: b.target || "awb",
-          awb_id: (b.target === "operation") ? null : b.awb_id,
+          awb_id: (b.target === "operation" || b.target === "finance") ? null : b.awb_id,
           amount: parseFloat(b.amount),
           description: b.description || null,
+          expense_category: b.target === "finance" ? (b.expense_category || null) : null,
         })),
       });
       toast.success(isFullSettle
@@ -455,6 +486,38 @@ export default function PanjarKerja() {
         </div>
       )}
 
+      {/* ===== Add New Expense Category modal ===== */}
+      {showAddCat && (
+        <div className="fixed inset-0 bg-slate-900/70 z-[60] flex items-center justify-center p-4" data-testid="add-cat-modal">
+          <Card className="w-full max-w-md p-5">
+            <div className="flex items-start justify-between mb-3">
+              <h4 className="font-heading font-bold text-lg">Tambah Kategori Expense Baru</h4>
+              <button onClick={() => setShowAddCat(null)} className="p-1 hover:bg-slate-100 rounded"><X size={16}/></button>
+            </div>
+            <form onSubmit={saveCategory} className="space-y-3">
+              <div>
+                <Label>Nama Kategori *</Label>
+                <Input data-testid="cat-name" value={catForm.name} onChange={(e) => setCatForm({ ...catForm, name: e.target.value })} placeholder="Mis. Bensin Kendaraan Operasional" required autoFocus/>
+              </div>
+              <div>
+                <Label>Tipe Posting *</Label>
+                <Select data-testid="cat-posting-type" value={catForm.posting_type} onChange={(e) => setCatForm({ ...catForm, posting_type: e.target.value })}>
+                  <option value="expense">Operating Expense (di bawah Gross Margin, akun 62xx dibuat otomatis)</option>
+                  <option value="cogs">HPP / Cost of Goods Sold (mengurangi Gross Margin, akun 5102)</option>
+                </Select>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Pilih {`"Operating Expense"`} untuk beban umum (gaji, sewa, ATK, dll). Pilih {`"HPP"`} hanya untuk biaya yang langsung terkait pengiriman.
+                </p>
+              </div>
+              <div className="flex justify-end gap-2 pt-2 border-t">
+                <Button variant="secondary" type="button" onClick={() => setShowAddCat(null)}>Batal</Button>
+                <Button data-testid="save-cat-btn" type="submit" disabled={savingCat}>{savingCat ? "Menyimpan..." : "Simpan Kategori"}</Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
       {settleFor && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="settle-panjar-modal">
           <Card className="w-full max-w-3xl p-6 max-h-[92vh] overflow-y-auto">
@@ -469,10 +532,11 @@ export default function PanjarKerja() {
             <div className="space-y-4">
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500">Breakdown ke AWB / Operation</h4>
+                  <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500">Breakdown ke AWB / Operation / Finance</h4>
                   <div className="flex gap-2">
                     <button type="button" data-testid="add-awb-row-btn" onClick={() => addRow("awb")} className="text-[11px] font-bold text-blue-700 hover:text-blue-900 inline-flex items-center gap-1"><Plus size={12}/> Baris AWB</button>
                     <button type="button" data-testid="add-operation-row-btn" onClick={() => addRow("operation")} className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 inline-flex items-center gap-1"><Plus size={12}/> Baris Operation</button>
+                    <button type="button" data-testid="add-finance-row-btn" onClick={() => addRow("finance")} className="text-[11px] font-bold text-purple-700 hover:text-purple-900 inline-flex items-center gap-1"><Plus size={12}/> Baris Finance</button>
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -484,10 +548,11 @@ export default function PanjarKerja() {
                           <Select data-testid={`breakdown-target-${i}`} value={target} onChange={(e) => updateRow(i, "target", e.target.value)}>
                             <option value="awb">AWB</option>
                             <option value="operation">Operation</option>
+                            <option value="finance">Finance</option>
                           </Select>
                         </div>
                         <div className="col-span-3">
-                          {target === "awb" ? (
+                          {target === "awb" && (
                             <SearchableSelect
                               testid={`breakdown-awb-${i}`}
                               value={b.awb_id}
@@ -496,9 +561,36 @@ export default function PanjarKerja() {
                               placeholder="— Pilih AWB —"
                               emptyText="AWB tidak ditemukan"
                             />
-                          ) : (
+                          )}
+                          {target === "operation" && (
                             <div className="px-2 py-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded">
                               Direct Cost → HPP Operation
+                            </div>
+                          )}
+                          {target === "finance" && (
+                            <div className="flex gap-1">
+                              <Select
+                                data-testid={`breakdown-cat-${i}`}
+                                value={b.expense_category || ""}
+                                onChange={(e) => updateRow(i, "expense_category", e.target.value)}
+                                className="flex-1"
+                              >
+                                <option value="">— Pilih kategori —</option>
+                                {expenseCats.map((c) => (
+                                  <option key={c.id} value={c.name}>
+                                    {c.name} {c.posting_type === "cogs" ? "· HPP" : "· Expense"}
+                                  </option>
+                                ))}
+                              </Select>
+                              <button
+                                type="button"
+                                data-testid={`add-cat-${i}`}
+                                onClick={() => openAddCat(i)}
+                                title="Tambah kategori baru"
+                                className="px-2 rounded bg-purple-100 hover:bg-purple-200 text-purple-800 border border-purple-200"
+                              >
+                                <Plus size={14}/>
+                              </button>
                             </div>
                           )}
                         </div>
@@ -516,6 +608,9 @@ export default function PanjarKerja() {
                       </div>
                     );
                   })}
+                </div>
+                <div className="mt-1 text-[10px] text-slate-500">
+                  <b>AWB</b>: cost per-AWB (5102) · <b>Operation</b>: HPP langsung (5102) · <b>Finance</b>: expense per-kategori (auto-input ke halaman Expenses & P&L)
                 </div>
               </div>
 
