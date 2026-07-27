@@ -239,9 +239,10 @@ export default function PanjarKerja() {
         toast.error("Untuk target Finance, pilih kategori expense-nya"); return;
       }
     }
-    // Boleh: (a) ada settle > 0, atau (b) tidak ada settle tapi centang transfer sisa
-    if (settleTotal <= 0 && !transferRemaining) {
-      toast.error("Isi minimal 1 baris breakdown, atau centang 'Transfer sisa ke panjar berikutnya'");
+    // Boleh: (a) ada settle > 0, atau (b) centang transfer sisa, atau (c) pilih carry-over dari panjar sebelumnya
+    const anyAction = settleTotal > 0 || transferRemaining || carryOverApply.length > 0;
+    if (!anyAction) {
+      toast.error("Isi minimal 1 baris breakdown, centang 'Transfer sisa', atau pilih carry-over dari panjar sebelumnya");
       return;
     }
     if (isOverSettle) {
@@ -284,6 +285,8 @@ export default function PanjarKerja() {
               : `Panjar ${settleFor.number} ditutup — semua saldo (${fmtIDR(newRemaining)}) jadi carry-over untuk ${settleFor.recipient_name}`)
           : isFullSettle
           ? `Panjar ${settleFor.number} fully settled`
+          : settleTotal <= 0 && carryOverApply.length > 0
+          ? `Carry-over ${fmtIDR(carryOverAppliedTotal)} berhasil dipindahkan ke ${settleFor.number}`
           : `Partial settle (${fmtIDR(settleTotal)}) berhasil. Sisa: ${fmtIDR(newRemaining)} — status tetap Open`
       );
       setSettleFor(null);
@@ -897,8 +900,8 @@ export default function PanjarKerja() {
 
             <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
               <Button variant="secondary" type="button" onClick={() => setSettleFor(null)}>Batal</Button>
-              <Button data-testid="confirm-settle-panjar" variant="success" onClick={doSettle} disabled={settling || isOverSettle || (settleTotal <= 0 && !transferRemaining)}>
-                {settling ? "Memproses..." : (transferRemaining ? "Settle + Transfer Sisa" : (isFullSettle ? "Settle (Final)" : "Settle (Partial)"))}
+              <Button data-testid="confirm-settle-panjar" variant="success" onClick={doSettle} disabled={settling || isOverSettle || (settleTotal <= 0 && !transferRemaining && carryOverApply.length === 0)}>
+                {settling ? "Memproses..." : (transferRemaining ? "Settle + Transfer Sisa" : (isFullSettle ? "Settle (Final)" : (settleTotal <= 0 && carryOverApply.length > 0 ? "Serap Carry-Over" : "Settle (Partial)")))}
               </Button>
             </div>
           </Card>
