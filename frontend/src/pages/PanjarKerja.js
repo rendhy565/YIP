@@ -52,19 +52,25 @@ export default function PanjarKerja() {
   const [catForm, setCatForm] = useState({ name: "", posting_type: "expense" });
   const [savingCat, setSavingCat] = useState(false);
 
+  // Approval flow builder — per pengajuan
+  const [approvalTemplate, setApprovalTemplate] = useState(null); // default steps dari config
+  const [customSteps, setCustomSteps] = useState([]);             // [{name, approver_ids:[]}]
+
   const load = async () => {
-    const [ca, os, usr, st, rec, snd, ec] = await Promise.all([
+    const [ca, os, usr, st, rec, snd, ec, cfg] = await Promise.all([
       api.get("/cash-advances"),
-      api.get("/orders"),  // ALL AWBs (any status)
+      api.get("/orders"),
       api.get("/users").catch(() => ({ data: [] })),
       api.get("/settings").catch(() => ({ data: [] })),
       api.get("/payment-recipients").catch(() => ({ data: [] })),
       api.get("/payment-senders").catch(() => ({ data: [] })),
       api.get("/expense-categories").catch(() => ({ data: [] })),
+      api.get("/approval-configs/cash_advance").catch(() => ({ data: null })),
     ]);
     setRows(ca.data); setAllOrders(os.data); setUsers(usr.data || []);
     setRecipients(rec.data || []); setSenders(snd.data || []);
     setExpenseCats(ec.data || []);
+    setApprovalTemplate(cfg.data || null);
     // Build settings map: { logo_b64, kop_address, ... }
     const sm = {};
     (st.data || []).forEach((s) => {
@@ -111,8 +117,39 @@ export default function PanjarKerja() {
     finally { setSavingParty(false); }
   };
 
+  const resetApprovalSteps = () => {
+    // Load default dari template global (kalau ada)
+    if (approvalTemplate && approvalTemplate.steps && approvalTemplate.steps.length > 0) {
+      setCustomSteps(approvalTemplate.steps.map((s) => ({
+        name: s.name || "Diperiksa Oleh",
+        approver_ids: [...(s.approver_ids || [])],
+      })));
+    } else {
+      setCustomSteps([]);
+    }
+  };
+  const addStep = () => setCustomSteps([...customSteps, { name: "Diperiksa Oleh", approver_ids: [] }]);
+  const updateStep = (idx, key, val) => setCustomSteps(customSteps.map((s, i) => i === idx ? { ...s, [key]: val } : s));
+  const removeStep = (idx) => setCustomSteps(customSteps.filter((_, i) => i !== idx));
+  const moveStep = (idx, dir) => {
+    const j = idx + dir;
+    if (j < 0 || j >= customSteps.length) return;
+    const next = [...customSteps];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setCustomSteps(next);
+  };
+  const resetToTemplate = () => resetApprovalSteps();
+  const clearAllSteps = () => setCustomSteps([]);
+
   const submit = async (e) => {
     e.preventDefault();
+    // Validate custom steps (kalau ada, tidak boleh ada approver_ids kosong)
+    for (const s of customSteps) {
+      if (!s.name?.trim()) { toast.error("Setiap langkah approval harus punya nama"); return; }
+      if (!s.approver_ids || s.approver_ids.length === 0) {
+        toast.error(`Langkah "${s.name}" belum punya approver`); return;
+      }
+    }
     setSaving(true);
     try {
       const payload = {
@@ -120,10 +157,11 @@ export default function PanjarKerja() {
         amount: parseFloat(form.amount),
         ppn_amount: parseFloat(form.ppn_amount) || 0,
         pph_amount: parseFloat(form.pph_amount) || 0,
+        custom_approval_steps: customSteps.length > 0 ? customSteps : null,
       };
       await api.post("/cash-advances", payload);
       toast.success("Panjar dibuat");
-      setShowAdd(false); setForm(empty); load();
+      setShowAdd(false); setForm(empty); resetApprovalSteps(); load();
     } catch (e2) { toast.error(errMsg(e2)); }
     finally { setSaving(false); }
   };
@@ -260,7 +298,7 @@ export default function PanjarKerja() {
       <PageHeader
         title="Panjar Kerja"
         subtitle="Kas operasional ke staff/driver. Saat settle, breakdown per AWB → otomatis jadi cost di AWB ybs."
-        action={canCreate ? <Button data-testid="add-panjar-btn" onClick={() => { setForm(empty); setShowAdd(true); }}><Plus size={16}/> Buat Panjar</Button> : null}
+        action={canCreate ? <Button data-testid="add-panjar-btn" onClick={() => { setForm(empty); resetApprovalSteps(); setShowAdd(true); }}><Plus size={16}/> Buat Panjar</Button> : null}
       />
 
       <Card className="p-5 mb-5 bg-amber-50 border-amber-200">
@@ -444,6 +482,84 @@ export default function PanjarKerja() {
               </div>
 
               <div><Label>Catatan Internal (opsional)</Label><Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })}/></div>
+
+              {/* ===== Approval Flow Builder (per pengajuan) ===== */}
+              <div className="border border-purple-200 rounded-lg p-3 bg-purple-50/40">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <div className="text-[11px] uppercase tracking-[0.12em] font-bold text-purple-700">Alur Approval</div>
+                    <div className="text-[10px] text-slate-500">
+                      Default dari template. Anda bisa custom untuk pengajuan ini saja. Kolom <b>Disetujui Oleh: Amrullah & Abidin</b> akan otomatis ditambahkan di voucher final.
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <button type="button" data-testid="reset-approval-btn" onClick={resetToTemplate} className="px-2 py-1 text-[10px] rounded bg-slate-200 hover:bg-slate-300 text-slate-700">Reset ke Template</button>
+                    <button type="button" data-testid="clear-approval-btn" onClick={clearAllSteps} className="px-2 py-1 text-[10px] rounded bg-red-100 hover:bg-red-200 text-red-700">Kosongkan</button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  {customSteps.length === 0 && (
+                    <div className="text-[11px] text-slate-500 italic px-2 py-3 bg-white border border-dashed border-slate-300 rounded text-center">
+                      Belum ada langkah pemeriksaan. Panjar akan langsung ke tanda tangan final (Amrullah & Abidin).
+                    </div>
+                  )}
+                  {customSteps.map((s, i) => (
+                    <div key={i} className="grid grid-cols-12 gap-2 items-center bg-white border border-slate-200 rounded p-2" data-testid={`approval-step-${i}`}>
+                      <div className="col-span-1 text-center text-[10px] font-bold text-slate-500">
+                        #{i + 1}
+                      </div>
+                      <div className="col-span-4">
+                        <Input
+                          data-testid={`step-name-${i}`}
+                          placeholder="Nama tahap (mis. Diperiksa Oleh Finance)"
+                          value={s.name}
+                          onChange={(e) => updateStep(i, "name", e.target.value)}
+                        />
+                      </div>
+                      <div className="col-span-5">
+                        <Select
+                          data-testid={`step-approver-${i}`}
+                          value={s.approver_ids[0] || ""}
+                          onChange={(e) => updateStep(i, "approver_ids", e.target.value ? [e.target.value] : [])}
+                        >
+                          <option value="">— Pilih approver —</option>
+                          {users.map((u) => (
+                            <option key={u.id} value={u.id}>{u.full_name || u.username} · {u.role}</option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div className="col-span-2 flex gap-1 justify-end">
+                        <button type="button" onClick={() => moveStep(i, -1)} disabled={i === 0} title="Naikkan" className="px-1.5 py-1 rounded hover:bg-slate-100 disabled:opacity-30">↑</button>
+                        <button type="button" onClick={() => moveStep(i, +1)} disabled={i === customSteps.length - 1} title="Turunkan" className="px-1.5 py-1 rounded hover:bg-slate-100 disabled:opacity-30">↓</button>
+                        <button type="button" onClick={() => removeStep(i)} title="Hapus" className="px-1.5 py-1 rounded hover:bg-red-50 text-red-600"><Trash2 size={12}/></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <button type="button" data-testid="add-step-btn" onClick={addStep} className="mt-2 w-full text-[11px] font-bold text-purple-700 hover:bg-purple-100 border border-dashed border-purple-300 rounded py-2 inline-flex items-center justify-center gap-1">
+                  <Plus size={12}/> Tambah Langkah Pemeriksaan
+                </button>
+
+                {/* Preview alur lengkap */}
+                <div className="mt-3 pt-2 border-t border-purple-200">
+                  <div className="text-[10px] uppercase font-bold text-slate-500 mb-1">Preview Alur di Voucher:</div>
+                  <div className="flex flex-wrap gap-1 text-[10px]">
+                    <span className="px-2 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">Dibuat Oleh</span>
+                    <span className="text-slate-400">→</span>
+                    {customSteps.map((s, i) => (
+                      <React.Fragment key={i}>
+                        <span className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">{s.name || "?"}</span>
+                        <span className="text-slate-400">→</span>
+                      </React.Fragment>
+                    ))}
+                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">Disetujui: Amrullah</span>
+                    <span className="text-slate-400">+</span>
+                    <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold">Disetujui: Abidin</span>
+                  </div>
+                </div>
+              </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t">
                 <Button variant="secondary" type="button" onClick={() => setShowAdd(false)}>Batal</Button>

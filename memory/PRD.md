@@ -12,6 +12,7 @@
 - Auth: JWT + granular permission
 
 ## Completed features (Feb 2026)
+- ✅ **Custom Approval Flow per Panjar Kerja** (Jan 2026): `CashAdvanceIn.custom_approval_steps` optional; form Panjar punya builder alur (default dari template global `cash_advance`, tapi bisa add/edit/reorder/remove per pengajuan). BPV template selalu menambahkan **2 kolom FIXED "Disetujui Oleh: Amrullah" + "Disetujui Oleh: Abidin"** di akhir signature (untuk tanda tangan fisik owner). Preview alur ditampilkan live saat user edit
 - ✅ **Settle Panjar → Target Finance** (Jan 2026): breakdown row punya 3 opsi target — AWB / Operation / **Finance**. Untuk Finance, muncul dropdown kategori expense dengan tombol Add New inline (buat kategori baru + auto-create COA 62xx). Hasil settle Finance → auto-insert ke `fixed_costs` (halaman Expenses) + journal DR expense_account / CR 1108 → langsung tampil di P&L
 - ✅ **BPV (Bank Payment Voucher) replace BKK di Panjar Kerja** (Jan 2026):
   - 2 master baru: `payment_recipients` & `payment_senders` (nama/bank/account) — CRUD lengkap

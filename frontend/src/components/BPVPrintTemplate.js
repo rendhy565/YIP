@@ -67,22 +67,24 @@ export default function BPVPrintTemplate({ panjar, approval, requesterName, sett
     return `${sign}${abs.toLocaleString("id-ID")}`;
   };
 
-  // Signatures — dynamic dari approval flow (sama seperti BKK sebelumnya)
+  // Signatures — dynamic dari approval flow + 2 kolom FIXED "Disetujui Oleh: Amrullah" & "Disetujui Oleh: Abidin"
   const approvalSteps = approval?.steps || [];
-  const signatures = [
+  const dynamicSignatures = [
     { label: "Dibuat Oleh", name: requesterName || "-", date: panjar.advance_date },
-    ...approvalSteps.map((s, i) => ({
-      label: i === approvalSteps.length - 1 ? "Disetujui Oleh" : "Diperiksa Oleh",
+    ...approvalSteps.map((s) => ({
+      label: s.name || "Diperiksa Oleh",
       name: s.approved_by_name || "",
       date: s.approved_at,
     })),
   ];
 
-  // Kalau tidak ada approval steps sama sekali, tambah placeholder standar
-  if (approvalSteps.length === 0) {
-    signatures.push({ label: "Diperiksa Oleh", name: "", date: null });
-    signatures.push({ label: "Disetujui Oleh", name: "", date: null });
-  }
+  // Fixed final approvers (selalu muncul di 2 kolom terakhir untuk tanda tangan fisik)
+  const FIXED_FINAL_APPROVERS = [
+    { label: "Disetujui Oleh", name: "Amrullah", date: null, fixed: true },
+    { label: "Disetujui Oleh", name: "Abidin", date: null, fixed: true },
+  ];
+
+  const signatures = [...dynamicSignatures, ...FIXED_FINAL_APPROVERS];
 
   const totalSigs = signatures.length;
   const sigCols = totalSigs <= 3 ? "grid-cols-3" :

@@ -6,7 +6,7 @@ import re
 import jwt
 import bcrypt
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, Request, status, UploadFile, File, Form
@@ -4938,15 +4938,22 @@ async def _get_active_approval_config(doc_type: str):
     cfg = await db.approval_configs.find_one({"document_type": doc_type, "enabled": True})
     return cfg
 
-async def _create_approval_request(doc_type: str, doc_id: str, doc_number: str, doc_snapshot: dict, requester_id: str):
-    """Create pending approval based on active config for doc_type. Returns approval doc or None if no config."""
-    cfg = await _get_active_approval_config(doc_type)
-    if not cfg or not cfg.get("steps"):
-        return None
+async def _create_approval_request(doc_type: str, doc_id: str, doc_number: str, doc_snapshot: dict, requester_id: str, override_steps: Optional[List[dict]] = None):
+    """Create pending approval based on active config for doc_type — atau override_steps kalau diisi.
+    Returns approval doc or None if no config & no override."""
+    steps_source = None
+    if override_steps and len(override_steps) > 0:
+        # Custom flow per-pengajuan
+        steps_source = override_steps
+    else:
+        cfg = await _get_active_approval_config(doc_type)
+        if not cfg or not cfg.get("steps"):
+            return None
+        steps_source = cfg["steps"]
     steps = []
-    for s in cfg["steps"]:
+    for s in steps_source:
         steps.append({
-            "name": s.get("name"),
+            "name": s.get("name") or "Diperiksa Oleh",
             "approver_ids": [str(a) for a in (s.get("approver_ids") or [])],
             "status": "Pending",  # Pending / Approved / Rejected
             "approved_by": None,
@@ -4965,6 +4972,7 @@ async def _create_approval_request(doc_type: str, doc_id: str, doc_number: str, 
         "requested_by": requester_id,
         "requested_at": datetime.now(timezone.utc),
         "completed_at": None,
+        "is_custom_flow": bool(override_steps),
     }
     r = await db.approvals.insert_one(doc)
     doc["_id"] = r.inserted_id
@@ -6783,6 +6791,9 @@ class CashAdvanceIn(BaseModel):
     ppn_amount: Optional[float] = 0
     pph_amount: Optional[float] = 0
     reff_number: Optional[str] = None        # mis. "INV CMB-311220240026"
+    # ---- Custom approval flow (opsional) ----
+    # Jika diisi, override template global. Format: [{"name":"...", "approver_ids":[...]}]
+    custom_approval_steps: Optional[List[Dict[str, Any]]] = None
 
 class CashAdvanceBreakdownItem(BaseModel):
     awb_id: Optional[str] = None  # None / "OPERATION" → direct cost ke operation (no AWB)
@@ -6865,7 +6876,7 @@ async def create_cash_advance(data: CashAdvanceIn, user: dict = Depends(require_
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.cash_advances.insert_one(doc)
-    # Auto-create approval request if configured
+    # Auto-create approval request based on custom flow (if provided) or global template
     approval = await _create_approval_request(
         doc_type="cash_advance",
         doc_id=str(r.inserted_id),
@@ -6877,6 +6888,7 @@ async def create_cash_advance(data: CashAdvanceIn, user: dict = Depends(require_
             "advance_date": adv_date.isoformat(),
         },
         requester_id=user["id"],
+        override_steps=data.custom_approval_steps,
     )
     if approval:
         await db.cash_advances.update_one(
