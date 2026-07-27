@@ -221,7 +221,9 @@ export default function PanjarKerja() {
     .filter((r) => carryOverApply.includes(r.id))
     .reduce((s, r) => s + (parseFloat(r.carry_over_amount) || 0), 0);
 
-  const remainingBefore = panjarAmt - prevSettled - prevRefund + carryOverAppliedTotal;
+  // Existing carry-over yang sudah diserap sebelumnya (dari settle sebelumnya untuk panjar ini)
+  const existingCarryApplied = parseFloat(settleFor?.carry_over_applied_total) || 0;
+  const remainingBefore = panjarAmt - prevSettled - prevRefund + existingCarryApplied + carryOverAppliedTotal;
   const newRemaining = remainingBefore - settleTotal;
   const isFullSettle = Math.abs(newRemaining) < 0.01;
   const isOverSettle = newRemaining < -0.01;
@@ -381,9 +383,12 @@ export default function PanjarKerja() {
                       Kurang panjar: {fmtIDR(overspend)}
                     </div>
                   )}
-                  {r.status === "Open" && r.settled_amount > 0 && (
+                  {r.status === "Open" && (r.settled_amount > 0 || (r.carry_over_applied_total || 0) > 0) && (
                     <div className="text-[9px] text-amber-700 mt-0.5">
-                      Sisa: {fmtIDR(r.amount - (r.settled_amount || 0) - (r.refund_amount || 0))}
+                      Sisa: {fmtIDR((r.amount || 0) + (r.carry_over_applied_total || 0) - (r.settled_amount || 0) - (r.refund_amount || 0))}
+                      {(r.carry_over_applied_total || 0) > 0 && (
+                        <span className="ml-1 text-purple-600">(+carry {fmtIDR(r.carry_over_applied_total)})</span>
+                      )}
                     </div>
                   )}
                   {r.carry_over_transferred && !r.carry_over_consumed_by && (
@@ -860,9 +865,14 @@ export default function PanjarKerja() {
                 <div className="flex items-center justify-between font-mono text-xs">
                   <span>Panjar Awal:</span><span className="font-semibold">{fmtIDR(panjarAmt)}</span>
                 </div>
+                {existingCarryApplied > 0 && (
+                  <div className="flex items-center justify-between font-mono text-xs text-purple-800">
+                    <span>Carry-over sudah diserap sebelumnya:</span><span>+{fmtIDR(existingCarryApplied)}</span>
+                  </div>
+                )}
                 {carryOverAppliedTotal > 0 && (
                   <div className="flex items-center justify-between font-mono text-xs text-purple-800">
-                    <span>+ Carry-over dari panjar sebelumnya:</span><span>+{fmtIDR(carryOverAppliedTotal)}</span>
+                    <span>+ Carry-over dari panjar sebelumnya (baru):</span><span>+{fmtIDR(carryOverAppliedTotal)}</span>
                   </div>
                 )}
                 {(prevSettled > 0 || prevRefund > 0) && (
@@ -878,7 +888,7 @@ export default function PanjarKerja() {
                     </div>
                   </>
                 )}
-                {(prevSettled === 0 && prevRefund === 0 && carryOverAppliedTotal > 0) && (
+                {(prevSettled === 0 && prevRefund === 0 && (carryOverAppliedTotal > 0 || existingCarryApplied > 0)) && (
                   <div className="flex items-center justify-between font-mono text-xs border-t border-current/20 pt-1 mt-1">
                     <span>Budget Tersedia:</span><span className="font-semibold">{fmtIDR(remainingBefore)}</span>
                   </div>
