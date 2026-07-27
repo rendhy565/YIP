@@ -171,12 +171,12 @@ export default function PanjarKerja() {
   const openSettle = (r) => {
     setSettleFor(r);
     setSettleForm({ refund_amount: "0", settle_date: todayStr(), notes: "" });
-    setBreakdown([{ target: "awb", awb_id: "", amount: "", description: "", expense_category: "" }]);
+    setBreakdown([{ target: "awb", awb_id: "", amount: "", description: "", expense_category: "", transaction_date: todayStr() }]);
     setCarryOverApply([]);
     setTransferRemaining(false);
   };
 
-  const addRow = (target = "awb") => setBreakdown([...breakdown, { target, awb_id: "", amount: "", description: "", expense_category: "" }]);
+  const addRow = (target = "awb") => setBreakdown([...breakdown, { target, awb_id: "", amount: "", description: "", expense_category: "", transaction_date: todayStr() }]);
   const removeRow = (idx) => setBreakdown(breakdown.filter((_, i) => i !== idx));
   const updateRow = (idx, key, val) => setBreakdown(breakdown.map((b, i) => i === idx ? { ...b, [key]: val } : b));
 
@@ -228,11 +228,10 @@ export default function PanjarKerja() {
   const canTransferRemaining = newRemaining > 0.01;   // hanya bisa transfer kalau ada sisa
 
   const doSettle = async () => {
-    // Validate each row
-    for (const b of breakdown) {
-      if (!b.amount || parseFloat(b.amount) <= 0) {
-        toast.error("Lengkapi semua baris breakdown (nominal > 0)"); return;
-      }
+    // Skip baris breakdown yang kosong (amount = 0 atau null)
+    const validBreakdown = breakdown.filter((b) => parseFloat(b.amount) > 0);
+    // Validate only non-empty rows
+    for (const b of validBreakdown) {
       if ((b.target || "awb") === "awb" && !b.awb_id) {
         toast.error("Untuk target AWB, pilih AWB-nya"); return;
       }
@@ -240,8 +239,9 @@ export default function PanjarKerja() {
         toast.error("Untuk target Finance, pilih kategori expense-nya"); return;
       }
     }
-    if (settleTotal <= 0) {
-      toast.error("Total settle harus > 0");
+    // Boleh: (a) ada settle > 0, atau (b) tidak ada settle tapi centang transfer sisa
+    if (settleTotal <= 0 && !transferRemaining) {
+      toast.error("Isi minimal 1 baris breakdown, atau centang 'Transfer sisa ke panjar berikutnya'");
       return;
     }
     if (isOverSettle) {
@@ -266,19 +266,22 @@ export default function PanjarKerja() {
         refund_amount: refund,
         settle_date: settleForm.settle_date,
         notes: settleForm.notes,
-        awb_breakdown: breakdown.map((b) => ({
+        awb_breakdown: validBreakdown.length > 0 ? validBreakdown.map((b) => ({
           target: b.target || "awb",
           awb_id: (b.target === "operation" || b.target === "finance") ? null : b.awb_id,
           amount: parseFloat(b.amount),
           description: b.description || null,
           expense_category: b.target === "finance" ? (b.expense_category || null) : null,
-        })),
+          transaction_date: b.transaction_date || settleForm.settle_date || null,
+        })) : null,
         apply_carry_over_from: carryOverApply.length > 0 ? carryOverApply : null,
         transfer_remaining_to_next: transferRemaining,
       });
       toast.success(
         transferRemaining
-          ? `Panjar ${settleFor.number} settled — sisa ${fmtIDR(newRemaining)} disimpan sebagai carry-over untuk panjar berikutnya`
+          ? (settleTotal > 0
+              ? `Panjar ${settleFor.number} settled — sisa ${fmtIDR(newRemaining)} disimpan sebagai carry-over`
+              : `Panjar ${settleFor.number} ditutup — semua saldo (${fmtIDR(newRemaining)}) jadi carry-over untuk ${settleFor.recipient_name}`)
           : isFullSettle
           ? `Panjar ${settleFor.number} fully settled`
           : `Partial settle (${fmtIDR(settleTotal)}) berhasil. Sisa: ${fmtIDR(newRemaining)} — status tetap Open`
@@ -733,6 +736,14 @@ export default function PanjarKerja() {
                     <button type="button" data-testid="add-finance-row-btn" onClick={() => addRow("finance")} className="text-[11px] font-bold text-purple-700 hover:text-purple-900 inline-flex items-center gap-1"><Plus size={12}/> Baris Finance</button>
                   </div>
                 </div>
+                <div className="grid grid-cols-12 gap-2 items-center px-1 pb-1 text-[9px] uppercase tracking-wide font-bold text-slate-500">
+                  <div className="col-span-2">Target</div>
+                  <div className="col-span-3">Detail</div>
+                  <div className="col-span-2">Tgl Transaksi</div>
+                  <div className="col-span-2">Nominal</div>
+                  <div className="col-span-2">Deskripsi</div>
+                  <div className="col-span-1"></div>
+                </div>
                 <div className="space-y-2">
                   {breakdown.map((b, i) => {
                     const target = b.target || "awb";
@@ -788,11 +799,20 @@ export default function PanjarKerja() {
                             </div>
                           )}
                         </div>
-                        <div className="col-span-3">
-                          <Input data-testid={`breakdown-amount-${i}`} type="number" step="0.01" placeholder="Nominal (IDR)" value={b.amount} onChange={(e) => updateRow(i, "amount", e.target.value)}/>
+                        <div className="col-span-2">
+                          <Input
+                            data-testid={`breakdown-date-${i}`}
+                            type="date"
+                            title="Tanggal transaksi"
+                            value={b.transaction_date || ""}
+                            onChange={(e) => updateRow(i, "transaction_date", e.target.value)}
+                          />
                         </div>
-                        <div className="col-span-3">
-                          <Input data-testid={`breakdown-desc-${i}`} placeholder="Deskripsi (opsional)" value={b.description} onChange={(e) => updateRow(i, "description", e.target.value)}/>
+                        <div className="col-span-2">
+                          <Input data-testid={`breakdown-amount-${i}`} type="number" step="0.01" placeholder="Nominal" value={b.amount} onChange={(e) => updateRow(i, "amount", e.target.value)}/>
+                        </div>
+                        <div className="col-span-2">
+                          <Input data-testid={`breakdown-desc-${i}`} placeholder="Deskripsi" value={b.description} onChange={(e) => updateRow(i, "description", e.target.value)}/>
                         </div>
                         <div className="col-span-1 text-right">
                           {breakdown.length > 1 && (
@@ -877,7 +897,7 @@ export default function PanjarKerja() {
 
             <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
               <Button variant="secondary" type="button" onClick={() => setSettleFor(null)}>Batal</Button>
-              <Button data-testid="confirm-settle-panjar" variant="success" onClick={doSettle} disabled={settling || isOverSettle || settleTotal <= 0}>
+              <Button data-testid="confirm-settle-panjar" variant="success" onClick={doSettle} disabled={settling || isOverSettle || (settleTotal <= 0 && !transferRemaining)}>
                 {settling ? "Memproses..." : (transferRemaining ? "Settle + Transfer Sisa" : (isFullSettle ? "Settle (Final)" : "Settle (Partial)"))}
               </Button>
             </div>

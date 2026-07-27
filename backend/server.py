@@ -6801,6 +6801,7 @@ class CashAdvanceBreakdownItem(BaseModel):
     amount: float
     description: Optional[str] = None
     expense_category: Optional[str] = None  # required when target="finance" — name of category in db.expense_categories
+    transaction_date: Optional[str] = None  # YYYY-MM-DD; kalau kosong, pakai settle_date
 
 class CashAdvanceSettleIn(BaseModel):
     actual_amount: Optional[float] = None  # actual expense from the advance
@@ -6926,6 +6927,14 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
         # Each item: target="awb" (with awb_id) OR target="operation" (direct HPP) OR target="finance" (expense with category)
         for it in data.awb_breakdown:
             target = (it.target or ("operation" if not it.awb_id else "awb")).lower()
+            # Per-baris transaction date (opsional). Fallback ke settle_date nanti.
+            row_txn_date = None
+            if it.transaction_date:
+                try:
+                    y, m, d = [int(x) for x in it.transaction_date.split("-")]
+                    row_txn_date = datetime(y, m, d, tzinfo=timezone.utc)
+                except Exception:
+                    raise HTTPException(400, f"transaction_date '{it.transaction_date}' tidak valid (YYYY-MM-DD)")
             if target == "operation":
                 breakdown.append({
                     "target": "operation",
@@ -6936,6 +6945,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                     "expense_category": None,
                     "expense_account_code": None,
                     "expense_posting_type": None,
+                    "transaction_date": row_txn_date,
                 })
             elif target == "finance":
                 cat_name = (it.expense_category or "").strip()
@@ -6953,6 +6963,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                     "expense_category": cat["name"],
                     "expense_account_code": cat.get("account_code"),
                     "expense_posting_type": cat.get("posting_type", "expense"),
+                    "transaction_date": row_txn_date,
                 })
             else:
                 if not it.awb_id:
@@ -6969,6 +6980,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                     "expense_category": None,
                     "expense_account_code": None,
                     "expense_posting_type": None,
+                    "transaction_date": row_txn_date,
                 })
         total_breakdown_this_round = sum(b["amount"] for b in breakdown)
         actual = float(data.actual_amount if data.actual_amount is not None else total_breakdown_this_round)
@@ -7028,7 +7040,13 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
         "refund_amount": refund,
         "notes": (data.notes or "").strip() or None,
         "settled_by": user["id"],
-        "breakdown": [{**b, "awb_id": str(b["awb_id"]) if b.get("awb_id") else None} for b in breakdown] if breakdown else [],
+        "breakdown": [
+            {
+                **b,
+                "awb_id": str(b["awb_id"]) if b.get("awb_id") else None,
+                "transaction_date": b["transaction_date"].isoformat() if b.get("transaction_date") else None,
+            } for b in breakdown
+        ] if breakdown else [],
         "carry_over_applied": carry_over_applied,
         "transfer_remaining": transfer_this_time,
     }
@@ -7070,19 +7088,21 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
     finance_expense_amount = 0.0        # for journal split
     finance_expense_lines = {}          # account_code → total amount (aggregate per COA)
     for b in breakdown:
+        # Tanggal transaksi baris: pakai per-row kalau ada, fallback ke settle_date
+        row_date = b.get("transaction_date") or sd
         if b.get("target") == "operation":
             # Direct cost (Operation, no AWB) — journal DR 5102 / CR 1108. Handled below.
             pass
         elif b.get("target") == "finance":
             # Create fixed_costs entry (biar tampil di halaman Expenses & P&L)
-            period_m = sd.strftime("%Y-%m")
+            period_m = row_date.strftime("%Y-%m")
             fc_doc = {
                 "category": b["expense_category"],
                 "posting_type": b.get("expense_posting_type", "expense"),
                 "account_code": b.get("expense_account_code"),
                 "description": (b["description"] or f"Panjar {ca['number']} - {ca['recipient_name']}"),
                 "amount": b["amount"],
-                "expense_date": sd.strftime("%Y-%m-%d"),
+                "expense_date": row_date.strftime("%Y-%m-%d"),
                 "period_month": period_m,
                 "cash_account_code": cash_acc,
                 "source": "cash_advance_settle",
@@ -7109,6 +7129,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                 "cash_account_code": cash_acc,
                 "source": "cash_advance_settle",
                 "source_ref": cid,
+                "transaction_date": row_date,
                 "created_by": user["id"],
                 "created_at": sd,
             }
