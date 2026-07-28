@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
@@ -171,112 +171,228 @@ export default function HrPayroll() {
       loadPayrolls();
     } catch (e) { toast.error(errMsg(e)); }
   };
-  // ---- Export Simulasi ke Excel (format ala PT ABIRAMA MITRA PRATAMA) ----
-  const exportSimToExcel = () => {
+  // ---- Export Simulasi ke Excel (format PERSIS PT ABIRAMA MITRA PRATAMA) ----
+  const exportSimToExcel = async () => {
     if (!sim) return;
-    // Parse periode → nama bulan Indonesia
     const MONTH_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const MONTH_SHORT = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agt","Sep","Okt","Nov","Des"];
     const [yy, mm] = period.split("-");
-    const periodLabel = `${MONTH_ID[Number(mm)-1]} ${yy}`;
-    const wb = XLSX.utils.book_new();
-    const aoa = [];
-    // Header block
-    aoa.push([]);
-    aoa.push([null, "GAJI KARYAWAN"]);
-    aoa.push([null, "PT. ABIRAMA MITRA PRATAMA"]);
-    aoa.push([null, `BULAN : ${periodLabel}`]);
-    aoa.push([]);
-    // Header rows 6-7 (2 levels, merged)
-    aoa.push([
-      null,
-      "No", "Nama", "No. ID", "Posisi / Jabatan", "Mulai Kerja", "No. Rekening", "Bank",
-      "KOMPONEN GAJI", null,                                    // I-J merged
-      `TOTAL Hari Kerja @${periodLabel}`,                       // K
-      "KEHADIRAN", null, null, null, null,                      // L-P merged
-      "UANG MAKAN", "UANG LEMBUR", "TOTAL GAJI", "POTONGAN GAJI", "POTONGAN KASBON", "Take Home Pay",
-    ]);
-    aoa.push([
-      null,
-      null, null, null, null, null, null, null,
-      "Gaji Pokok", "Uang makan @Hari",                         // I, J
-      null,                                                     // K
-      "Hari Kerja", "Cuti", "Izin/Sakit", "Alpa", "TOTAL MASUK",// L, M, N, O, P
-      "PER HARI", null, null, null, null, "TOTAL TERIMA",
-    ]);
-    // Data rows start at row 8
-    let rowIdx = 8;
-    sim.slips.forEach((s, i) => {
-      aoa.push([
-        null,
-        i + 1,
-        s.employee_name,
-        s.employee_no || s.nik_id_no || "",
-        s.position || "",
-        s.join_date || "",
-        s.bank_account || "",
-        s.bank_type || "",
-        s.base_salary,                     // I: Gaji Pokok
-        s.meal_allowance_per_day,          // J: Uang Makan @Hari
-        s.working_days,                    // K: TOTAL Hari Kerja
-        s.working_days,                    // L: Hari Kerja (default = working_days)
-        0,                                 // M: Cuti (belum ada tracking terpisah, default 0)
-        s.hari_sakit + s.hari_izin,        // N: Izin/Sakit
-        s.hari_alfa,                       // O: Alpa (termasuk missing)
-        s.hari_hadir,                      // P: TOTAL MASUK (aktual Hadir)
-        s.meal_allowance_per_day,          // Q: UANG MAKAN PER HARI
-        s.lembur_total || 0,               // R: UANG LEMBUR
-        s.gross,                           // S: TOTAL GAJI
-        s.deduction_alfa || 0,             // T: POTONGAN GAJI (dari Alfa)
-        s.potongan_kasbon || 0,            // U: POTONGAN KASBON
-        s.net,                             // V: Take Home Pay
-      ]);
-      rowIdx++;
+    const monthIdx = Number(mm) - 1;
+    const periodLabel = `${MONTH_ID[monthIdx]} ${yy}`;
+    const shortLabel = `${MONTH_SHORT[monthIdx]} '${yy.slice(-2)}`;
+
+    // Styling constants (dari reference file)
+    const NUMFMT_ACCT = '_-* #,##0_-;\\-* #,##0_-;_-* "-"??_-';
+    const NUMFMT_DATE = '[$-409]dd\\-mmm\\-yy;@';
+    const COL_GRAY  = "FFD9D9D9";   // header abu-abu (theme 0 tint -0.15)
+    const COL_BLUE  = "FFDDEBF7";   // biru muda (theme 7 tint 0.8)
+    const COL_ROSE  = "FFFCE4D6";   // rose/orange muda (theme 8 tint 0.8) — KEHADIRAN
+    const COL_YEL   = "FFFFFF66";   // kuning muda (POTONGAN GAJI/KASBON)
+    const COL_YEL2  = "FFFFFF00";   // kuning terang (TOTAL row)
+    const COL_LIGHT = "FFF2F2F2";   // paling terang (Take Home Pay theme 0 tint -0.05)
+
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "AR-Cargo TMS";
+    const ws = wb.addWorksheet(`Salary ${shortLabel}`, {
+      views: [{ state: "frozen", ySplit: 7 }],
     });
-    // Total row
-    const startRow = 8;
-    const endRow = 7 + sim.slips.length;
-    const totalRow = [null, null, null, null, null, null, null, null,
-      { f: `SUM(I${startRow}:I${endRow})` },
-      null,
-      null,
-      null, null, null, null, null,
-      null,
-      { f: `SUM(R${startRow}:R${endRow})` },
-      { f: `SUM(S${startRow}:S${endRow})` },
-      { f: `SUM(T${startRow}:T${endRow})` },
-      { f: `SUM(U${startRow}:U${endRow})` },
-      { f: `SUM(V${startRow}:V${endRow})` },
+
+    // Column widths (dari reference)
+    ws.columns = [
+      { width: 1.6 },   // A (spacer)
+      { width: 4.5 },   // B  No
+      { width: 25.7 },  // C  Nama
+      { width: 8.9 },   // D  No. ID
+      { width: 20.3 },  // E  Posisi
+      { width: 12.4 },  // F  Mulai Kerja
+      { width: 16.1 },  // G  No. Rekening
+      { width: 8.6 },   // H  Bank
+      { width: 12 },    // I  Gaji Pokok
+      { width: 11.7 },  // J  Uang makan @Hari
+      { width: 10.7 },  // K  TOTAL Hari Kerja
+      { width: 8.3 },   // L  Hari Kerja
+      { width: 5.3 },   // M  Cuti
+      { width: 6.1 },   // N  Izin/Sakit
+      { width: 5.3 },   // O  Alpa
+      { width: 10 },    // P  TOTAL MASUK
+      { width: 13.7 },  // Q  UANG MAKAN/HARI
+      { width: 11 },    // R  UANG LEMBUR
+      { width: 12.7 },  // S  TOTAL GAJI
+      { width: 14 },    // T  POTONGAN GAJI
+      { width: 14 },    // U  POTONGAN KASBON
+      { width: 17.1 },  // V  Take Home Pay
     ];
-    aoa.push(totalRow);
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    // Column widths (A..V)
-    ws["!cols"] = [
-      { wch: 2 }, { wch: 4 }, { wch: 26 }, { wch: 12 }, { wch: 22 }, { wch: 12 },
-      { wch: 18 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 10 },
-      { wch: 8 }, { wch: 5 }, { wch: 8 }, { wch: 5 }, { wch: 8 },
-      { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 },
-    ];
+
+    // Row 2-4: header block PT
+    ws.getCell("B2").value = "GAJI KARYAWAN";
+    ws.getCell("B3").value = "PT. ABIRAMA MITRA PRATAMA";
+    ws.getCell("B4").value = `BULAN : ${periodLabel}`;
+    // Row 5: spacer (kosong)
+    ws.getRow(5).height = 5.25;
+
+    // Row 6-7: header tabel (merged)
+    ws.getRow(6).height = 24;
+    ws.getRow(7).height = 45;
+    // Level 1 (row 6)
+    ws.getCell("B6").value = "No";
+    ws.getCell("C6").value = "Nama";
+    ws.getCell("D6").value = "No. ID \n( NIK )";
+    ws.getCell("E6").value = "Posisi / Jabatan";
+    ws.getCell("F6").value = "Mulai Kerja";
+    ws.getCell("G6").value = "No. Rekening";
+    ws.getCell("H6").value = "Bank";
+    ws.getCell("I6").value = "KOMPONEN GAJI";
+    ws.getCell("K6").value = `TOTAL \nHari Kerja\n@${shortLabel}`;
+    ws.getCell("L6").value = "KEHADIRAN";
+    ws.getCell("Q6").value = "UANG\nMAKAN/HARI";
+    ws.getCell("R6").value = "UANG\nLEMBUR";
+    ws.getCell("S6").value = "TOTAL\nGAJI";
+    ws.getCell("T6").value = "POTONGAN\nGAJI";
+    ws.getCell("U6").value = "POTONGAN\nKASBON";
+    ws.getCell("V6").value = "Take Home Pay\nTOTAL TERIMA";
+    // Level 2 (row 7)
+    ws.getCell("I7").value = "Gaji Pokok";
+    ws.getCell("J7").value = "Uang makan @Hari";
+    ws.getCell("L7").value = "Hari Kerja";
+    ws.getCell("M7").value = "Cuti";
+    ws.getCell("N7").value = "Izin/\nSakit";
+    ws.getCell("O7").value = "Alpa";
+    ws.getCell("P7").value = "TOTAL MASUK";
+
     // Merges
-    ws["!merges"] = [
-      { s: { r: 5, c: 8 }, e: { r: 5, c: 9 } },   // I6:J6 KOMPONEN GAJI
-      { s: { r: 5, c: 11 }, e: { r: 5, c: 15 } }, // L6:P6 KEHADIRAN
-      { s: { r: 5, c: 16 }, e: { r: 6, c: 16 } }, // Q6:Q7 UANG MAKAN
-      { s: { r: 5, c: 17 }, e: { r: 6, c: 17 } }, // R6:R7 UANG LEMBUR
-      { s: { r: 5, c: 18 }, e: { r: 6, c: 18 } }, // S6:S7 TOTAL GAJI
-      { s: { r: 5, c: 19 }, e: { r: 6, c: 19 } }, // T6:T7 POTONGAN GAJI
-      { s: { r: 5, c: 20 }, e: { r: 6, c: 20 } }, // U6:U7 POTONGAN KASBON
-      { s: { r: 5, c: 21 }, e: { r: 6, c: 21 } }, // V6:V7 Take Home Pay
-      { s: { r: 5, c: 1 }, e: { r: 6, c: 1 } },   // B6:B7 No
-      { s: { r: 5, c: 2 }, e: { r: 6, c: 2 } },   // C6:C7 Nama
-      { s: { r: 5, c: 3 }, e: { r: 6, c: 3 } },   // D6:D7 No. ID
-      { s: { r: 5, c: 4 }, e: { r: 6, c: 4 } },   // E6:E7 Posisi
-      { s: { r: 5, c: 5 }, e: { r: 6, c: 5 } },   // F6:F7 Mulai Kerja
-      { s: { r: 5, c: 6 }, e: { r: 6, c: 6 } },   // G6:G7 No. Rekening
-      { s: { r: 5, c: 7 }, e: { r: 6, c: 7 } },   // H6:H7 Bank
-      { s: { r: 5, c: 10 }, e: { r: 6, c: 10 } }, // K6:K7 TOTAL Hari Kerja
+    const merges = [
+      "B6:B7","C6:C7","D6:D7","E6:E7","F6:F7","G6:G7","H6:H7",
+      "I6:J6","K6:K7","L6:P6","Q6:Q7","R6:R7","S6:S7","T6:T7","U6:U7","V6:V7",
+      "B5:H5",
     ];
-    XLSX.utils.book_append_sheet(wb, ws, `Salary ${periodLabel.split(" ")[0].slice(0,3)} ${yy.slice(-2)}`);
-    XLSX.writeFile(wb, `Gaji ${periodLabel}.xlsx`);
+    merges.forEach((m) => ws.mergeCells(m));
+
+    // Style helper
+    const setBg = (addr, argb) => {
+      ws.getCell(addr).fill = { type: "pattern", pattern: "solid", fgColor: { argb } };
+    };
+    const setBorder = (addr, style = "thin") => {
+      const b = { style };
+      ws.getCell(addr).border = { top: b, bottom: b, left: b, right: b };
+    };
+    const setHeader = (addr, bgColor) => {
+      const c = ws.getCell(addr);
+      c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+      setBg(addr, bgColor);
+      setBorder(addr, "thin");
+      c.font = { name: "Calibri", size: 11, bold: false };
+    };
+    // Apply header colors (row 6 + row 7 spans)
+    ["B6","C6","D6","E6","F6","G6","H6","I6","J6","K6"].forEach((a) => setHeader(a, COL_GRAY));
+    ["L6","M6","N6","O6","P6"].forEach((a) => setHeader(a, COL_ROSE));
+    ["Q6","R6","S6"].forEach((a) => setHeader(a, COL_BLUE));
+    ["T6","U6"].forEach((a) => setHeader(a, COL_YEL));
+    setHeader("V6", COL_LIGHT);
+    // Row 7 (sub-headers)
+    ["I7","J7"].forEach((a) => setHeader(a, COL_GRAY));
+    ["L7","M7","N7","O7","P7"].forEach((a) => setHeader(a, COL_ROSE));
+
+    // Data rows dimulai baris 8
+    const startRow = 8;
+    const slips = sim.slips;
+    slips.forEach((s, i) => {
+      const r = startRow + i;
+      const row = ws.getRow(r);
+      row.height = 22;
+      row.getCell(2).value = i + 1;
+      row.getCell(3).value = s.employee_name || "";
+      row.getCell(4).value = s.employee_no || "";
+      row.getCell(5).value = s.position || "";
+      // Mulai kerja: Date object jika ada, else string
+      if (s.join_date) {
+        const d = new Date(s.join_date);
+        if (!isNaN(d)) row.getCell(6).value = d;
+      }
+      row.getCell(7).value = s.bank_account || "";
+      row.getCell(8).value = s.bank_type || "";
+      row.getCell(9).value = Number(s.base_salary) || 0;      // I: Gaji Pokok
+      row.getCell(10).value = Number(s.meal_allowance_per_day) || 0;  // J: Uang makan @Hari
+      row.getCell(11).value = Number(s.working_days) || 0;    // K: TOTAL Hari Kerja
+      row.getCell(12).value = Number(s.working_days) || 0;    // L: Hari Kerja
+      row.getCell(13).value = 0;                              // M: Cuti (belum ada tracking)
+      row.getCell(14).value = Number(s.hari_sakit || 0) + Number(s.hari_izin || 0);  // N
+      row.getCell(15).value = Number(s.hari_alfa) || 0;       // O: Alpa
+      row.getCell(16).value = Number(s.hari_hadir) || 0;      // P: TOTAL MASUK
+      row.getCell(17).value = Number(s.meal_allowance_per_day) || 0;  // Q
+      row.getCell(18).value = Number(s.lembur_total) || 0;    // R
+      row.getCell(19).value = Number(s.gross) || 0;           // S
+      row.getCell(20).value = Number(s.deduction_alfa) || 0;  // T
+      row.getCell(21).value = Number(s.potongan_kasbon) || 0; // U
+      row.getCell(22).value = Number(s.net) || 0;             // V
+
+      // Format & border per cell dalam baris
+      const isLast = i === slips.length - 1;
+      const isFirst = i === 0;
+      for (let c = 2; c <= 22; c++) {
+        const cell = row.getCell(c);
+        // number formatting
+        if ([9,10,17,18,19,20,21,22].includes(c)) cell.numFmt = NUMFMT_ACCT;
+        else if ([11,12,13,14,15,16].includes(c)) cell.numFmt = NUMFMT_ACCT;
+        else if (c === 6) cell.numFmt = NUMFMT_DATE;
+        // alignment
+        if (c === 3) cell.alignment = { horizontal: "left", vertical: "middle", wrapText: true };
+        else cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+        // background rules
+        if ([20,21].includes(c)) setBg(row.getCell(c).address, COL_YEL);
+        // border: top = thin/hair, bottom = hair/thin (last row), sides = hair, outer sides thin
+        const top = isFirst ? "thin" : "hair";
+        const bottom = isLast ? "thin" : "hair";
+        const left = c === 2 ? "thin" : "hair";
+        const right = c === 22 ? "thin" : "hair";
+        cell.border = {
+          top: { style: top },
+          bottom: { style: bottom },
+          left: { style: left },
+          right: { style: right },
+        };
+      }
+    });
+
+    // TOTAL row
+    const endRow = startRow + slips.length - 1;
+    const totalRow = endRow + 1;
+    const trow = ws.getRow(totalRow);
+    trow.height = 25.5;
+    ws.mergeCells(`B${totalRow}:F${totalRow}`);
+    trow.getCell(2).value = "TOTAL";
+    // SUM formulas untuk kolom angka utama
+    trow.getCell(9).value  = { formula: `SUM(I${startRow}:I${endRow})` };
+    trow.getCell(17).value = { formula: `SUM(Q${startRow}:Q${endRow})` };
+    trow.getCell(18).value = { formula: `SUM(R${startRow}:R${endRow})` };
+    trow.getCell(19).value = { formula: `SUM(S${startRow}:S${endRow})` };
+    trow.getCell(20).value = { formula: `SUM(T${startRow}:T${endRow})` };
+    trow.getCell(21).value = { formula: `SUM(U${startRow}:U${endRow})` };
+    trow.getCell(22).value = { formula: `SUM(V${startRow}:V${endRow})` };
+    // Style TOTAL row (kuning terang + bold)
+    for (let c = 2; c <= 22; c++) {
+      const cell = trow.getCell(c);
+      cell.font = { name: "Calibri", size: 11, bold: true };
+      cell.alignment = { horizontal: c === 2 ? "center" : "center", vertical: "middle" };
+      setBg(cell.address, COL_YEL2);
+      cell.border = {
+        top: { style: "thin" }, bottom: { style: "thin" },
+        left: { style: c === 2 ? "thin" : "hair" },
+        right: { style: c === 22 ? "thin" : "hair" },
+      };
+      if ([9,17,18,19,20,21,22].includes(c)) cell.numFmt = NUMFMT_ACCT;
+    }
+
+    // Write & download
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Gaji ${periodLabel}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
     toast.success("File Excel simulasi ter-download");
   };
   const delPayroll = async (id) => {
