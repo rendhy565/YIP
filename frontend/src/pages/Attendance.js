@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
+import * as XLSX from "xlsx";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../components/ui";
 import { fmtDate, errMsg, currentMonth } from "../lib/utils";
@@ -90,15 +91,48 @@ export default function Attendance() {
   };
 
   const downloadTemplate = () => {
-    // CSV template (format A: id/nik/nama, tanggal, status)
-    const csv = "employee_id,nik,nama,tanggal,status,check_in,check_out,note\n,,Contoh Nama,2026-02-15,Hadir,08:30,17:30,\n,,Contoh Nama,2026-02-16,Alfa,,,\n";
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "template-absensi.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+    // XLSX template — bisa di-copas dari Excel lain
+    const header = ["employee_id", "nik", "nama", "tanggal", "status", "check_in", "check_out", "note"];
+    const sample = [
+      ["", "", "Contoh Nama", "2026-02-15", "Hadir", "08:30", "17:30", ""],
+      ["", "", "Contoh Nama", "2026-02-16", "Alfa", "", "", "Tanpa kabar"],
+      ["", "", "Contoh Nama", "2026-02-17", "Sakit", "", "", "Surat dokter"],
+    ];
+    const aoa = [header, ...sample];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // Kolom lebar biar rapi saat dibuka
+    ws["!cols"] = [
+      { wch: 14 }, { wch: 10 }, { wch: 20 }, { wch: 12 },
+      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 20 },
+    ];
+    // Format tanggal sebagai text supaya tidak diparse Excel jadi angka
+    for (let r = 1; r < aoa.length; r++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c: 3 })];
+      if (cell) cell.t = "s";
+    }
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Absensi");
+    // Sheet #2: petunjuk singkat
+    const guide = [
+      ["PETUNJUK PENGISIAN TEMPLATE ABSENSI"],
+      [""],
+      ["Kolom", "Wajib?", "Keterangan"],
+      ["employee_id", "Salah satu", "ID internal karyawan (dari sistem)"],
+      ["nik", "Salah satu", "NIK karyawan (kalau tidak pakai employee_id)"],
+      ["nama", "Salah satu", "Nama lengkap (fallback kalau NIK/ID kosong)"],
+      ["tanggal", "Wajib", "Format YYYY-MM-DD (contoh 2026-02-15)"],
+      ["status", "Wajib", "Hadir / Sakit / Izin / Alfa / Cuti / Libur"],
+      ["check_in", "Opsional", "Jam masuk HH:MM (contoh 08:30)"],
+      ["check_out", "Opsional", "Jam pulang HH:MM (contoh 17:30)"],
+      ["note", "Opsional", "Catatan tambahan"],
+      [""],
+      ["Tips:", "Boleh copy-paste dari Excel/Sheets lain — pastikan header persis sama."],
+    ];
+    const wsGuide = XLSX.utils.aoa_to_sheet(guide);
+    wsGuide["!cols"] = [{ wch: 16 }, { wch: 14 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, wsGuide, "Petunjuk");
+
+    XLSX.writeFile(wb, "template-absensi.xlsx");
   };
 
   // Summary counts
