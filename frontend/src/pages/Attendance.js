@@ -21,6 +21,35 @@ const DAYS_ID = [
   { key: "thu", label: "Kamis" }, { key: "fri", label: "Jumat" }, { key: "sat", label: "Sabtu" }, { key: "sun", label: "Minggu" },
 ];
 
+const MONTH_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+
+// Build 24 periode selector options (12 lalu + 12 depan) berdasarkan cutoff.
+function buildPeriodOptions(cutoffDay) {
+  const today = new Date();
+  const opts = [];
+  for (let offset = -12; offset <= 11; offset++) {
+    const d = new Date(today.getFullYear(), today.getMonth() + offset, 1);
+    const y = d.getFullYear();
+    const m = d.getMonth() + 1; // 1..12
+    const value = `${y}-${String(m).padStart(2, "0")}`;
+    const monthName = MONTH_ID[m - 1];
+    let label;
+    if (cutoffDay > 0) {
+      // Periode YYYY-MM = (cutoff+1) bulan itu s/d cutoff bulan berikut
+      const startDate = new Date(y, m - 1, cutoffDay + 1);
+      const endDate = new Date(y, m, cutoffDay);
+      // Clamp for calendar (e.g. cutoff = 31 in Feb)
+      // JS Date auto-normalises overflow, so use its output as-is
+      const fmt = (dt) => `${dt.getDate()} ${MONTH_ID[dt.getMonth()].slice(0,3)}`;
+      label = `${monthName} ${y}  (${fmt(startDate)} → ${fmt(endDate)} ${endDate.getFullYear() !== y ? endDate.getFullYear() : ""})`.trim();
+    } else {
+      label = `${monthName} ${y}`;
+    }
+    opts.push({ value, label });
+  }
+  return opts;
+}
+
 export default function Attendance() {
   const [emps, setEmps] = useState([]);
   const [rows, setRows] = useState([]);
@@ -306,7 +335,11 @@ export default function Attendance() {
             <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-1">
               Periode {cfg.payroll_cutoff_day > 0 && <span className="text-blue-700 normal-case font-medium">(cutoff tgl {cfg.payroll_cutoff_day})</span>}
             </label>
-            <Input data-testid="att-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40"/>
+            <Select data-testid="att-month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-72">
+              {buildPeriodOptions(Number(cfg.payroll_cutoff_day || 0)).map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </Select>
           </div>
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-1">Karyawan</label>
