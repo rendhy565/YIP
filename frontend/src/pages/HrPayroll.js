@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
+import * as XLSX from "xlsx";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye } from "lucide-react";
+import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye, FileSpreadsheet } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 const EMPTY_EMP = {
@@ -126,6 +127,80 @@ export default function HrPayroll() {
       setSim(null);
       loadPayrolls();
     } catch (e) { toast.error(errMsg(e)); }
+  };
+  // ---- Export Simulasi ke Excel ----
+  const exportSimToExcel = () => {
+    if (!sim) return;
+    const header = [
+      "No", "ID Karyawan", "Nama Karyawan", "Posisi",
+      "Hari Kerja", "Hadir", "Sakit", "Izin", "Alfa (Total)", "Alfa (Manual)", "Missing (→ Alfa)",
+      "Gaji Pokok", "Potongan Alfa", "Gaji Pokok Bersih",
+      "Uang Makan/Hari", "Uang Makan Total",
+      "Lembur (Jam)", "Lembur Total",
+      "Gross (Net)",
+    ];
+    const rows = sim.slips.map((s, i) => [
+      i + 1,
+      s.employee_no || "",
+      s.employee_name,
+      s.position || "",
+      s.working_days,
+      s.hari_hadir,
+      s.hari_sakit,
+      s.hari_izin,
+      s.hari_alfa,
+      s.hari_alfa_manual ?? "",
+      s.hari_missing_treated_alfa ?? 0,
+      s.base_salary,
+      s.deduction_alfa,
+      s.gaji_pokok_net,
+      s.meal_allowance_per_day,
+      s.uang_makan,
+      s.lembur_jam || 0,
+      s.lembur_total || 0,
+      s.gross,
+    ]);
+    // Total row
+    const sum = (k) => sim.slips.reduce((a, s) => a + (Number(s[k]) || 0), 0);
+    rows.push([
+      "", "", "TOTAL", "", "", "", "", "", "", "", "",
+      sum("base_salary"), sum("deduction_alfa"), sum("gaji_pokok_net"),
+      "", sum("uang_makan"),
+      sum("lembur_jam"), sum("lembur_total"),
+      sim.total_gross,
+    ]);
+    // Sheet 1: Slips
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    ws["!cols"] = [
+      { wch: 4 }, { wch: 12 }, { wch: 25 }, { wch: 18 },
+      { wch: 8 }, { wch: 7 }, { wch: 7 }, { wch: 7 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
+      { wch: 14 }, { wch: 14 }, { wch: 16 },
+      { wch: 14 }, { wch: 14 },
+      { wch: 10 }, { wch: 14 },
+      { wch: 16 },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, "Slip Payroll");
+    // Sheet 2: Meta
+    const meta = [
+      ["SIMULASI PAYROLL — PREVIEW"],
+      [""],
+      ["Periode", period],
+      ["Range Absensi", `${sim.period_start}  →  ${sim.period_end}`],
+      ["Hari Kerja", sim.working_days],
+      ["Jumlah Karyawan", sim.slips.length],
+      ["Total Gross", sim.total_gross],
+      ["Sudah Dijalankan?", sim.already_executed ? "YA (sudah ada payroll periode ini di DB)" : "Belum"],
+      ["Waktu Simulasi", sim.simulated_at || new Date().toISOString()],
+      [""],
+      ["Catatan:", "File ini adalah PREVIEW — belum diposting ke jurnal akuntansi."],
+      ["", "Untuk finalize: buka aplikasi → HR Payroll → klik Konfirmasi Jalankan."],
+    ];
+    const wsMeta = XLSX.utils.aoa_to_sheet(meta);
+    wsMeta["!cols"] = [{ wch: 22 }, { wch: 40 }];
+    XLSX.utils.book_append_sheet(wb, wsMeta, "Info");
+    XLSX.writeFile(wb, `simulasi-payroll-${period}.xlsx`);
+    toast.success("File Excel simulasi ter-download");
   };
   const delPayroll = async (id) => {
     if (!window.confirm("Hapus batch payroll? Jurnal terkait juga akan dihapus.")) return;
@@ -420,6 +495,9 @@ export default function HrPayroll() {
                 </div>
                 <div className="flex gap-2">
                   <Button variant="ghost" onClick={() => setSim(null)}><X size={13}/> Tutup Preview</Button>
+                  <Button variant="secondary" onClick={exportSimToExcel} data-testid="sim-export-excel">
+                    <FileSpreadsheet size={14}/> Export Excel
+                  </Button>
                   <Button variant="success" onClick={runFromSim} disabled={sim.already_executed} data-testid="sim-confirm-run">
                     <PlayCircle size={14}/> Konfirmasi Jalankan
                   </Button>
