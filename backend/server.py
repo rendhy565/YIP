@@ -4230,11 +4230,18 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     calc = await _calculate_payroll_slips(data.period_month)
     slips = calc["slips"]
     total_gross = calc["total_gross"]
+    total_kasbon = calc["total_kasbon"]
+    total_net = calc["total_net"]
     working_days = calc["working_days"]
     period_start = calc["period_start"]
     period_end = calc["period_end"]
 
     cash_acc = data.cash_account_code or "1101"
+    kasbon_acc = "1109"   # Piutang Karyawan / Kasbon (default)
+    # Snapshot kasbon docs untuk periode ini (untuk audit trail di payroll doc)
+    kasbon_snapshot = await db.payroll_kasbon.find({"period_month": data.period_month}).to_list(2000)
+    kasbon_snapshot = [serialize(k) for k in kasbon_snapshot]
+
     payroll_doc = {
         "period_month": data.period_month,
         "period_start": period_start.isoformat(),
@@ -4242,16 +4249,21 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         "working_days": working_days,
         "slips": slips,
         "total_gross": round(total_gross, 2),
+        "total_kasbon": round(total_kasbon, 2),
+        "total_net": round(total_net, 2),
+        "kasbon_snapshot": kasbon_snapshot,
         "cash_account_code": cash_acc,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.payroll.insert_one(payroll_doc)
-    # Post journal: Dr 6101 Beban Gaji / Cr Kas
+    # Journal: Dr 6101 Beban Gaji (gross) / Cr Kas (net) / Cr Piutang Kasbon (kasbon)
     lines = [
-        {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Payroll {data.period_month}"},
-        {"account_code": cash_acc, "debit": 0, "credit": total_gross, "memo": "Bayar gaji"},
+        {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Beban Gaji {data.period_month}"},
+        {"account_code": cash_acc, "debit": 0, "credit": total_net, "memo": f"Bayar gaji netto {data.period_month}"},
     ]
+    if total_kasbon > 0:
+        lines.append({"account_code": kasbon_acc, "debit": 0, "credit": total_kasbon, "memo": "Potongan kasbon karyawan"})
     try:
         await post_journal(
             date=datetime.now(timezone.utc),
@@ -4262,6 +4274,9 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         )
     except HTTPException:
         pass
+    # Konsumsi kasbon: hapus dari koleksi temporary
+    if kasbon_snapshot:
+        await db.payroll_kasbon.delete_many({"period_month": data.period_month})
     return serialize(await db.payroll.find_one({"_id": r.inserted_id}))
 
 
@@ -4315,6 +4330,17 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         eid = str(a.get("employee_id"))
         att_by_emp.setdefault(eid, []).append(a)
 
+    # Load kasbon pending untuk periode ini (index by employee_id)
+    kasbon_docs = await db.payroll_kasbon.find({"period_month": period_month}).to_list(2000)
+    kasbon_by_emp = {}
+    for k in kasbon_docs:
+        eid = str(k.get("employee_id"))
+        kasbon_by_emp.setdefault(eid, []).append({
+            "id": str(k.get("_id")),
+            "amount": float(k.get("amount", 0)),
+            "note": k.get("note"),
+        })
+
     slips = []
     total_gross = 0.0
     for e in employees:
@@ -4353,6 +4379,10 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
                 lembur_jam += oh
         lembur_total = round(lembur_total, 2)
         gross = gaji_pokok_net + uang_makan + lembur_total
+        # Kasbon deduction dari database temporary
+        kasbon_items = kasbon_by_emp.get(emp_id, [])
+        potongan_kasbon = round(sum(k["amount"] for k in kasbon_items), 2)
+        net = gross - potongan_kasbon
 
         slips.append({
             "employee_id": emp_id,
@@ -4375,13 +4405,22 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
             "lembur_jam": lembur_jam,
             "lembur_total": lembur_total,
             "gross": gross,
-            "net": gross,
+            "potongan_kasbon": potongan_kasbon,
+            "kasbon_items": kasbon_items,
+            "net": net,
+            # Info tambahan dari master karyawan (untuk Excel export ala PT)
+            "nik_id_no": e.get("employee_no") or e.get("nik"),
+            "join_date": e.get("join_date"),
+            "bank_type": e.get("bank_type"),
+            "bank_account": e.get("bank_account"),
         })
-        total_gross += gross
+        total_gross += net
 
     return {
         "slips": slips,
-        "total_gross": round(total_gross, 2),
+        "total_gross": round(sum(s["gross"] for s in slips), 2),
+        "total_kasbon": round(sum(s["potongan_kasbon"] for s in slips), 2),
+        "total_net": round(sum(s["net"] for s in slips), 2),
         "working_days": working_days,
         "period_start": period_start,
         "period_end": period_end,
@@ -4402,6 +4441,8 @@ async def simulate_payroll(data: PayrollRunIn, user: dict = Depends(require_feat
         "working_days": calc["working_days"],
         "slips": calc["slips"],
         "total_gross": calc["total_gross"],
+        "total_kasbon": calc["total_kasbon"],
+        "total_net": calc["total_net"],
         "already_executed": bool(already),
         "simulated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -4415,6 +4456,52 @@ async def delete_payroll(pid: str, user: dict = Depends(require_feature("hr"))):
         raise HTTPException(404, "Payroll tidak ditemukan")
     await db.journal_entries.delete_many({"reference_type": "payroll", "reference_id": pid})
     await db.payroll.delete_one({"_id": _oid(pid)})
+    return {"ok": True}
+
+
+# ===========================================================================
+# PAYROLL KASBON (temporary deduction, di-consume saat run_payroll)
+# ===========================================================================
+class KasbonIn(BaseModel):
+    employee_id: str
+    period_month: str    # YYYY-MM
+    amount: float
+    note: Optional[str] = None
+
+
+@app.get("/api/hr/payroll/kasbon")
+async def list_kasbon(period_month: Optional[str] = None, user: dict = Depends(require_feature("hr"))):
+    q = {}
+    if period_month:
+        q["period_month"] = period_month
+    docs = await db.payroll_kasbon.find(q).sort("created_at", -1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+
+@app.post("/api/hr/payroll/kasbon")
+async def create_kasbon(data: KasbonIn, user: dict = Depends(require_feature("hr"))):
+    emp = await db.employees.find_one({"_id": _oid(data.employee_id)})
+    if not emp:
+        raise HTTPException(404, "Karyawan tidak ditemukan")
+    if not data.amount or data.amount <= 0:
+        raise HTTPException(400, "Jumlah kasbon harus > 0")
+    doc = {
+        "employee_id": data.employee_id,
+        "employee_name": emp.get("full_name"),
+        "employee_no": emp.get("employee_no"),
+        "period_month": data.period_month,
+        "amount": float(data.amount),
+        "note": (data.note or "").strip() or None,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.payroll_kasbon.insert_one(doc)
+    return serialize(await db.payroll_kasbon.find_one({"_id": r.inserted_id}))
+
+
+@app.delete("/api/hr/payroll/kasbon/{kid}")
+async def delete_kasbon(kid: str, user: dict = Depends(require_feature("hr"))):
+    await db.payroll_kasbon.delete_one({"_id": _oid(kid)})
     return {"ok": True}
 
 # ---------------------------------------------------------------------------

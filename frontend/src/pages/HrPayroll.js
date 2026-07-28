@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye, FileSpreadsheet } from "lucide-react";
+import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye, FileSpreadsheet, Wallet } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 const EMPTY_EMP = {
@@ -110,6 +110,47 @@ export default function HrPayroll() {
   // ---- SIMULATE payroll (read-only preview) ----
   const [sim, setSim] = useState(null);
   const [simLoading, setSimLoading] = useState(false);
+  // ---- KASBON temporary deduction ----
+  const [showKasbon, setShowKasbon] = useState(false);
+  const [kasbonList, setKasbonList] = useState([]);
+  const [kasbonForm, setKasbonForm] = useState({ employee_id: "", amount: "", note: "" });
+  const [kasbonSaving, setKasbonSaving] = useState(false);
+  const loadKasbon = async () => {
+    try {
+      const r = await api.get("/hr/payroll/kasbon", { params: { period_month: period } });
+      setKasbonList(r.data || []);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const openKasbonModal = () => { setShowKasbon(true); loadKasbon(); };
+  const addKasbon = async () => {
+    if (!kasbonForm.employee_id) return toast.error("Pilih karyawan");
+    const amt = Number(kasbonForm.amount);
+    if (!amt || amt <= 0) return toast.error("Jumlah harus > 0");
+    setKasbonSaving(true);
+    try {
+      await api.post("/hr/payroll/kasbon", {
+        employee_id: kasbonForm.employee_id,
+        period_month: period,
+        amount: amt,
+        note: kasbonForm.note || null,
+      });
+      toast.success("Kasbon ditambahkan");
+      setKasbonForm({ employee_id: "", amount: "", note: "" });
+      loadKasbon();
+      // Auto refresh simulasi supaya angka net terupdate
+      if (sim) simulate();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setKasbonSaving(false); }
+  };
+  const delKasbon = async (id) => {
+    if (!window.confirm("Hapus entry kasbon ini?")) return;
+    try {
+      await api.delete(`/hr/payroll/kasbon/${id}`);
+      toast.success("Terhapus");
+      loadKasbon();
+      if (sim) simulate();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
   const simulate = async () => {
     setSimLoading(true);
     setSim(null);
@@ -130,79 +171,112 @@ export default function HrPayroll() {
       loadPayrolls();
     } catch (e) { toast.error(errMsg(e)); }
   };
-  // ---- Export Simulasi ke Excel ----
+  // ---- Export Simulasi ke Excel (format ala PT ABIRAMA MITRA PRATAMA) ----
   const exportSimToExcel = () => {
     if (!sim) return;
-    const header = [
-      "No", "ID Karyawan", "Nama Karyawan", "Posisi", "Lumpsum",
-      "Hari Kerja", "Hadir", "Sakit", "Izin", "Alfa (Total)", "Alfa (Manual)", "Missing (→ Alfa)",
-      "Gaji Pokok", "Potongan Alfa", "Gaji Pokok Bersih",
-      "Uang Makan/Hari", "Uang Makan Total",
-      "Lembur (Jam)", "Lembur Total",
-      "Gross (Net)",
-    ];
-    const rows = sim.slips.map((s, i) => [
-      i + 1,
-      s.employee_no || "",
-      s.employee_name,
-      s.position || "",
-      s.gaji_lumpsum ? "YA" : "",
-      s.working_days,
-      s.hari_hadir,
-      s.hari_sakit,
-      s.hari_izin,
-      s.hari_alfa,
-      s.hari_alfa_manual ?? "",
-      s.hari_missing_treated_alfa ?? 0,
-      s.base_salary,
-      s.deduction_alfa,
-      s.gaji_pokok_net,
-      s.meal_allowance_per_day,
-      s.uang_makan,
-      s.lembur_jam || 0,
-      s.lembur_total || 0,
-      s.gross,
-    ]);
-    // Total row
-    const sum = (k) => sim.slips.reduce((a, s) => a + (Number(s[k]) || 0), 0);
-    rows.push([
-      "", "", "TOTAL", "", "", "", "", "", "", "", "", "",
-      sum("base_salary"), sum("deduction_alfa"), sum("gaji_pokok_net"),
-      "", sum("uang_makan"),
-      sum("lembur_jam"), sum("lembur_total"),
-      sim.total_gross,
-    ]);
-    // Sheet 1: Slips
+    // Parse periode → nama bulan Indonesia
+    const MONTH_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+    const [yy, mm] = period.split("-");
+    const periodLabel = `${MONTH_ID[Number(mm)-1]} ${yy}`;
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
+    const aoa = [];
+    // Header block
+    aoa.push([]);
+    aoa.push([null, "GAJI KARYAWAN"]);
+    aoa.push([null, "PT. ABIRAMA MITRA PRATAMA"]);
+    aoa.push([null, `BULAN : ${periodLabel}`]);
+    aoa.push([]);
+    // Header rows 6-7 (2 levels, merged)
+    aoa.push([
+      null,
+      "No", "Nama", "No. ID", "Posisi / Jabatan", "Mulai Kerja", "No. Rekening", "Bank",
+      "KOMPONEN GAJI", null,                                    // I-J merged
+      `TOTAL Hari Kerja @${periodLabel}`,                       // K
+      "KEHADIRAN", null, null, null, null,                      // L-P merged
+      "UANG MAKAN", "UANG LEMBUR", "TOTAL GAJI", "POTONGAN GAJI", "POTONGAN KASBON", "Take Home Pay",
+    ]);
+    aoa.push([
+      null,
+      null, null, null, null, null, null, null,
+      "Gaji Pokok", "Uang makan @Hari",                         // I, J
+      null,                                                     // K
+      "Hari Kerja", "Cuti", "Izin/Sakit", "Alpa", "TOTAL MASUK",// L, M, N, O, P
+      "PER HARI", null, null, null, null, "TOTAL TERIMA",
+    ]);
+    // Data rows start at row 8
+    let rowIdx = 8;
+    sim.slips.forEach((s, i) => {
+      aoa.push([
+        null,
+        i + 1,
+        s.employee_name,
+        s.employee_no || s.nik_id_no || "",
+        s.position || "",
+        s.join_date || "",
+        s.bank_account || "",
+        s.bank_type || "",
+        s.base_salary,                     // I: Gaji Pokok
+        s.meal_allowance_per_day,          // J: Uang Makan @Hari
+        s.working_days,                    // K: TOTAL Hari Kerja
+        s.working_days,                    // L: Hari Kerja (default = working_days)
+        0,                                 // M: Cuti (belum ada tracking terpisah, default 0)
+        s.hari_sakit + s.hari_izin,        // N: Izin/Sakit
+        s.hari_alfa,                       // O: Alpa (termasuk missing)
+        s.hari_hadir,                      // P: TOTAL MASUK (aktual Hadir)
+        s.meal_allowance_per_day,          // Q: UANG MAKAN PER HARI
+        s.lembur_total || 0,               // R: UANG LEMBUR
+        s.gross,                           // S: TOTAL GAJI
+        s.deduction_alfa || 0,             // T: POTONGAN GAJI (dari Alfa)
+        s.potongan_kasbon || 0,            // U: POTONGAN KASBON
+        s.net,                             // V: Take Home Pay
+      ]);
+      rowIdx++;
+    });
+    // Total row
+    const startRow = 8;
+    const endRow = 7 + sim.slips.length;
+    const totalRow = [null, null, null, null, null, null, null, null,
+      { f: `SUM(I${startRow}:I${endRow})` },
+      null,
+      null,
+      null, null, null, null, null,
+      null,
+      { f: `SUM(R${startRow}:R${endRow})` },
+      { f: `SUM(S${startRow}:S${endRow})` },
+      { f: `SUM(T${startRow}:T${endRow})` },
+      { f: `SUM(U${startRow}:U${endRow})` },
+      { f: `SUM(V${startRow}:V${endRow})` },
+    ];
+    aoa.push(totalRow);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // Column widths (A..V)
     ws["!cols"] = [
-      { wch: 4 }, { wch: 12 }, { wch: 25 }, { wch: 18 }, { wch: 9 },
-      { wch: 8 }, { wch: 7 }, { wch: 7 }, { wch: 7 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
-      { wch: 14 }, { wch: 14 }, { wch: 16 },
-      { wch: 14 }, { wch: 14 },
-      { wch: 10 }, { wch: 14 },
-      { wch: 16 },
+      { wch: 2 }, { wch: 4 }, { wch: 26 }, { wch: 12 }, { wch: 22 }, { wch: 12 },
+      { wch: 18 }, { wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 10 },
+      { wch: 8 }, { wch: 5 }, { wch: 8 }, { wch: 5 }, { wch: 8 },
+      { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 16 },
     ];
-    XLSX.utils.book_append_sheet(wb, ws, "Slip Payroll");
-    // Sheet 2: Meta
-    const meta = [
-      ["SIMULASI PAYROLL — PREVIEW"],
-      [""],
-      ["Periode", period],
-      ["Range Absensi", `${sim.period_start}  →  ${sim.period_end}`],
-      ["Hari Kerja", sim.working_days],
-      ["Jumlah Karyawan", sim.slips.length],
-      ["Total Gross", sim.total_gross],
-      ["Sudah Dijalankan?", sim.already_executed ? "YA (sudah ada payroll periode ini di DB)" : "Belum"],
-      ["Waktu Simulasi", sim.simulated_at || new Date().toISOString()],
-      [""],
-      ["Catatan:", "File ini adalah PREVIEW — belum diposting ke jurnal akuntansi."],
-      ["", "Untuk finalize: buka aplikasi → HR Payroll → klik Konfirmasi Jalankan."],
+    // Merges
+    ws["!merges"] = [
+      { s: { r: 5, c: 8 }, e: { r: 5, c: 9 } },   // I6:J6 KOMPONEN GAJI
+      { s: { r: 5, c: 11 }, e: { r: 5, c: 15 } }, // L6:P6 KEHADIRAN
+      { s: { r: 5, c: 16 }, e: { r: 6, c: 16 } }, // Q6:Q7 UANG MAKAN
+      { s: { r: 5, c: 17 }, e: { r: 6, c: 17 } }, // R6:R7 UANG LEMBUR
+      { s: { r: 5, c: 18 }, e: { r: 6, c: 18 } }, // S6:S7 TOTAL GAJI
+      { s: { r: 5, c: 19 }, e: { r: 6, c: 19 } }, // T6:T7 POTONGAN GAJI
+      { s: { r: 5, c: 20 }, e: { r: 6, c: 20 } }, // U6:U7 POTONGAN KASBON
+      { s: { r: 5, c: 21 }, e: { r: 6, c: 21 } }, // V6:V7 Take Home Pay
+      { s: { r: 5, c: 1 }, e: { r: 6, c: 1 } },   // B6:B7 No
+      { s: { r: 5, c: 2 }, e: { r: 6, c: 2 } },   // C6:C7 Nama
+      { s: { r: 5, c: 3 }, e: { r: 6, c: 3 } },   // D6:D7 No. ID
+      { s: { r: 5, c: 4 }, e: { r: 6, c: 4 } },   // E6:E7 Posisi
+      { s: { r: 5, c: 5 }, e: { r: 6, c: 5 } },   // F6:F7 Mulai Kerja
+      { s: { r: 5, c: 6 }, e: { r: 6, c: 6 } },   // G6:G7 No. Rekening
+      { s: { r: 5, c: 7 }, e: { r: 6, c: 7 } },   // H6:H7 Bank
+      { s: { r: 5, c: 10 }, e: { r: 6, c: 10 } }, // K6:K7 TOTAL Hari Kerja
     ];
-    const wsMeta = XLSX.utils.aoa_to_sheet(meta);
-    wsMeta["!cols"] = [{ wch: 22 }, { wch: 40 }];
-    XLSX.utils.book_append_sheet(wb, wsMeta, "Info");
-    XLSX.writeFile(wb, `simulasi-payroll-${period}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, `Salary ${periodLabel.split(" ")[0].slice(0,3)} ${yy.slice(-2)}`);
+    XLSX.writeFile(wb, `Gaji ${periodLabel}.xlsx`);
     toast.success("File Excel simulasi ter-download");
   };
   const delPayroll = async (id) => {
@@ -514,14 +588,19 @@ export default function HrPayroll() {
                     Periode: <span className="font-mono font-bold">{sim.period_start} → {sim.period_end}</span>
                     {" · "}Hari kerja: <b>{sim.working_days}</b>
                     {" · "}Karyawan: <b>{sim.slips.length}</b>
-                    {" · "}Total gross: <b>{fmtIDR(sim.total_gross)}</b>
+                    {" · "}Gross: <b>{fmtIDR(sim.total_gross)}</b>
+                    {(sim.total_kasbon || 0) > 0 && <> {" · "}Kasbon: <b className="text-rose-700">−{fmtIDR(sim.total_kasbon)}</b></>}
+                    {" · "}<span className="text-emerald-800">Net: <b>{fmtIDR(sim.total_net)}</b></span>
                   </div>
                   {sim.already_executed && (
                     <div className="text-xs text-rose-700 font-bold mt-1">⚠️ Periode ini SUDAH pernah dijalankan. Hapus dulu payroll lama sebelum re-run.</div>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <Button variant="ghost" onClick={() => setSim(null)}><X size={13}/> Tutup Preview</Button>
+                  <Button variant="secondary" onClick={openKasbonModal} data-testid="sim-kasbon-btn">
+                    <Wallet size={14}/> Kasbon{sim.total_kasbon > 0 ? ` (${fmtIDR(sim.total_kasbon)})` : ""}
+                  </Button>
                   <Button variant="secondary" onClick={exportSimToExcel} data-testid="sim-export-excel">
                     <FileSpreadsheet size={14}/> Export Excel
                   </Button>
@@ -540,7 +619,9 @@ export default function HrPayroll() {
                     <Th className="text-right">Gaji Pokok</Th>
                     <Th className="text-right">Uang Makan</Th>
                     <Th className="text-right">Lembur</Th>
-                    <Th className="text-right">Gross (Net)</Th>
+                    <Th className="text-right">Gross</Th>
+                    <Th className="text-right">Kasbon</Th>
+                    <Th className="text-right">Take Home</Th>
                   </tr></thead>
                   <tbody>
                     {sim.slips.map((s, i) => (
@@ -570,12 +651,20 @@ export default function HrPayroll() {
                             ? <span>{fmtIDR(s.lembur_total)}<div className="text-[9px] text-slate-500">{s.lembur_jam}j</div></span>
                             : <span className="text-slate-400">-</span>}
                         </Td>
-                        <Td className="text-right font-mono font-bold">{fmtIDR(s.gross)}</Td>
+                        <Td className="text-right font-mono">{fmtIDR(s.gross)}</Td>
+                        <Td className="text-right font-mono">
+                          {(s.potongan_kasbon || 0) > 0
+                            ? <span className="text-rose-700">−{fmtIDR(s.potongan_kasbon)}</span>
+                            : <span className="text-slate-400">-</span>}
+                        </Td>
+                        <Td className="text-right font-mono font-bold text-emerald-900">{fmtIDR(s.net)}</Td>
                       </tr>
                     ))}
                     <tr className="bg-blue-100 font-bold">
-                      <Td colSpan={7} className="text-right">TOTAL GROSS</Td>
+                      <Td colSpan={7} className="text-right">TOTAL</Td>
                       <Td className="text-right font-mono">{fmtIDR(sim.total_gross)}</Td>
+                      <Td className="text-right font-mono text-rose-700">{(sim.total_kasbon || 0) > 0 ? `−${fmtIDR(sim.total_kasbon)}` : "-"}</Td>
+                      <Td className="text-right font-mono text-emerald-900">{fmtIDR(sim.total_net)}</Td>
                     </tr>
                   </tbody>
                 </Table>
@@ -625,6 +714,89 @@ export default function HrPayroll() {
             </div>
           ))}
         </Card>
+      )}
+
+      {/* Kasbon Modal */}
+      {showKasbon && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="kasbon-modal">
+          <Card className="w-full max-w-2xl p-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-heading font-bold text-lg flex items-center gap-2">
+                <Wallet size={18}/> Kasbon Karyawan — Periode {period}
+              </h3>
+              <button onClick={() => setShowKasbon(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              Kasbon tersimpan sebagai <b>potongan sementara</b>. Saat Konfirmasi Jalankan payroll, kasbon akan <b>otomatis menjadi pemotong gaji</b> dan hilang dari list ini.
+            </p>
+            {/* Form tambah kasbon */}
+            <div className="border border-slate-200 rounded p-3 bg-slate-50/50 mb-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
+                <div>
+                  <Label>Karyawan</Label>
+                  <Select value={kasbonForm.employee_id} onChange={(e) => setKasbonForm({ ...kasbonForm, employee_id: e.target.value })} data-testid="kasbon-emp">
+                    <option value="">— Pilih karyawan —</option>
+                    {emps.filter((e) => e.active !== false).map((e) => (
+                      <option key={e.id} value={e.id}>{e.full_name}{e.employee_no ? ` (${e.employee_no})` : ""}</option>
+                    ))}
+                  </Select>
+                </div>
+                <div>
+                  <Label>Jumlah (Rp)</Label>
+                  <Input type="number" min="0" value={kasbonForm.amount} onChange={(e) => setKasbonForm({ ...kasbonForm, amount: e.target.value })} placeholder="500000" data-testid="kasbon-amount"/>
+                </div>
+                <div>
+                  <Label>Catatan (opsional)</Label>
+                  <Input value={kasbonForm.note} onChange={(e) => setKasbonForm({ ...kasbonForm, note: e.target.value })} placeholder="Mis. Kasbon minggu ke-2"/>
+                </div>
+              </div>
+              <div className="flex justify-end mt-2">
+                <Button onClick={addKasbon} disabled={kasbonSaving} data-testid="kasbon-add"><Plus size={13}/> {kasbonSaving ? "Menyimpan..." : "Tambah Kasbon"}</Button>
+              </div>
+            </div>
+            {/* List existing kasbon */}
+            <div className="border border-slate-200 rounded overflow-hidden">
+              <Table>
+                <thead><tr>
+                  <Th>Karyawan</Th>
+                  <Th>Catatan</Th>
+                  <Th className="text-right">Jumlah</Th>
+                  <Th className="text-right w-16">Aksi</Th>
+                </tr></thead>
+                <tbody>
+                  {kasbonList.length === 0 && (
+                    <tr><Td colSpan={4} className="text-center text-slate-400 italic py-4">Belum ada kasbon untuk periode ini</Td></tr>
+                  )}
+                  {kasbonList.map((k) => (
+                    <tr key={k.id} data-testid={`kasbon-row-${k.id}`}>
+                      <Td className="font-semibold">
+                        {k.employee_name}
+                        {k.employee_no && <div className="text-[10px] text-slate-500 font-mono">{k.employee_no}</div>}
+                      </Td>
+                      <Td className="text-xs text-slate-600">{k.note || "-"}</Td>
+                      <Td className="text-right font-mono text-rose-700">−{fmtIDR(k.amount)}</Td>
+                      <Td className="text-right">
+                        <Button variant="danger" onClick={() => delKasbon(k.id)} data-testid={`kasbon-del-${k.id}`}>
+                          <Trash2 size={12}/>
+                        </Button>
+                      </Td>
+                    </tr>
+                  ))}
+                  {kasbonList.length > 0 && (
+                    <tr className="bg-slate-100 font-bold">
+                      <Td colSpan={2} className="text-right">TOTAL</Td>
+                      <Td className="text-right font-mono text-rose-700">−{fmtIDR(kasbonList.reduce((a, k) => a + Number(k.amount || 0), 0))}</Td>
+                      <Td></Td>
+                    </tr>
+                  )}
+                </tbody>
+              </Table>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <Button variant="secondary" onClick={() => setShowKasbon(false)}>Selesai</Button>
+            </div>
+          </Card>
+        </div>
       )}
     </div>
   );
