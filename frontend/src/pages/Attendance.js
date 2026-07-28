@@ -33,10 +33,13 @@ export default function Attendance() {
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
   const [form, setForm] = useState({ employee_id: "", date: "", status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 });
+  // Selection for bulk delete
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   // ---- Attendance config + Public holidays ----
   const [showSettings, setShowSettings] = useState(false);
-  const [cfg, setCfg] = useState({ work_days: ["mon","tue","wed","thu","fri"], work_hour_in: "08:30", work_hour_out: "17:30", weekend_status: "Off", holiday_status: "Libur", auto_detect_on_import: true, work_schedule: {}, late_threshold_minutes: 5 });
+  const [cfg, setCfg] = useState({ work_days: ["mon","tue","wed","thu","fri"], work_hour_in: "08:30", work_hour_out: "17:30", weekend_status: "Off", holiday_status: "Libur", auto_detect_on_import: true, work_schedule: {}, late_threshold_minutes: 5, payroll_cutoff_day: 25 });
   const [holidays, setHolidays] = useState([]);
   const [newHoliday, setNewHoliday] = useState({ date: "", name: "", note: "" });
   const [savingCfg, setSavingCfg] = useState(false);
@@ -131,6 +134,10 @@ export default function Attendance() {
   }, [month, empFilter, emps]);
 
   useEffect(() => { load(); }, [load]);
+  // Load config on mount so cutoff label & filter work correctly
+  useEffect(() => {
+    api.get("/hr/attendance-config").then((r) => setCfg((c) => ({ ...c, ...r.data }))).catch(() => {});
+  }, []);
 
   const empName = (id) => {
     const e = emps.find((x) => x.id === id);
@@ -181,6 +188,37 @@ export default function Attendance() {
     try { await api.delete(`/hr/attendance/${id}`); toast.success("Terhapus"); load(); }
     catch (e) { toast.error(errMsg(e)); }
   };
+
+  // Bulk selection helpers
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    if (selectedIds.size === rows.length && rows.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(rows.map((r) => r.id)));
+    }
+  };
+  const clearSelection = () => setSelectedIds(new Set());
+  const bulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Hapus ${selectedIds.size} baris absensi terpilih? Aksi ini tidak dapat dibatalkan.`)) return;
+    setDeleting(true);
+    try {
+      const r = await api.post("/hr/attendance/bulk-delete", { ids: Array.from(selectedIds) });
+      toast.success(`${r.data.deleted} baris terhapus`);
+      clearSelection();
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setDeleting(false); }
+  };
+  // Reset selection ketika data reload (setelah filter change)
+  useEffect(() => { setSelectedIds(new Set()); }, [rows.length, month, empFilter]);
 
   const handleImport = async (e) => {
     const file = e.target.files?.[0];
@@ -265,7 +303,9 @@ export default function Attendance() {
       <Card className="p-4">
         <div className="flex flex-wrap items-end gap-3">
           <div>
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-1">Periode Bulan</label>
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-600 mb-1">
+              Periode {cfg.payroll_cutoff_day > 0 && <span className="text-blue-700 normal-case font-medium">(cutoff tgl {cfg.payroll_cutoff_day})</span>}
+            </label>
             <Input data-testid="att-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40"/>
           </div>
           <div>
@@ -285,6 +325,11 @@ export default function Attendance() {
           <Button variant="secondary" onClick={() => setShowImport(true)} data-testid="att-import-btn">
             <Upload size={14}/> Import
           </Button>
+          {selectedIds.size > 0 && (
+            <Button variant="danger" onClick={bulkDelete} disabled={deleting} data-testid="att-bulk-delete-btn">
+              <Trash2 size={14}/> Hapus Terpilih ({selectedIds.size})
+            </Button>
+          )}
           <Button onClick={() => { setEditingId(null); setShowAdd(true); setForm({ employee_id: "", date: `${month}-01`, status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 }); }} data-testid="att-add-btn">
             <Plus size={14}/> Tambah
           </Button>
@@ -316,6 +361,16 @@ export default function Attendance() {
         ) : (
           <Table>
             <thead><tr>
+              <Th className="w-8">
+                <input
+                  type="checkbox"
+                  data-testid="att-select-all"
+                  checked={rows.length > 0 && selectedIds.size === rows.length}
+                  ref={(el) => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < rows.length; }}
+                  onChange={toggleSelectAll}
+                  aria-label="Select all"
+                />
+              </Th>
               <Th>Tanggal</Th>
               <Th>Karyawan</Th>
               <Th>Status</Th>
@@ -328,7 +383,16 @@ export default function Attendance() {
             </tr></thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} data-testid={`att-row-${r.id}`} className="hover:bg-slate-50">
+                <tr key={r.id} data-testid={`att-row-${r.id}`} className={`hover:bg-slate-50 ${selectedIds.has(r.id) ? "bg-blue-50/60" : ""}`}>
+                  <Td>
+                    <input
+                      type="checkbox"
+                      data-testid={`att-select-${r.id}`}
+                      checked={selectedIds.has(r.id)}
+                      onChange={() => toggleSelect(r.id)}
+                      aria-label={`Select ${r.date}`}
+                    />
+                  </Td>
                   <Td className="font-mono text-xs">{fmtDate(r.date)}</Td>
                   <Td className="font-semibold">{empName(r.employee_id)}</Td>
                   <Td>
@@ -584,12 +648,20 @@ export default function Attendance() {
                   })}
                 </div>
               </div>
-              {/* --- Late threshold --- */}
+              {/* --- Late threshold + Cutoff --- */}
               <div className="mb-3 grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-bold text-slate-600 mb-1 block">Batas Toleransi Telat (menit)</label>
                   <Input type="number" min="0" value={cfg.late_threshold_minutes} onChange={(e) => setCfg({ ...cfg, late_threshold_minutes: Number(e.target.value) })} data-testid="late-threshold"/>
                   <p className="text-[10px] text-slate-500 mt-0.5">Check-in melampaui jam masuk + threshold → ditandai TELAT.</p>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Cutoff Payroll (tanggal)</label>
+                  <Input type="number" min="1" max="31" value={cfg.payroll_cutoff_day} onChange={(e) => setCfg({ ...cfg, payroll_cutoff_day: Number(e.target.value) })} data-testid="payroll-cutoff-day"/>
+                  <p className="text-[10px] text-slate-500 mt-0.5">
+                    Periode <b>YYYY-MM</b> = tanggal (cutoff+1) bulan itu s/d cutoff bulan berikutnya.<br/>
+                    Contoh cutoff=25, <i>Juni 2026</i> = <b>26 Jun – 25 Jul</b>.
+                  </p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 mb-3">

@@ -4230,21 +4230,35 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     if not employees:
         raise HTTPException(400, "Tidak ada karyawan aktif")
 
-    # Hitung hari kerja bulan ini: Senin-Sabtu (Sabtu = 5, Minggu = 6)
+    # Hitung range periode (support cutoff day)
     year, month = data.period_month.split("-")
     year, month = int(year), int(month)
-    import calendar as _cal
-    last_day = _cal.monthrange(year, month)[1]
+    cfg_att = await _get_attendance_config()
+    cutoff = int(cfg_att.get("payroll_cutoff_day") or 0)
+    if cutoff > 0:
+        start_s, end_s = _cutoff_period_range(data.period_month, cutoff)
+        from datetime import date as _date2
+        s_y, s_m, s_d = map(int, start_s.split("-"))
+        e_y, e_m, e_d = map(int, end_s.split("-"))
+        period_start = _date2(s_y, s_m, s_d)
+        period_end = _date2(e_y, e_m, e_d)
+    else:
+        import calendar as _cal
+        last_day = _cal.monthrange(year, month)[1]
+        from datetime import date as _date
+        period_start = _date(year, month, 1)
+        period_end = _date(year, month, last_day)
+    # Hitung working_days (hari kerja sesuai work_days config) di range periode
+    work_days_set = set([d.lower() for d in (cfg_att.get("work_days") or ["mon","tue","wed","thu","fri"])])
+    dow_map = ["mon","tue","wed","thu","fri","sat","sun"]
     working_days = 0
-    for d in range(1, last_day + 1):
-        weekday = _cal.weekday(year, month, d)  # 0=Mon .. 6=Sun
-        if weekday <= 5:  # Mon-Sat
+    _cursor = period_start
+    while _cursor <= period_end:
+        if dow_map[_cursor.weekday()] in work_days_set:
             working_days += 1
+        _cursor = _cursor + timedelta(days=1)
 
     # Ambil semua attendance periode ini
-    from datetime import date as _date
-    period_start = _date(year, month, 1)
-    period_end = _date(year, month, last_day)
     attendance_docs = await db.attendance.find({
         "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
     }).to_list(50000)
@@ -4316,6 +4330,8 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     cash_acc = data.cash_account_code or "1101"
     payroll_doc = {
         "period_month": data.period_month,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
         "working_days": working_days,
         "slips": slips,
         "total_gross": round(total_gross, 2),
@@ -4383,11 +4399,18 @@ async def list_attendance(
     if employee_id:
         q["employee_id"] = employee_id
     if month:
-        year, mm = month.split("-")
-        year, mm = int(year), int(mm)
-        import calendar as _cal
-        last_day = _cal.monthrange(year, mm)[1]
-        q["date"] = {"$gte": f"{year}-{mm:02d}-01", "$lte": f"{year}-{mm:02d}-{last_day:02d}"}
+        cfg = await _get_attendance_config()
+        cutoff = int(cfg.get("payroll_cutoff_day") or 0)
+        if cutoff > 0:
+            start_s, end_s = _cutoff_period_range(month, cutoff)
+        else:
+            year, mm = month.split("-")
+            year, mm = int(year), int(mm)
+            import calendar as _cal
+            last_day = _cal.monthrange(year, mm)[1]
+            start_s = f"{year}-{mm:02d}-01"
+            end_s = f"{year}-{mm:02d}-{last_day:02d}"
+        q["date"] = {"$gte": start_s, "$lte": end_s}
     docs = await db.attendance.find(q).sort("date", -1).to_list(50000)
     return [serialize(d) for d in docs]
 
@@ -4431,6 +4454,17 @@ async def delete_attendance(aid: str, user: dict = Depends(require_feature("hr")
     await db.attendance.delete_one({"_id": _oid(aid)})
     return {"ok": True}
 
+class BulkDeleteIn(BaseModel):
+    ids: List[str] = []
+
+@app.post("/api/hr/attendance/bulk-delete")
+async def bulk_delete_attendance(data: BulkDeleteIn, user: dict = Depends(require_feature("hr"))):
+    if not data.ids:
+        return {"deleted": 0}
+    oids = [_oid(i) for i in data.ids if i]
+    r = await db.attendance.delete_many({"_id": {"$in": oids}})
+    return {"deleted": r.deleted_count}
+
 # ===========================================================================
 # HR ATTENDANCE CONFIG — Working Days, Working Hours, Public Holidays
 # ===========================================================================
@@ -4445,7 +4479,44 @@ DEFAULT_ATTENDANCE_CONFIG = {
     # struktur: { "mon": {"in": "08:00", "out": "17:00"}, "fri": {"in": "08:00", "out": "16:00"}, ... }
     "work_schedule": {},
     "late_threshold_minutes": 5,   # telat > threshold → is_late = True
+    # Cutoff hari untuk periode gaji. Periode "YYYY-MM" = tanggal (cutoff_day+1) bulan itu s/d
+    # tanggal cutoff_day bulan berikutnya. Contoh cutoff=25, 2026-06 → 26 Jun s/d 25 Jul.
+    "payroll_cutoff_day": 25,
 }
+
+
+def _cutoff_period_range(period_month: str, cutoff_day: int) -> tuple:
+    """Return (start_date_str, end_date_str) untuk periode dengan cutoff.
+    - period_month: 'YYYY-MM'
+    - cutoff_day: 1..31 (kalau > jml hari bulan itu, di-clip)
+    Convention (user pilihan): periode 'YYYY-MM' = (cutoff+1) bulan itu → cutoff bulan berikut.
+    Contoh cutoff=25, period=2026-06 → start='2026-06-26', end='2026-07-25'.
+    Kalau cutoff_day <= 0, fallback ke kalender penuh (1..akhir bulan).
+    """
+    import calendar as _cal
+    from datetime import date as _date
+    year, month = period_month.split("-")
+    year, month = int(year), int(month)
+    if cutoff_day is None or cutoff_day <= 0:
+        last_day = _cal.monthrange(year, month)[1]
+        return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day:02d}"
+    # Start date: (cutoff+1) di bulan periode
+    start_day = cutoff_day + 1
+    last_start_month = _cal.monthrange(year, month)[1]
+    if start_day > last_start_month:
+        # cutoff = last day (e.g. 31 di Feb) → fallback ke tanggal 1 bulan berikut
+        start = _date(year, month, last_start_month) + timedelta(days=1)
+    else:
+        start = _date(year, month, start_day)
+    # End date: cutoff_day di bulan berikutnya
+    if month == 12:
+        end_year, end_month = year + 1, 1
+    else:
+        end_year, end_month = year, month + 1
+    last_end_month = _cal.monthrange(end_year, end_month)[1]
+    end_day = min(cutoff_day, last_end_month)
+    end = _date(end_year, end_month, end_day)
+    return start.isoformat(), end.isoformat()
 
 
 def _hhmm_to_min(t: Optional[str]) -> Optional[int]:
@@ -4537,6 +4608,7 @@ class AttendanceConfigIn(BaseModel):
     auto_detect_on_import: Optional[bool] = None
     work_schedule: Optional[dict] = None       # {"mon": {"in": "08:00", "out": "17:00"}, ...}
     late_threshold_minutes: Optional[int] = None
+    payroll_cutoff_day: Optional[int] = None   # 1..31 (default 25)
 
 @app.put("/api/hr/attendance-config")
 async def update_attendance_config(data: AttendanceConfigIn, user: dict = Depends(require_feature("hr"))):

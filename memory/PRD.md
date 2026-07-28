@@ -8,6 +8,12 @@
 5. **Payroll dengan Lembur (Feb 2026)** — Auto-hitung gaji pokok + uang makan (hanya Hadir) + lembur (jam × rate manual) → slip gaji + jurnal ✅
 
 ## Completed features (Feb 2026 — session update)
+- ✅ **Payroll Cutoff Day** (`payroll_cutoff_day`, default 25) — Periode "YYYY-MM" = tanggal (cutoff+1) bulan itu s/d cutoff bulan berikutnya. Contoh cutoff=25, "Juni 2026" = 26 Jun – 25 Jul. Berlaku untuk:
+  - `list_attendance` (filter month=YYYY-MM pakai range cutoff)
+  - `run_payroll` (query attendance + hitung working_days pakai range cutoff)
+  - Slip payload menyimpan `period_start` & `period_end`
+  - UI Attendance: label periode menampilkan "PERIODE (cutoff tgl N)" untuk indikasi.
+- ✅ **Bulk Select & Delete Attendance** — Checkbox per row + select-all header + tombol "Hapus Terpilih (N)" muncul saat ada seleksi. Endpoint `POST /api/hr/attendance/bulk-delete` accept `{ids: []}`. Selection auto-clear saat ganti bulan/karyawan.
 - ✅ **Field `employee_no` (ID Karyawan manual)** di master karyawan (`EmployeeIn.employee_no`). Bisa dipakai lookup di import Attendance (header `employee_no`, kolom fallback ke `employee_id/nik/nama`). Tampil di form Kepegawaian + kolom toggleable di tabel.
 - ✅ **Attendance Edit modal** — tombol Edit di setiap row absen, share modal dengan Add, isi otomatis dari row.
 - ✅ **Import Lembur di Attendance** — `overtime_hours` + `overtime_rate` di `AttendanceIn`; kolom template XLSX ditambah + parser import. Manual input di modal Add/Edit juga.
