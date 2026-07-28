@@ -39,6 +39,9 @@ export default function Attendance() {
   const [holidays, setHolidays] = useState([]);
   const [newHoliday, setNewHoliday] = useState({ date: "", name: "", note: "" });
   const [savingCfg, setSavingCfg] = useState(false);
+  const [importingPreset, setImportingPreset] = useState(false);
+  const [presetYear, setPresetYear] = useState(new Date().getFullYear());
+  const [presetIncludeCuti, setPresetIncludeCuti] = useState(true);
 
   const loadSettings = async () => {
     try {
@@ -77,6 +80,29 @@ export default function Attendance() {
       const hRes = await api.get("/hr/public-holidays", { params: { month } });
       setHolidays(hRes.data || []);
     } catch (e) { toast.error(errMsg(e)); }
+  };
+  const importPreset = async () => {
+    if (!window.confirm(
+      `Impor semua tanggal merah Indonesia ${presetYear}${presetIncludeCuti ? " + cuti bersama" : ""}?\n\n` +
+      `Tanggal yang sudah ada tidak akan diubah (hanya insert yang belum terdaftar).`
+    )) return;
+    setImportingPreset(true);
+    try {
+      const r = await api.post("/hr/public-holidays/preset", {
+        year: parseInt(presetYear),
+        include_cuti_bersama: presetIncludeCuti,
+        overwrite: false,
+      });
+      const d = r.data;
+      toast.success(
+        `✅ Kalender ${d.year}: ${d.inserted} ditambahkan, ${d.skipped_existing} sudah ada` +
+        (d.updated > 0 ? `, ${d.updated} di-update` : "")
+      );
+      // Reload
+      const hRes = await api.get("/hr/public-holidays");   // load all so user bisa lihat semua bulan
+      setHolidays(hRes.data || []);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setImportingPreset(false); }
   };
   const toggleWorkDay = (k) => {
     const set = new Set(cfg.work_days || []);
@@ -494,6 +520,29 @@ export default function Attendance() {
 
             {/* Public Holidays List */}
             <div className="border border-slate-200 rounded-lg p-4">
+              {/* Quick preset importer */}
+              <div className="bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded p-3 mb-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="font-bold text-sm text-purple-900">🇮🇩 Preset Kalender Libur Nasional Indonesia</div>
+                    <div className="text-[10px] text-slate-600 mt-0.5">Impor otomatis 17 libur nasional (opsional + 8 cuti bersama) dari SKB 3 Menteri. Tanggal yang sudah ada tidak diubah.</div>
+                  </div>
+                </div>
+                <div className="flex items-end gap-2 mt-2">
+                  <div className="w-24">
+                    <label className="text-[10px] font-bold text-slate-600 block">Tahun</label>
+                    <Input type="number" min="2020" max="2030" value={presetYear} onChange={(e) => setPresetYear(e.target.value)} data-testid="preset-year"/>
+                  </div>
+                  <label className="flex items-center gap-1.5 text-[11px] cursor-pointer flex-1 pb-2">
+                    <input type="checkbox" checked={presetIncludeCuti} onChange={(e) => setPresetIncludeCuti(e.target.checked)} data-testid="preset-include-cuti"/>
+                    <span>Sertakan cuti bersama (8 tanggal)</span>
+                  </label>
+                  <Button onClick={importPreset} disabled={importingPreset} data-testid="import-preset-btn">
+                    <Download size={12} className="mr-1"/> {importingPreset ? "Mengimpor..." : `Impor ${presetYear}`}
+                  </Button>
+                </div>
+              </div>
+
               <div className="flex items-center justify-between mb-3">
                 <h4 className="font-bold text-sm">🎉 Tanggal Merah / Hari Libur Nasional</h4>
                 <span className="text-[10px] text-slate-500">Bulan {month}</span>

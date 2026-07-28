@@ -4497,6 +4497,85 @@ async def delete_public_holiday(hid: str, user: dict = Depends(require_feature("
     await db.public_holidays.delete_one({"_id": _oid(hid)})
     return {"ok": True}
 
+# ---- Preset kalender libur nasional Indonesia ----
+# Source: SKB 3 Menteri (Menag/Menaker/MenPANRB) 2025 → berlaku 2026
+INDO_HOLIDAYS_PRESETS = {
+    2026: {
+        "libur_nasional": [
+            ("2026-01-01", "Tahun Baru 2026 Masehi"),
+            ("2026-01-16", "Isra Mikraj Nabi Muhammad SAW"),
+            ("2026-02-17", "Tahun Baru Imlek 2577 Kongzili"),
+            ("2026-03-19", "Hari Suci Nyepi (Tahun Baru Saka 1948)"),
+            ("2026-03-21", "Hari Raya Idul Fitri 1447 H (Hari 1)"),
+            ("2026-03-22", "Hari Raya Idul Fitri 1447 H (Hari 2)"),
+            ("2026-04-03", "Wafat Yesus Kristus"),
+            ("2026-04-05", "Hari Kebangkitan Yesus Kristus (Paskah)"),
+            ("2026-05-01", "Hari Buruh Internasional"),
+            ("2026-05-14", "Kenaikan Yesus Kristus"),
+            ("2026-05-27", "Hari Raya Idul Adha 1447 H"),
+            ("2026-05-31", "Hari Raya Waisak 2570 BE"),
+            ("2026-06-01", "Hari Lahir Pancasila"),
+            ("2026-06-16", "Tahun Baru Islam 1448 H (1 Muharam)"),
+            ("2026-08-17", "Hari Proklamasi Kemerdekaan RI"),
+            ("2026-08-25", "Maulid Nabi Muhammad SAW"),
+            ("2026-12-25", "Kelahiran Yesus Kristus (Natal)"),
+        ],
+        "cuti_bersama": [
+            ("2026-02-16", "Cuti Bersama Imlek"),
+            ("2026-03-18", "Cuti Bersama Nyepi"),
+            ("2026-03-20", "Cuti Bersama Idul Fitri"),
+            ("2026-03-23", "Cuti Bersama Idul Fitri"),
+            ("2026-03-24", "Cuti Bersama Idul Fitri"),
+            ("2026-05-15", "Cuti Bersama Kenaikan Isa Almasih"),
+            ("2026-05-28", "Cuti Bersama Idul Adha"),
+            ("2026-12-24", "Cuti Bersama Natal"),
+        ],
+    },
+}
+
+class HolidayPresetIn(BaseModel):
+    year: int = 2026
+    include_cuti_bersama: bool = True
+    overwrite: bool = False   # kalau True, timpa nama lama. Default: hanya insert yang belum ada.
+
+@app.post("/api/hr/public-holidays/preset")
+async def import_holiday_preset(data: HolidayPresetIn, user: dict = Depends(require_feature("hr"))):
+    preset = INDO_HOLIDAYS_PRESETS.get(data.year)
+    if not preset:
+        raise HTTPException(400, f"Preset kalender untuk tahun {data.year} belum tersedia. Tahun tersedia: {sorted(INDO_HOLIDAYS_PRESETS.keys())}")
+    items = list(preset["libur_nasional"])
+    if data.include_cuti_bersama:
+        items += list(preset["cuti_bersama"])
+    inserted, skipped_existing, updated = 0, 0, 0
+    now = datetime.now(timezone.utc)
+    for date_s, name_s in items:
+        existing = await db.public_holidays.find_one({"date": date_s})
+        if existing:
+            if data.overwrite:
+                await db.public_holidays.update_one({"_id": existing["_id"]}, {"$set": {"name": name_s, "note": "Preset SKB 3 Menteri", "updated_at": now}})
+                updated += 1
+            else:
+                skipped_existing += 1
+            continue
+        await db.public_holidays.insert_one({
+            "date": date_s,
+            "name": name_s,
+            "note": "Preset SKB 3 Menteri",
+            "created_by": user["id"],
+            "created_at": now,
+            "source": "preset",
+            "year_preset": data.year,
+        })
+        inserted += 1
+    return {
+        "ok": True,
+        "year": data.year,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped_existing": skipped_existing,
+        "total_items": len(items),
+    }
+
 # ===========================================================================
 # END ATTENDANCE CONFIG
 # ===========================================================================
