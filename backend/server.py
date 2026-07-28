@@ -4489,8 +4489,8 @@ def _cutoff_period_range(period_month: str, cutoff_day: int) -> tuple:
     """Return (start_date_str, end_date_str) untuk periode dengan cutoff.
     - period_month: 'YYYY-MM'
     - cutoff_day: 1..31 (kalau > jml hari bulan itu, di-clip)
-    Convention (user pilihan): periode 'YYYY-MM' = (cutoff+1) bulan itu → cutoff bulan berikut.
-    Contoh cutoff=25, period=2026-06 → start='2026-06-26', end='2026-07-25'.
+    Convention (user pilihan): periode 'YYYY-MM' = (cutoff+1) bulan sebelumnya → cutoff bulan itu.
+    Contoh cutoff=25, period=2026-07 → start='2026-06-26', end='2026-07-25'.
     Kalau cutoff_day <= 0, fallback ke kalender penuh (1..akhir bulan).
     """
     import calendar as _cal
@@ -4500,22 +4500,22 @@ def _cutoff_period_range(period_month: str, cutoff_day: int) -> tuple:
     if cutoff_day is None or cutoff_day <= 0:
         last_day = _cal.monthrange(year, month)[1]
         return f"{year}-{month:02d}-01", f"{year}-{month:02d}-{last_day:02d}"
-    # Start date: (cutoff+1) di bulan periode
-    start_day = cutoff_day + 1
-    last_start_month = _cal.monthrange(year, month)[1]
-    if start_day > last_start_month:
-        # cutoff = last day (e.g. 31 di Feb) → fallback ke tanggal 1 bulan berikut
-        start = _date(year, month, last_start_month) + timedelta(days=1)
-    else:
-        start = _date(year, month, start_day)
-    # End date: cutoff_day di bulan berikutnya
-    if month == 12:
-        end_year, end_month = year + 1, 1
-    else:
-        end_year, end_month = year, month + 1
-    last_end_month = _cal.monthrange(end_year, end_month)[1]
+    # End date: cutoff_day di bulan periode
+    last_end_month = _cal.monthrange(year, month)[1]
     end_day = min(cutoff_day, last_end_month)
-    end = _date(end_year, end_month, end_day)
+    end = _date(year, month, end_day)
+    # Start date: (cutoff+1) di bulan SEBELUMNYA
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
+    last_prev_month = _cal.monthrange(prev_year, prev_month)[1]
+    start_day = cutoff_day + 1
+    if start_day > last_prev_month:
+        # cutoff = last day of prev month → jadi start = tanggal 1 bulan periode
+        start = _date(year, month, 1)
+    else:
+        start = _date(prev_year, prev_month, start_day)
     return start.isoformat(), end.isoformat()
 
 

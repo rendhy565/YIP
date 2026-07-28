@@ -24,6 +24,8 @@ const DAYS_ID = [
 const MONTH_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 
 // Build 24 periode selector options (12 lalu + 12 depan) berdasarkan cutoff.
+// Konvensi: periode YYYY-MM = (cutoff+1) bulan SEBELUMNYA → cutoff bulan ini.
+// Contoh cutoff=25, "Juli 2026" = 26 Jun → 25 Jul.
 function buildPeriodOptions(cutoffDay) {
   const today = new Date();
   const opts = [];
@@ -35,13 +37,13 @@ function buildPeriodOptions(cutoffDay) {
     const monthName = MONTH_ID[m - 1];
     let label;
     if (cutoffDay > 0) {
-      // Periode YYYY-MM = (cutoff+1) bulan itu s/d cutoff bulan berikut
-      const startDate = new Date(y, m - 1, cutoffDay + 1);
-      const endDate = new Date(y, m, cutoffDay);
-      // Clamp for calendar (e.g. cutoff = 31 in Feb)
-      // JS Date auto-normalises overflow, so use its output as-is
-      const fmt = (dt) => `${dt.getDate()} ${MONTH_ID[dt.getMonth()].slice(0,3)}`;
-      label = `${monthName} ${y}  (${fmt(startDate)} → ${fmt(endDate)} ${endDate.getFullYear() !== y ? endDate.getFullYear() : ""})`.trim();
+      // End = cutoffDay di bulan periode
+      const endDate = new Date(y, m - 1, cutoffDay);
+      // Start = cutoffDay+1 di bulan sebelumnya
+      const startDate = new Date(y, m - 2, cutoffDay + 1);
+      const fmt = (dt) => `${dt.getDate()} ${MONTH_ID[dt.getMonth()].slice(0, 3)}`;
+      const yrTag = startDate.getFullYear() !== endDate.getFullYear() ? ` ${startDate.getFullYear()}` : "";
+      label = `${monthName} ${y}  (${fmt(startDate)}${yrTag} → ${fmt(endDate)})`;
     } else {
       label = `${monthName} ${y}`;
     }
