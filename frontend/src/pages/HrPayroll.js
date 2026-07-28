@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings } from "lucide-react";
+import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
 const EMPTY_EMP = {
@@ -100,9 +100,32 @@ export default function HrPayroll() {
   const setFamily = (i, patch) => setForm({ ...form, family: form.family.map((f, idx) => idx === i ? { ...f, ...patch } : f) });
   const delFamily = (i) => setForm({ ...form, family: form.family.filter((_, idx) => idx !== i) });
   const runPayroll = async () => {
-    if (!window.confirm(`Jalankan payroll bulan ${period}? Akan auto-posting jurnal beban gaji.`)) return;
-    try { await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc }); toast.success("Payroll dijalankan"); loadPayrolls(); }
+    if (!window.confirm(`Jalankan payroll periode ${period}? Akan auto-posting jurnal beban gaji.`)) return;
+    try { await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc }); toast.success("Payroll dijalankan"); setSim(null); loadPayrolls(); }
     catch (e) { toast.error(errMsg(e)); }
+  };
+  // ---- SIMULATE payroll (read-only preview) ----
+  const [sim, setSim] = useState(null);
+  const [simLoading, setSimLoading] = useState(false);
+  const simulate = async () => {
+    setSimLoading(true);
+    setSim(null);
+    try {
+      const r = await api.post("/hr/payroll/simulate", { period_month: period });
+      setSim(r.data);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setSimLoading(false); }
+  };
+  const runFromSim = async () => {
+    if (!sim) return;
+    if (sim.already_executed) { toast.error(`Payroll periode ${period} sudah dijalankan sebelumnya`); return; }
+    if (!window.confirm(`Konfirmasi jalankan payroll ${period}?\nTotal ${sim.slips.length} karyawan, gross ${sim.total_gross.toLocaleString("id-ID")}. Akan auto-posting jurnal beban gaji.`)) return;
+    try {
+      await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc });
+      toast.success("Payroll dijalankan & jurnal ter-post");
+      setSim(null);
+      loadPayrolls();
+    } catch (e) { toast.error(errMsg(e)); }
   };
   const delPayroll = async (id) => {
     if (!window.confirm("Hapus batch payroll? Jurnal terkait juga akan dihapus.")) return;
@@ -365,16 +388,90 @@ export default function HrPayroll() {
         <Card>
           <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-end justify-between gap-2">
             <h3 className="font-bold">Payroll Batch</h3>
-            <div className="flex items-end gap-2">
-              <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-40"/></div>
+            <div className="flex items-end gap-2 flex-wrap">
+              <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => { setPeriod(e.target.value); setSim(null); }} className="w-40"/></div>
               <div><Label>Bayar dari</Label>
                 <Select value={cashAcc} onChange={(e) => setCashAcc(e.target.value)} className="w-48">
                   {cashAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}
                 </Select>
               </div>
+              <Button data-testid="hr-simulate-payroll" variant="secondary" onClick={simulate} disabled={simLoading}>
+                <Eye size={14}/> {simLoading ? "Menghitung..." : "Simulasi"}
+              </Button>
               <Button data-testid="hr-run-payroll" variant="success" onClick={runPayroll}><PlayCircle size={14}/> Jalankan</Button>
             </div>
           </div>
+
+          {/* Simulation Preview Panel */}
+          {sim && (
+            <div className="border-b-2 border-blue-300 bg-gradient-to-r from-blue-50 to-indigo-50" data-testid="sim-preview">
+              <div className="px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+                <div>
+                  <div className="font-bold text-blue-900 flex items-center gap-2"><Eye size={16}/> Simulasi Payroll — Preview (belum diposting)</div>
+                  <div className="text-xs text-slate-600 mt-1">
+                    Periode: <span className="font-mono font-bold">{sim.period_start} → {sim.period_end}</span>
+                    {" · "}Hari kerja: <b>{sim.working_days}</b>
+                    {" · "}Karyawan: <b>{sim.slips.length}</b>
+                    {" · "}Total gross: <b>{fmtIDR(sim.total_gross)}</b>
+                  </div>
+                  {sim.already_executed && (
+                    <div className="text-xs text-rose-700 font-bold mt-1">⚠️ Periode ini SUDAH pernah dijalankan. Hapus dulu payroll lama sebelum re-run.</div>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Button variant="ghost" onClick={() => setSim(null)}><X size={13}/> Tutup Preview</Button>
+                  <Button variant="success" onClick={runFromSim} disabled={sim.already_executed} data-testid="sim-confirm-run">
+                    <PlayCircle size={14}/> Konfirmasi Jalankan
+                  </Button>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <thead><tr>
+                    <Th>Karyawan</Th>
+                    <Th>Posisi</Th>
+                    <Th className="text-right">Hadir/Kerja</Th>
+                    <Th className="text-right">Sakit/Izin/Alfa</Th>
+                    <Th className="text-right">Gaji Pokok</Th>
+                    <Th className="text-right">Uang Makan</Th>
+                    <Th className="text-right">Lembur</Th>
+                    <Th className="text-right">Gross (Net)</Th>
+                  </tr></thead>
+                  <tbody>
+                    {sim.slips.map((s, i) => (
+                      <tr key={i} className="hover:bg-white/60">
+                        <Td>
+                          {s.employee_name}
+                          {s.employee_no && <div className="text-[10px] text-slate-500 font-mono">{s.employee_no}</div>}
+                        </Td>
+                        <Td className="text-xs">{s.position || "-"}</Td>
+                        <Td className="text-right font-mono text-xs">{s.hari_hadir}/{s.working_days}</Td>
+                        <Td className="text-right font-mono text-xs">{s.hari_sakit}/{s.hari_izin}/{s.hari_alfa}</Td>
+                        <Td className="text-right font-mono">
+                          {fmtIDR(s.gaji_pokok_net)}
+                          {s.deduction_alfa > 0 && <div className="text-[9px] text-rose-600">-{fmtIDR(s.deduction_alfa)} alfa</div>}
+                        </Td>
+                        <Td className="text-right font-mono">{fmtIDR(s.uang_makan)}</Td>
+                        <Td className="text-right font-mono">
+                          {(s.lembur_total || 0) > 0
+                            ? <span>{fmtIDR(s.lembur_total)}<div className="text-[9px] text-slate-500">{s.lembur_jam}j</div></span>
+                            : <span className="text-slate-400">-</span>}
+                        </Td>
+                        <Td className="text-right font-mono font-bold">{fmtIDR(s.gross)}</Td>
+                      </tr>
+                    ))}
+                    <tr className="bg-blue-100 font-bold">
+                      <Td colSpan={7} className="text-right">TOTAL GROSS</Td>
+                      <Td className="text-right font-mono">{fmtIDR(sim.total_gross)}</Td>
+                    </tr>
+                  </tbody>
+                </Table>
+              </div>
+              <div className="px-4 py-2 text-[10px] text-slate-500 italic border-t border-blue-200">
+                💡 Simulasi ini <b>tidak menyentuh database</b>. Ubah absensi/master karyawan lalu klik Simulasi lagi untuk refresh. Klik <b>Konfirmasi Jalankan</b> saat sudah OK.
+              </div>
+            </div>
+          )}
           {payrolls.length === 0 && <div className="p-6 text-center text-slate-400">Belum ada payroll dijalankan</div>}
           {payrolls.map((p) => (
             <div key={p.id} className="border-b border-slate-200 last:border-0">

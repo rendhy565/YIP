@@ -1,7 +1,7 @@
 {
   "name": "tms-frontend",
   "version": "1.0.0",
-  "homepage": ".",
+  "homepage": "/",
   "private": true,
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",

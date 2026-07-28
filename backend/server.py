@@ -4226,106 +4226,12 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         raise HTTPException(403, "Hanya finance/admin yang dapat menjalankan payroll")
     if await db.payroll.find_one({"period_month": data.period_month}):
         raise HTTPException(400, f"Payroll periode {data.period_month} sudah dijalankan")
-    employees = await db.employees.find({"active": True}).to_list(1000)
-    if not employees:
-        raise HTTPException(400, "Tidak ada karyawan aktif")
-
-    # Hitung range periode (support cutoff day)
-    year, month = data.period_month.split("-")
-    year, month = int(year), int(month)
-    cfg_att = await _get_attendance_config()
-    cutoff = int(cfg_att.get("payroll_cutoff_day") or 0)
-    if cutoff > 0:
-        start_s, end_s = _cutoff_period_range(data.period_month, cutoff)
-        from datetime import date as _date2
-        s_y, s_m, s_d = map(int, start_s.split("-"))
-        e_y, e_m, e_d = map(int, end_s.split("-"))
-        period_start = _date2(s_y, s_m, s_d)
-        period_end = _date2(e_y, e_m, e_d)
-    else:
-        import calendar as _cal
-        last_day = _cal.monthrange(year, month)[1]
-        from datetime import date as _date
-        period_start = _date(year, month, 1)
-        period_end = _date(year, month, last_day)
-    # Hitung working_days (hari kerja sesuai work_days config) di range periode
-    work_days_set = set([d.lower() for d in (cfg_att.get("work_days") or ["mon","tue","wed","thu","fri"])])
-    dow_map = ["mon","tue","wed","thu","fri","sat","sun"]
-    working_days = 0
-    _cursor = period_start
-    while _cursor <= period_end:
-        if dow_map[_cursor.weekday()] in work_days_set:
-            working_days += 1
-        _cursor = _cursor + timedelta(days=1)
-
-    # Ambil semua attendance periode ini
-    attendance_docs = await db.attendance.find({
-        "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
-    }).to_list(50000)
-    # Index by employee_id -> list of attendance docs
-    att_by_emp = {}
-    for a in attendance_docs:
-        eid = str(a.get("employee_id"))
-        att_by_emp.setdefault(eid, []).append(a)
-
-    slips = []
-    total_gross = 0.0
-    for e in employees:
-        emp_id = str(e["_id"])
-        base = float(e.get("base_salary", 0))
-        meal_per_day = float(e.get("meal_allowance", 0))
-        emp_att = att_by_emp.get(emp_id, [])
-
-        # Hitung per-status
-        hari_hadir = sum(1 for a in emp_att if a.get("status") == "Hadir")
-        hari_sakit = sum(1 for a in emp_att if a.get("status") == "Sakit")
-        hari_izin = sum(1 for a in emp_att if a.get("status") == "Izin")
-        hari_alfa = sum(1 for a in emp_att if a.get("status") == "Alfa")
-        hari_recorded = hari_hadir + hari_sakit + hari_izin + hari_alfa
-        # Hari yang belum ada record → dianggap Hadir (default optimis)
-        hari_missing = max(0, working_days - hari_recorded)
-        hari_hadir_effective = hari_hadir + hari_missing
-
-        # Deduction karena Alfa (potongan proporsional dari base salary)
-        deduction_alfa = round((base / working_days) * hari_alfa, 2) if working_days > 0 else 0
-        gaji_pokok_net = base - deduction_alfa
-        # Uang makan hanya dibayar untuk HADIR (bukan sakit/izin/alfa)
-        uang_makan = round(meal_per_day * hari_hadir_effective, 2)
-        # Lembur: sum(overtime_hours × overtime_rate) dari attendance
-        lembur_total = 0.0
-        lembur_jam = 0.0
-        for a in emp_att:
-            oh = float(a.get("overtime_hours") or 0)
-            orate = float(a.get("overtime_rate") or 0)
-            if oh > 0 and orate > 0:
-                lembur_total += oh * orate
-                lembur_jam += oh
-        lembur_total = round(lembur_total, 2)
-
-        gross = gaji_pokok_net + uang_makan + lembur_total
-
-        slips.append({
-            "employee_id": emp_id,
-            "employee_no": e.get("employee_no"),
-            "employee_name": e.get("full_name"),
-            "position": e.get("position"),
-            "base_salary": base,
-            "meal_allowance_per_day": meal_per_day,
-            "working_days": working_days,
-            "hari_hadir": hari_hadir_effective,
-            "hari_sakit": hari_sakit,
-            "hari_izin": hari_izin,
-            "hari_alfa": hari_alfa,
-            "hari_missing_treated_hadir": hari_missing,
-            "deduction_alfa": deduction_alfa,
-            "gaji_pokok_net": gaji_pokok_net,
-            "uang_makan": uang_makan,
-            "lembur_jam": lembur_jam,
-            "lembur_total": lembur_total,
-            "gross": gross,
-            "net": gross,  # No tax deduction untuk sekarang (user bilang tidak ada tunjangan/pajak logic)
-        })
-        total_gross += gross
+    calc = await _calculate_payroll_slips(data.period_month)
+    slips = calc["slips"]
+    total_gross = calc["total_gross"]
+    working_days = calc["working_days"]
+    period_start = calc["period_start"]
+    period_end = calc["period_end"]
 
     cash_acc = data.cash_account_code or "1101"
     payroll_doc = {
@@ -4356,6 +4262,131 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     except HTTPException:
         pass
     return serialize(await db.payroll.find_one({"_id": r.inserted_id}))
+
+
+async def _calculate_payroll_slips(period_month: str) -> dict:
+    """Shared calculator untuk run + simulate payroll. Return dict berisi slips, total_gross,
+    working_days, period_start, period_end. TIDAK menyentuh DB (kecuali baca employees/attendance).
+    """
+    employees = await db.employees.find({"active": True}).to_list(1000)
+    if not employees:
+        raise HTTPException(400, "Tidak ada karyawan aktif")
+
+    year, month = period_month.split("-")
+    year, month = int(year), int(month)
+    cfg_att = await _get_attendance_config()
+    cutoff = int(cfg_att.get("payroll_cutoff_day") or 0)
+    from datetime import date as _date2
+    if cutoff > 0:
+        start_s, end_s = _cutoff_period_range(period_month, cutoff)
+        s_y, s_m, s_d = map(int, start_s.split("-"))
+        e_y, e_m, e_d = map(int, end_s.split("-"))
+        period_start = _date2(s_y, s_m, s_d)
+        period_end = _date2(e_y, e_m, e_d)
+    else:
+        import calendar as _cal
+        last_day = _cal.monthrange(year, month)[1]
+        period_start = _date2(year, month, 1)
+        period_end = _date2(year, month, last_day)
+
+    # Hitung working_days (hari kerja sesuai work_days config) di range periode
+    work_days_set = set([d.lower() for d in (cfg_att.get("work_days") or ["mon","tue","wed","thu","fri"])])
+    dow_map = ["mon","tue","wed","thu","fri","sat","sun"]
+    working_days = 0
+    _cursor = period_start
+    while _cursor <= period_end:
+        if dow_map[_cursor.weekday()] in work_days_set:
+            working_days += 1
+        _cursor = _cursor + timedelta(days=1)
+
+    # Ambil semua attendance periode ini
+    attendance_docs = await db.attendance.find({
+        "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
+    }).to_list(50000)
+    att_by_emp = {}
+    for a in attendance_docs:
+        eid = str(a.get("employee_id"))
+        att_by_emp.setdefault(eid, []).append(a)
+
+    slips = []
+    total_gross = 0.0
+    for e in employees:
+        emp_id = str(e["_id"])
+        base = float(e.get("base_salary", 0))
+        meal_per_day = float(e.get("meal_allowance", 0))
+        emp_att = att_by_emp.get(emp_id, [])
+
+        hari_hadir = sum(1 for a in emp_att if a.get("status") == "Hadir")
+        hari_sakit = sum(1 for a in emp_att if a.get("status") == "Sakit")
+        hari_izin = sum(1 for a in emp_att if a.get("status") == "Izin")
+        hari_alfa = sum(1 for a in emp_att if a.get("status") == "Alfa")
+        hari_recorded = hari_hadir + hari_sakit + hari_izin + hari_alfa
+        hari_missing = max(0, working_days - hari_recorded)
+        hari_hadir_effective = hari_hadir + hari_missing
+
+        deduction_alfa = round((base / working_days) * hari_alfa, 2) if working_days > 0 else 0
+        gaji_pokok_net = base - deduction_alfa
+        uang_makan = round(meal_per_day * hari_hadir_effective, 2)
+        lembur_total = 0.0
+        lembur_jam = 0.0
+        for a in emp_att:
+            oh = float(a.get("overtime_hours") or 0)
+            orate = float(a.get("overtime_rate") or 0)
+            if oh > 0 and orate > 0:
+                lembur_total += oh * orate
+                lembur_jam += oh
+        lembur_total = round(lembur_total, 2)
+        gross = gaji_pokok_net + uang_makan + lembur_total
+
+        slips.append({
+            "employee_id": emp_id,
+            "employee_no": e.get("employee_no"),
+            "employee_name": e.get("full_name"),
+            "position": e.get("position"),
+            "base_salary": base,
+            "meal_allowance_per_day": meal_per_day,
+            "working_days": working_days,
+            "hari_hadir": hari_hadir_effective,
+            "hari_sakit": hari_sakit,
+            "hari_izin": hari_izin,
+            "hari_alfa": hari_alfa,
+            "hari_missing_treated_hadir": hari_missing,
+            "deduction_alfa": deduction_alfa,
+            "gaji_pokok_net": gaji_pokok_net,
+            "uang_makan": uang_makan,
+            "lembur_jam": lembur_jam,
+            "lembur_total": lembur_total,
+            "gross": gross,
+            "net": gross,
+        })
+        total_gross += gross
+
+    return {
+        "slips": slips,
+        "total_gross": round(total_gross, 2),
+        "working_days": working_days,
+        "period_start": period_start,
+        "period_end": period_end,
+    }
+
+
+@app.post("/api/hr/payroll/simulate")
+async def simulate_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("hr"))):
+    """Simulasi payroll (read-only). Kembalikan slips + total tanpa insert/journal.
+    Bisa dijalankan berkali-kali sebelum finalisasi. Support periode yang sudah dijalankan (untuk preview ulang).
+    """
+    calc = await _calculate_payroll_slips(data.period_month)
+    already = await db.payroll.find_one({"period_month": data.period_month})
+    return {
+        "period_month": data.period_month,
+        "period_start": calc["period_start"].isoformat(),
+        "period_end": calc["period_end"].isoformat(),
+        "working_days": calc["working_days"],
+        "slips": calc["slips"],
+        "total_gross": calc["total_gross"],
+        "already_executed": bool(already),
+        "simulated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 @app.delete("/api/hr/payroll/{pid}")
 async def delete_payroll(pid: str, user: dict = Depends(require_feature("hr"))):
