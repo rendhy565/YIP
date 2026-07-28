@@ -4289,13 +4289,19 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         period_start = _date2(year, month, 1)
         period_end = _date2(year, month, last_day)
 
-    # Hitung working_days (hari kerja sesuai work_days config) di range periode
+    # Hitung working_days (hari kerja sesuai work_days config) di range periode, EXCLUDE tanggal merah
     work_days_set = set([d.lower() for d in (cfg_att.get("work_days") or ["mon","tue","wed","thu","fri"])])
     dow_map = ["mon","tue","wed","thu","fri","sat","sun"]
+    # Load holidays dalam range agar tidak dihitung sebagai workday
+    hol_docs = await db.public_holidays.find({
+        "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
+    }).to_list(500)
+    hol_set = {h["date"] for h in hol_docs}
     working_days = 0
     _cursor = period_start
     while _cursor <= period_end:
-        if dow_map[_cursor.weekday()] in work_days_set:
+        date_s = _cursor.isoformat()
+        if dow_map[_cursor.weekday()] in work_days_set and date_s not in hol_set:
             working_days += 1
         _cursor = _cursor + timedelta(days=1)
 
@@ -4321,12 +4327,15 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         hari_izin = sum(1 for a in emp_att if a.get("status") == "Izin")
         hari_alfa = sum(1 for a in emp_att if a.get("status") == "Alfa")
         hari_recorded = hari_hadir + hari_sakit + hari_izin + hari_alfa
+        # Hari kerja yang tidak ada record → dianggap Alfa (konservatif).
+        # Admin sebaiknya jalankan Auto-Isi Alfa dulu di halaman Absensi.
         hari_missing = max(0, working_days - hari_recorded)
-        hari_hadir_effective = hari_hadir + hari_missing
+        hari_alfa_effective = hari_alfa + hari_missing
 
-        deduction_alfa = round((base / working_days) * hari_alfa, 2) if working_days > 0 else 0
+        deduction_alfa = round((base / working_days) * hari_alfa_effective, 2) if working_days > 0 else 0
         gaji_pokok_net = base - deduction_alfa
-        uang_makan = round(meal_per_day * hari_hadir_effective, 2)
+        # Uang makan hanya untuk HADIR aktual (bukan sakit/izin/alfa/missing)
+        uang_makan = round(meal_per_day * hari_hadir, 2)
         lembur_total = 0.0
         lembur_jam = 0.0
         for a in emp_att:
@@ -4346,11 +4355,12 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
             "base_salary": base,
             "meal_allowance_per_day": meal_per_day,
             "working_days": working_days,
-            "hari_hadir": hari_hadir_effective,
+            "hari_hadir": hari_hadir,
             "hari_sakit": hari_sakit,
             "hari_izin": hari_izin,
-            "hari_alfa": hari_alfa,
-            "hari_missing_treated_hadir": hari_missing,
+            "hari_alfa": hari_alfa_effective,
+            "hari_alfa_manual": hari_alfa,
+            "hari_missing_treated_alfa": hari_missing,
             "deduction_alfa": deduction_alfa,
             "gaji_pokok_net": gaji_pokok_net,
             "uang_makan": uang_makan,
@@ -4495,6 +4505,119 @@ async def bulk_delete_attendance(data: BulkDeleteIn, user: dict = Depends(requir
     oids = [_oid(i) for i in data.ids if i]
     r = await db.attendance.delete_many({"_id": {"$in": oids}})
     return {"deleted": r.deleted_count}
+
+
+class AutoFillAlfaIn(BaseModel):
+    period_month: str          # YYYY-MM
+    employee_id: Optional[str] = None  # kalau None, semua karyawan aktif
+
+
+@app.post("/api/hr/attendance/auto-fill-alfa")
+async def auto_fill_alfa(data: AutoFillAlfaIn, user: dict = Depends(require_feature("hr"))):
+    """Isi otomatis absensi = 'Alfa' untuk setiap hari kerja dalam periode yang belum ada recordnya.
+    - Range periode: pakai cutoff config (kalau aktif) atau kalender penuh.
+    - Skip: weekend/non-workday (per work_days config) dan tanggal merah (public_holidays).
+    - Skip: record yang sudah ada untuk (employee_id, date) — tidak overwrite.
+    - Target: semua karyawan aktif kalau employee_id kosong.
+    """
+    cfg_att = await _get_attendance_config()
+    cutoff = int(cfg_att.get("payroll_cutoff_day") or 0)
+    from datetime import date as _date3
+    if cutoff > 0:
+        start_s, end_s = _cutoff_period_range(data.period_month, cutoff)
+        s_y, s_m, s_d = map(int, start_s.split("-"))
+        e_y, e_m, e_d = map(int, end_s.split("-"))
+        period_start = _date3(s_y, s_m, s_d)
+        period_end = _date3(e_y, e_m, e_d)
+    else:
+        import calendar as _cal
+        year, month = map(int, data.period_month.split("-"))
+        last_day = _cal.monthrange(year, month)[1]
+        period_start = _date3(year, month, 1)
+        period_end = _date3(year, month, last_day)
+
+    work_days_set = set([d.lower() for d in (cfg_att.get("work_days") or ["mon", "tue", "wed", "thu", "fri"])])
+    dow_map = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+    # Employees target
+    q_emp = {"active": True}
+    if data.employee_id:
+        q_emp["_id"] = _oid(data.employee_id)
+    employees = await db.employees.find(q_emp).to_list(2000)
+    if not employees:
+        raise HTTPException(400, "Tidak ada karyawan aktif")
+
+    # Holidays map dalam range
+    hol_docs = await db.public_holidays.find({
+        "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
+    }).to_list(500)
+    hol_set = {h["date"] for h in hol_docs}
+
+    # Existing attendance dalam range (untuk skip duplikat)
+    exist_docs = await db.attendance.find({
+        "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
+    }).to_list(50000)
+    exist_set = {(str(a["employee_id"]), a["date"]) for a in exist_docs}
+
+    now = datetime.now(timezone.utc)
+    inserted = 0
+    skipped_existing = 0
+    skipped_weekend = 0
+    skipped_holiday = 0
+    # Bangun list tanggal workday
+    workday_dates = []
+    cur = period_start
+    while cur <= period_end:
+        dow = dow_map[cur.weekday()]
+        date_s = cur.isoformat()
+        if dow not in work_days_set:
+            skipped_weekend += 1  # count workday-only iteration; below we still skip properly
+        elif date_s in hol_set:
+            skipped_holiday += 1
+        else:
+            workday_dates.append(date_s)
+        cur = cur + timedelta(days=1)
+
+    docs_to_insert = []
+    for e in employees:
+        emp_id = str(e["_id"])
+        for date_s in workday_dates:
+            if (emp_id, date_s) in exist_set:
+                skipped_existing += 1
+                continue
+            docs_to_insert.append({
+                "employee_id": emp_id,
+                "date": date_s,
+                "status": "Alfa",
+                "check_in": None,
+                "check_out": None,
+                "note": "Auto-fill Alfa (hari kerja tanpa absen)",
+                "overtime_hours": 0,
+                "overtime_rate": 0,
+                "is_late": False,
+                "is_under_hours": False,
+                "late_minutes": 0,
+                "worked_minutes": 0,
+                "required_minutes": 0,
+                "created_at": now,
+                "created_by": user["id"],
+                "auto_filled": True,
+            })
+    if docs_to_insert:
+        await db.attendance.insert_many(docs_to_insert)
+        inserted = len(docs_to_insert)
+
+    return {
+        "period_month": data.period_month,
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "employees_targeted": len(employees),
+        "workdays_in_period": len(workday_dates),
+        "inserted": inserted,
+        "skipped_existing": skipped_existing,
+        "skipped_weekend_or_nonwork": skipped_weekend,
+        "skipped_holiday": skipped_holiday,
+    }
 
 # ===========================================================================
 # HR ATTENDANCE CONFIG — Working Days, Working Hours, Public Holidays

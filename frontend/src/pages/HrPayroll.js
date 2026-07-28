@@ -446,7 +446,14 @@ export default function HrPayroll() {
                         </Td>
                         <Td className="text-xs">{s.position || "-"}</Td>
                         <Td className="text-right font-mono text-xs">{s.hari_hadir}/{s.working_days}</Td>
-                        <Td className="text-right font-mono text-xs">{s.hari_sakit}/{s.hari_izin}/{s.hari_alfa}</Td>
+                        <Td className="text-right font-mono text-xs">
+                          {s.hari_sakit}/{s.hari_izin}/{s.hari_alfa}
+                          {(s.hari_missing_treated_alfa || 0) > 0 && (
+                            <div className="text-[9px] text-amber-700" title="Hari kerja tanpa record → dianggap Alfa">
+                              +{s.hari_missing_treated_alfa} missing
+                            </div>
+                          )}
+                        </Td>
                         <Td className="text-right font-mono">
                           {fmtIDR(s.gaji_pokok_net)}
                           {s.deduction_alfa > 0 && <div className="text-[9px] text-rose-600">-{fmtIDR(s.deduction_alfa)} alfa</div>}

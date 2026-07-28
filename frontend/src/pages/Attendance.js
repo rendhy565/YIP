@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../components/ui";
 import { fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon, Edit2 } from "lucide-react";
+import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon, Edit2, UserPlus } from "lucide-react";
 
 const STATUS_OPTIONS = ["Hadir", "Sakit", "Izin", "Alfa", "Libur", "Off"];
 const STATUS_COLORS = {
@@ -251,6 +251,27 @@ export default function Attendance() {
   // Reset selection ketika data reload (setelah filter change)
   useEffect(() => { setSelectedIds(new Set()); }, [rows.length, month, empFilter]);
 
+  // Auto-fill Alfa untuk semua hari kerja tanpa absen
+  const [autoFilling, setAutoFilling] = useState(false);
+  const autoFillAlfa = async () => {
+    if (!window.confirm(
+      `Isi otomatis absensi = "Alfa" untuk semua HARI KERJA di periode ${month} yang belum ada record?\n\n` +
+      `• Skip weekend/non-workday & tanggal merah\n` +
+      `• Skip yang sudah punya record (tidak overwrite)\n` +
+      `• Nanti Anda bisa edit ke Sakit/Izin/Cuti dll di list`
+    )) return;
+    setAutoFilling(true);
+    try {
+      const r = await api.post("/hr/attendance/auto-fill-alfa", { period_month: month });
+      const d = r.data;
+      toast.success(
+        `✅ ${d.inserted} Alfa dibuat untuk ${d.employees_targeted} karyawan × ${d.workdays_in_period} hari kerja. Skip existing: ${d.skipped_existing}, holiday: ${d.skipped_holiday}`
+      );
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setAutoFilling(false); }
+  };
+
   const handleImport = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -359,6 +380,9 @@ export default function Attendance() {
           </Button>
           <Button variant="secondary" onClick={() => setShowImport(true)} data-testid="att-import-btn">
             <Upload size={14}/> Import
+          </Button>
+          <Button variant="secondary" onClick={autoFillAlfa} disabled={autoFilling} data-testid="att-autofill-btn" title="Isi Alfa otomatis untuk hari kerja yang belum ada absen">
+            <UserPlus size={14}/> {autoFilling ? "Mengisi..." : "Auto-Isi Alfa"}
           </Button>
           {selectedIds.size > 0 && (
             <Button variant="danger" onClick={bulkDelete} disabled={deleting} data-testid="att-bulk-delete-btn">
