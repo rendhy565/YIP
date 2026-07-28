@@ -4405,6 +4405,102 @@ async def delete_attendance(aid: str, user: dict = Depends(require_feature("hr")
     await db.attendance.delete_one({"_id": _oid(aid)})
     return {"ok": True}
 
+# ===========================================================================
+# HR ATTENDANCE CONFIG — Working Days, Working Hours, Public Holidays
+# ===========================================================================
+DEFAULT_ATTENDANCE_CONFIG = {
+    "work_days": ["mon", "tue", "wed", "thu", "fri"],   # hari kerja default
+    "work_hour_in": "08:30",
+    "work_hour_out": "17:30",
+    "weekend_status": "Off",                              # status default untuk hari non-kerja
+    "holiday_status": "Libur",                            # status default untuk tanggal merah
+    "auto_detect_on_import": True,                        # override status kosong saat import
+}
+
+async def _get_attendance_config():
+    row = await db.settings.find_one({"key_name": "attendance_config"})
+    if row and row.get("key_value"):
+        try:
+            import json as _json
+            cfg = _json.loads(row["key_value"])
+            merged = {**DEFAULT_ATTENDANCE_CONFIG, **cfg}
+            return merged
+        except Exception:
+            pass
+    return dict(DEFAULT_ATTENDANCE_CONFIG)
+
+@app.get("/api/hr/attendance-config")
+async def get_attendance_config(user: dict = Depends(require_feature("hr"))):
+    return await _get_attendance_config()
+
+class AttendanceConfigIn(BaseModel):
+    work_days: Optional[List[str]] = None
+    work_hour_in: Optional[str] = None
+    work_hour_out: Optional[str] = None
+    weekend_status: Optional[str] = None
+    holiday_status: Optional[str] = None
+    auto_detect_on_import: Optional[bool] = None
+
+@app.put("/api/hr/attendance-config")
+async def update_attendance_config(data: AttendanceConfigIn, user: dict = Depends(require_feature("hr"))):
+    import json as _json
+    current = await _get_attendance_config()
+    update = data.model_dump(exclude_none=True)
+    merged = {**current, **update}
+    await db.settings.update_one(
+        {"key_name": "attendance_config"},
+        {"$set": {"key_name": "attendance_config", "key_value": _json.dumps(merged), "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    return merged
+
+# ---- Public Holidays (tanggal merah / hari libur nasional) ----
+class PublicHolidayIn(BaseModel):
+    date: str    # YYYY-MM-DD
+    name: str
+    note: Optional[str] = None
+
+@app.get("/api/hr/public-holidays")
+async def list_public_holidays(month: Optional[str] = None, user: dict = Depends(require_feature("hr"))):
+    """month optional: 'YYYY-MM' — kalau kosong, kembalikan semua."""
+    q = {}
+    if month:
+        # match by prefix YYYY-MM
+        q["date"] = {"$regex": f"^{month}"}
+    docs = await db.public_holidays.find(q).sort("date", 1).to_list(2000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/hr/public-holidays")
+async def create_public_holiday(data: PublicHolidayIn, user: dict = Depends(require_feature("hr"))):
+    date_s = (data.date or "").strip()
+    name_s = (data.name or "").strip()
+    if not date_s or not name_s:
+        raise HTTPException(400, "date & name wajib diisi")
+    # validate date
+    try:
+        datetime.strptime(date_s, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "date harus YYYY-MM-DD")
+    doc = {
+        "date": date_s,
+        "name": name_s,
+        "note": (data.note or "").strip() or None,
+        "created_by": user["id"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    # unique per tanggal
+    await db.public_holidays.update_one({"date": date_s}, {"$set": doc}, upsert=True)
+    return serialize(await db.public_holidays.find_one({"date": date_s}))
+
+@app.delete("/api/hr/public-holidays/{hid}")
+async def delete_public_holiday(hid: str, user: dict = Depends(require_feature("hr"))):
+    await db.public_holidays.delete_one({"_id": _oid(hid)})
+    return {"ok": True}
+
+# ===========================================================================
+# END ATTENDANCE CONFIG
+# ===========================================================================
+
 @app.post("/api/hr/attendance/import")
 async def import_attendance(
     file: UploadFile = File(...),
@@ -4459,7 +4555,17 @@ async def import_attendance(
     emp_by_nik = {e.get("nik"): e for e in employees if e.get("nik")}
     emp_by_name = {(e.get("full_name") or "").strip().lower(): e for e in employees}
 
+    # Load attendance config & public holidays once (untuk auto-detect weekend/libur)
+    att_cfg = await _get_attendance_config()
+    holidays_docs = await db.public_holidays.find({}).to_list(5000)
+    holidays_map = {h["date"]: h for h in holidays_docs}   # {YYYY-MM-DD: doc}
+    work_days_set = set([d.lower() for d in (att_cfg.get("work_days") or [])])
+    dow_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    auto_detect = bool(att_cfg.get("auto_detect_on_import", True))
+
     imported = 0
+    auto_detected_weekend = 0
+    auto_detected_holiday = 0
     skipped = []
     for idx, r in enumerate(rows):
         # Find employee
@@ -4499,8 +4605,23 @@ async def import_attendance(
         status_raw = _get(r, "status", "keterangan", "kondisi")
         check_in = _get(r, "check_in", "jam_masuk", "in", "clock_in")
         check_out = _get(r, "check_out", "jam_keluar", "out", "clock_out")
+
+        # ----- AUTO DETECT weekend & holiday (kalau status di file kosong) -----
+        auto_note = None
+        holiday_name = None
+        try:
+            from datetime import datetime as _dt2
+            dt_obj = _dt2.strptime(date_str, "%Y-%m-%d")
+            dow_key = dow_names[dt_obj.weekday()]   # mon..sun
+        except Exception:
+            dow_key = None
+        is_holiday = date_str in holidays_map
+        if is_holiday:
+            holiday_name = holidays_map[date_str].get("name")
+        is_non_workday = (dow_key is not None) and (dow_key not in work_days_set)
+
         if status_raw:
-            # Normalize
+            # User explicit → respect
             s = status_raw.strip().title()
             if s.lower() in ("h", "hadir", "present", "masuk"):
                 status = "Hadir"
@@ -4510,8 +4631,18 @@ async def import_attendance(
                 status = "Izin"
             elif s.lower() in ("a", "alfa", "absent", "tanpa keterangan"):
                 status = "Alfa"
+            elif s.lower() in ("l", "libur", "holiday", "off", "weekend"):
+                status = "Libur"
             else:
-                status = "Hadir"  # default
+                status = s  # keep as-is (mis. "Cuti", "Half Day")
+        elif auto_detect and is_holiday:
+            status = att_cfg.get("holiday_status") or "Libur"
+            auto_note = f"Auto: {holiday_name}"
+            auto_detected_holiday += 1
+        elif auto_detect and is_non_workday:
+            status = att_cfg.get("weekend_status") or "Off"
+            auto_note = f"Auto: {dow_key.upper()} (non-workday)"
+            auto_detected_weekend += 1
         else:
             status = _derive_status_from_times(check_in, check_out)
 
@@ -4522,7 +4653,11 @@ async def import_attendance(
             "status": status,
             "check_in": check_in,
             "check_out": check_out,
-            "note": _get(r, "note", "catatan", "keterangan_detail"),
+            "note": _get(r, "note", "catatan", "keterangan_detail") or auto_note,
+            "is_holiday": is_holiday,
+            "holiday_name": holiday_name,
+            "is_weekend": is_non_workday,
+            "day_of_week": dow_key,
             "created_at": datetime.now(timezone.utc),
             "created_by": user["id"],
         }
@@ -4537,6 +4672,8 @@ async def import_attendance(
         "imported": imported,
         "skipped_count": len(skipped),
         "skipped_details": skipped[:100],  # cap for UI
+        "auto_detected_weekend": auto_detected_weekend,
+        "auto_detected_holiday": auto_detected_holiday,
     }
 
 # ===========================================================================

@@ -4,15 +4,22 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../components/ui";
 import { fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon } from "lucide-react";
+import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon } from "lucide-react";
 
-const STATUS_OPTIONS = ["Hadir", "Sakit", "Izin", "Alfa"];
+const STATUS_OPTIONS = ["Hadir", "Sakit", "Izin", "Alfa", "Libur", "Off"];
 const STATUS_COLORS = {
   Hadir: "bg-emerald-100 text-emerald-800 border-emerald-300",
   Sakit: "bg-orange-100 text-orange-800 border-orange-300",
   Izin: "bg-blue-100 text-blue-800 border-blue-300",
   Alfa: "bg-red-100 text-red-800 border-red-300",
+  Libur: "bg-purple-100 text-purple-800 border-purple-300",
+  Off: "bg-slate-100 text-slate-700 border-slate-300",
 };
+
+const DAYS_ID = [
+  { key: "mon", label: "Senin" }, { key: "tue", label: "Selasa" }, { key: "wed", label: "Rabu" },
+  { key: "thu", label: "Kamis" }, { key: "fri", label: "Jumat" }, { key: "sat", label: "Sabtu" }, { key: "sun", label: "Minggu" },
+];
 
 export default function Attendance() {
   const [emps, setEmps] = useState([]);
@@ -25,6 +32,58 @@ export default function Attendance() {
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
   const [form, setForm] = useState({ employee_id: "", date: "", status: "Hadir", check_in: "", check_out: "", note: "" });
+
+  // ---- Attendance config + Public holidays ----
+  const [showSettings, setShowSettings] = useState(false);
+  const [cfg, setCfg] = useState({ work_days: ["mon","tue","wed","thu","fri"], work_hour_in: "08:30", work_hour_out: "17:30", weekend_status: "Off", holiday_status: "Libur", auto_detect_on_import: true });
+  const [holidays, setHolidays] = useState([]);
+  const [newHoliday, setNewHoliday] = useState({ date: "", name: "", note: "" });
+  const [savingCfg, setSavingCfg] = useState(false);
+
+  const loadSettings = async () => {
+    try {
+      const [cfgRes, hRes] = await Promise.all([
+        api.get("/hr/attendance-config"),
+        api.get("/hr/public-holidays", { params: { month } }),
+      ]);
+      setCfg({ ...cfg, ...cfgRes.data });
+      setHolidays(hRes.data || []);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const saveCfg = async () => {
+    setSavingCfg(true);
+    try {
+      await api.put("/hr/attendance-config", cfg);
+      toast.success("Setting jam kerja tersimpan");
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setSavingCfg(false); }
+  };
+  const addHoliday = async () => {
+    if (!newHoliday.date || !newHoliday.name) { toast.error("Tanggal & nama wajib"); return; }
+    try {
+      await api.post("/hr/public-holidays", newHoliday);
+      toast.success("Hari libur ditambahkan");
+      setNewHoliday({ date: "", name: "", note: "" });
+      const hRes = await api.get("/hr/public-holidays", { params: { month } });
+      setHolidays(hRes.data || []);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const delHoliday = async (id) => {
+    if (!window.confirm("Hapus tanggal merah ini?")) return;
+    try {
+      await api.delete(`/hr/public-holidays/${id}`);
+      toast.success("Terhapus");
+      const hRes = await api.get("/hr/public-holidays", { params: { month } });
+      setHolidays(hRes.data || []);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const toggleWorkDay = (k) => {
+    const set = new Set(cfg.work_days || []);
+    if (set.has(k)) set.delete(k); else set.add(k);
+    setCfg({ ...cfg, work_days: Array.from(set) });
+  };
+  const openSettings = () => { setShowSettings(true); loadSettings(); };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -158,6 +217,9 @@ export default function Attendance() {
             </Select>
           </div>
           <div className="flex-1"/>
+          <Button variant="secondary" onClick={openSettings} data-testid="att-settings-btn">
+            <SettingsIcon size={14}/> Setting
+          </Button>
           <Button variant="secondary" onClick={downloadTemplate} data-testid="att-download-template">
             <Download size={14}/> Template
           </Button>
@@ -322,6 +384,20 @@ export default function Attendance() {
                 <div className="p-3 bg-emerald-50 border border-emerald-200 rounded">
                   <div className="font-bold text-emerald-800">✅ {importResult.imported} baris berhasil di-import</div>
                 </div>
+                {(importResult.auto_detected_weekend > 0 || importResult.auto_detected_holiday > 0) && (
+                  <div className="p-3 bg-purple-50 border border-purple-200 rounded">
+                    <div className="font-bold text-purple-800 mb-1">🤖 Auto-Detected</div>
+                    <ul className="text-xs space-y-0.5">
+                      {importResult.auto_detected_holiday > 0 && (
+                        <li>• {importResult.auto_detected_holiday} baris ditandai <b>Libur</b> (tanggal merah)</li>
+                      )}
+                      {importResult.auto_detected_weekend > 0 && (
+                        <li>• {importResult.auto_detected_weekend} baris ditandai <b>Off</b> (Sabtu/Minggu / non-workday)</li>
+                      )}
+                    </ul>
+                    <p className="text-[10px] text-slate-500 mt-1">Auto-detect hanya berlaku untuk baris yang kolom statusnya kosong di file. Kalau tidak mau, matikan di Setting.</p>
+                  </div>
+                )}
                 {importResult.skipped_count > 0 && (
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded">
                     <div className="font-bold text-amber-800 mb-2">⚠️ {importResult.skipped_count} baris di-skip</div>
@@ -339,6 +415,112 @@ export default function Attendance() {
                 </div>
               </div>
             )}
+          </Card>
+        </div>
+      )}
+
+      {/* ===== Settings Modal (Jam Kerja + Hari Libur) ===== */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="attendance-settings-modal">
+          <Card className="w-full max-w-3xl p-6 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="font-heading font-bold text-xl">Setting Absensi</h3>
+                <p className="text-xs text-slate-500">Konfigurasi hari kerja, jam kerja default, dan daftar tanggal merah</p>
+              </div>
+              <button onClick={() => setShowSettings(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+
+            {/* Jam Kerja Config */}
+            <div className="border border-slate-200 rounded-lg p-4 bg-slate-50/50 mb-4">
+              <h4 className="font-bold text-sm mb-3">🕒 Jam Kerja & Hari Kerja Default</h4>
+              <div className="mb-3">
+                <label className="text-xs font-bold text-slate-600 mb-1 block">Hari Kerja</label>
+                <div className="flex flex-wrap gap-2">
+                  {DAYS_ID.map((d) => (
+                    <button
+                      key={d.key}
+                      type="button"
+                      onClick={() => toggleWorkDay(d.key)}
+                      data-testid={`workday-${d.key}`}
+                      className={`px-3 py-1.5 text-xs rounded border font-semibold ${(cfg.work_days || []).includes(d.key) ? "bg-emerald-100 border-emerald-400 text-emerald-800" : "bg-white border-slate-300 text-slate-500"}`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">Klik untuk toggle. Hari yang tidak dipilih akan dianggap non-workday (default status {`"Off"`}).</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Jam Masuk</label>
+                  <Input type="time" value={cfg.work_hour_in} onChange={(e) => setCfg({ ...cfg, work_hour_in: e.target.value })} data-testid="work-hour-in"/>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Jam Pulang</label>
+                  <Input type="time" value={cfg.work_hour_out} onChange={(e) => setCfg({ ...cfg, work_hour_out: e.target.value })} data-testid="work-hour-out"/>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Status untuk Weekend/Non-Workday</label>
+                  <Select value={cfg.weekend_status} onChange={(e) => setCfg({ ...cfg, weekend_status: e.target.value })}>
+                    <option value="Off">Off</option>
+                    <option value="Libur">Libur</option>
+                  </Select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Status untuk Tanggal Merah</label>
+                  <Select value={cfg.holiday_status} onChange={(e) => setCfg({ ...cfg, holiday_status: e.target.value })}>
+                    <option value="Libur">Libur</option>
+                    <option value="Off">Off</option>
+                  </Select>
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-xs cursor-pointer">
+                <input type="checkbox" checked={cfg.auto_detect_on_import} onChange={(e) => setCfg({ ...cfg, auto_detect_on_import: e.target.checked })} data-testid="auto-detect-toggle" className="mt-0.5"/>
+                <span>
+                  <b>Auto-detect saat import.</b> Kalau kolom status di file kosong, sistem otomatis:
+                  <ul className="list-disc ml-4 mt-0.5 text-slate-600">
+                    <li>Tanggal Sabtu/Minggu (atau non-workday) → status {`"${cfg.weekend_status}"`}</li>
+                    <li>Tanggal merah nasional → status {`"${cfg.holiday_status}"`}</li>
+                  </ul>
+                </span>
+              </label>
+              <div className="mt-3 flex justify-end">
+                <Button onClick={saveCfg} disabled={savingCfg} data-testid="save-cfg-btn"><Save size={12} className="mr-1"/> {savingCfg ? "Menyimpan..." : "Simpan Setting"}</Button>
+              </div>
+            </div>
+
+            {/* Public Holidays List */}
+            <div className="border border-slate-200 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-bold text-sm">🎉 Tanggal Merah / Hari Libur Nasional</h4>
+                <span className="text-[10px] text-slate-500">Bulan {month}</span>
+              </div>
+              <div className="grid grid-cols-12 gap-2 mb-2">
+                <Input type="date" className="col-span-3" value={newHoliday.date} onChange={(e) => setNewHoliday({ ...newHoliday, date: e.target.value })} data-testid="hol-date"/>
+                <Input className="col-span-5" placeholder="Nama libur (mis. Hari Raya Idul Fitri)" value={newHoliday.name} onChange={(e) => setNewHoliday({ ...newHoliday, name: e.target.value })} data-testid="hol-name"/>
+                <Input className="col-span-3" placeholder="Catatan (opsional)" value={newHoliday.note} onChange={(e) => setNewHoliday({ ...newHoliday, note: e.target.value })} data-testid="hol-note"/>
+                <Button className="col-span-1" onClick={addHoliday} data-testid="add-hol-btn"><Plus size={14}/></Button>
+              </div>
+              <div className="space-y-1 max-h-64 overflow-y-auto">
+                {holidays.length === 0 && <p className="text-xs text-slate-500 italic py-2 text-center">Belum ada tanggal merah untuk bulan {month}. Tambahkan di atas.</p>}
+                {holidays.map((h) => (
+                  <div key={h.id} className="flex items-center gap-2 px-2 py-1.5 bg-purple-50 border border-purple-200 rounded text-xs" data-testid={`hol-${h.date}`}>
+                    <span className="font-mono font-bold text-purple-800">{h.date}</span>
+                    <span className="flex-1">{h.name}</span>
+                    {h.note && <span className="text-slate-500 italic">{h.note}</span>}
+                    <button onClick={() => delHoliday(h.id)} className="p-1 rounded hover:bg-red-100 text-red-600" data-testid={`del-hol-${h.date}`}><Trash2 size={12}/></button>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-slate-500 mt-2">💡 Tip: filter list di atas berdasarkan bulan {month}. Ganti dropdown bulan di atas halaman untuk lihat/tambah libur bulan lain.</p>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <Button variant="secondary" onClick={() => setShowSettings(false)}>Tutup</Button>
+            </div>
           </Card>
         </div>
       )}
