@@ -17,12 +17,13 @@ const EMPTY_EMP = {
   emergency1_name: "", emergency1_phone: "", emergency1_relation: "", emergency1_address: "",
   emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
-  position: "", bpjs_no: "", base_salary: 0, allowance: 0, meal_allowance: 0, join_date: "", active: true,
+  position: "", bpjs_no: "", base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
 };
 
 // Kolom yang bisa toggle di table karyawan (fixed cols not in this list)
 const TOGGLABLE_COLS = [
   { key: "employee_no", label: "ID Karyawan" },
+  { key: "gaji_lumpsum", label: "Lumpsum" },
   { key: "nickname", label: "Nama Panggilan" },
   { key: "tanggal_lahir", label: "Tanggal Lahir" },
   { key: "jenis_kelamin", label: "Jenis Kelamin" },
@@ -83,6 +84,7 @@ export default function HrPayroll() {
         base_salary: Number(form.base_salary || 0),
         allowance: Number(form.allowance || 0),
         meal_allowance: Number(form.meal_allowance || 0),
+        gaji_lumpsum: !!form.gaji_lumpsum,
         family: (form.family || []).filter((f) => (f.nama || "").trim() || (f.hubungan || "").trim()),
       };
       if (editing === "new") await api.post("/hr/employees", payload);
@@ -132,7 +134,7 @@ export default function HrPayroll() {
   const exportSimToExcel = () => {
     if (!sim) return;
     const header = [
-      "No", "ID Karyawan", "Nama Karyawan", "Posisi",
+      "No", "ID Karyawan", "Nama Karyawan", "Posisi", "Lumpsum",
       "Hari Kerja", "Hadir", "Sakit", "Izin", "Alfa (Total)", "Alfa (Manual)", "Missing (→ Alfa)",
       "Gaji Pokok", "Potongan Alfa", "Gaji Pokok Bersih",
       "Uang Makan/Hari", "Uang Makan Total",
@@ -144,6 +146,7 @@ export default function HrPayroll() {
       s.employee_no || "",
       s.employee_name,
       s.position || "",
+      s.gaji_lumpsum ? "YA" : "",
       s.working_days,
       s.hari_hadir,
       s.hari_sakit,
@@ -163,7 +166,7 @@ export default function HrPayroll() {
     // Total row
     const sum = (k) => sim.slips.reduce((a, s) => a + (Number(s[k]) || 0), 0);
     rows.push([
-      "", "", "TOTAL", "", "", "", "", "", "", "", "",
+      "", "", "TOTAL", "", "", "", "", "", "", "", "", "",
       sum("base_salary"), sum("deduction_alfa"), sum("gaji_pokok_net"),
       "", sum("uang_makan"),
       sum("lembur_jam"), sum("lembur_total"),
@@ -173,7 +176,7 @@ export default function HrPayroll() {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
     ws["!cols"] = [
-      { wch: 4 }, { wch: 12 }, { wch: 25 }, { wch: 18 },
+      { wch: 4 }, { wch: 12 }, { wch: 25 }, { wch: 18 }, { wch: 9 },
       { wch: 8 }, { wch: 7 }, { wch: 7 }, { wch: 7 }, { wch: 10 }, { wch: 10 }, { wch: 12 },
       { wch: 14 }, { wch: 14 }, { wch: 16 },
       { wch: 14 }, { wch: 14 },
@@ -255,6 +258,10 @@ export default function HrPayroll() {
                       content = e[k] ? fmtIDR(e[k]) : "-";
                     } else if (k === "jenis_kelamin") {
                       content = e[k] === "L" ? "Laki-laki" : e[k] === "P" ? "Perempuan" : "-";
+                    } else if (k === "gaji_lumpsum") {
+                      content = e.gaji_lumpsum
+                        ? <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold">LUMPSUM</span>
+                        : "-";
                     } else {
                       content = e[k] || "-";
                     }
@@ -449,6 +456,26 @@ export default function HrPayroll() {
                     </Select>
                   </div>
                 </div>
+                {/* Override Gaji Lumpsum */}
+                <div className="mt-3 border border-amber-200 rounded p-3 bg-amber-50/60">
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      data-testid="emp-gaji-lumpsum"
+                      checked={!!form.gaji_lumpsum}
+                      onChange={(e) => setForm({ ...form, gaji_lumpsum: e.target.checked })}
+                    />
+                    <span className="text-sm">
+                      <b className="text-amber-900">💰 Gaji Lumpsum</b>
+                      <div className="text-xs text-slate-600 mt-0.5">
+                        Kalau dicentang, <b>Gaji Pokok tidak dipotong</b> meskipun ada Alfa/absen kosong.
+                        Uang Makan & Lembur tetap dihitung sesuai kehadiran.
+                        Cocok untuk direksi, kontraktor, atau posisi dengan gaji tetap.
+                      </div>
+                    </span>
+                  </label>
+                </div>
               </div>
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
@@ -521,6 +548,7 @@ export default function HrPayroll() {
                         <Td>
                           {s.employee_name}
                           {s.employee_no && <div className="text-[10px] text-slate-500 font-mono">{s.employee_no}</div>}
+                          {s.gaji_lumpsum && <span className="mt-0.5 inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-bold" title="Gaji Pokok tidak dipotong Alfa">LUMPSUM</span>}
                         </Td>
                         <Td className="text-xs">{s.position || "-"}</Td>
                         <Td className="text-right font-mono text-xs">{s.hari_hadir}/{s.working_days}</Td>

@@ -4173,6 +4173,7 @@ class EmployeeIn(BaseModel):
     base_salary: float = 0
     allowance: float = 0
     meal_allowance: float = 0  # Uang makan harian (dibayar hanya kalau HADIR)
+    gaji_lumpsum: bool = False  # True = gaji pokok tidak dipotong meski Alfa
     join_date: Optional[str] = None           # YYYY-MM-DD
     active: bool = True
 
@@ -4320,6 +4321,7 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         emp_id = str(e["_id"])
         base = float(e.get("base_salary", 0))
         meal_per_day = float(e.get("meal_allowance", 0))
+        is_lumpsum = bool(e.get("gaji_lumpsum", False))
         emp_att = att_by_emp.get(emp_id, [])
 
         hari_hadir = sum(1 for a in emp_att if a.get("status") == "Hadir")
@@ -4332,8 +4334,13 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         hari_missing = max(0, working_days - hari_recorded)
         hari_alfa_effective = hari_alfa + hari_missing
 
-        deduction_alfa = round((base / working_days) * hari_alfa_effective, 2) if working_days > 0 else 0
-        gaji_pokok_net = base - deduction_alfa
+        # Deduksi Alfa: SKIP kalau karyawan gaji lumpsum
+        if is_lumpsum:
+            deduction_alfa = 0.0
+            gaji_pokok_net = base
+        else:
+            deduction_alfa = round((base / working_days) * hari_alfa_effective, 2) if working_days > 0 else 0
+            gaji_pokok_net = base - deduction_alfa
         # Uang makan hanya untuk HADIR aktual (bukan sakit/izin/alfa/missing)
         uang_makan = round(meal_per_day * hari_hadir, 2)
         lembur_total = 0.0
@@ -4354,6 +4361,7 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
             "position": e.get("position"),
             "base_salary": base,
             "meal_allowance_per_day": meal_per_day,
+            "gaji_lumpsum": is_lumpsum,
             "working_days": working_days,
             "hari_hadir": hari_hadir,
             "hari_sakit": hari_sakit,
