@@ -4134,6 +4134,7 @@ class FamilyMember(BaseModel):
 
 class EmployeeIn(BaseModel):
     # --- Identitas ---
+    employee_no: Optional[str] = None         # ID/No. Karyawan (input manual, mis. EMP-001)
     full_name: str
     nickname: Optional[str] = None
     tempat_lahir: Optional[str] = None
@@ -4247,11 +4248,11 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     attendance_docs = await db.attendance.find({
         "date": {"$gte": period_start.isoformat(), "$lte": period_end.isoformat()}
     }).to_list(50000)
-    # Index by employee_id -> {date: status}
+    # Index by employee_id -> list of attendance docs
     att_by_emp = {}
     for a in attendance_docs:
         eid = str(a.get("employee_id"))
-        att_by_emp.setdefault(eid, {})[a.get("date")] = a.get("status")
+        att_by_emp.setdefault(eid, []).append(a)
 
     slips = []
     total_gross = 0.0
@@ -4259,13 +4260,13 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         emp_id = str(e["_id"])
         base = float(e.get("base_salary", 0))
         meal_per_day = float(e.get("meal_allowance", 0))
-        att = att_by_emp.get(emp_id, {})
+        emp_att = att_by_emp.get(emp_id, [])
 
         # Hitung per-status
-        hari_hadir = sum(1 for s in att.values() if s == "Hadir")
-        hari_sakit = sum(1 for s in att.values() if s == "Sakit")
-        hari_izin = sum(1 for s in att.values() if s == "Izin")
-        hari_alfa = sum(1 for s in att.values() if s == "Alfa")
+        hari_hadir = sum(1 for a in emp_att if a.get("status") == "Hadir")
+        hari_sakit = sum(1 for a in emp_att if a.get("status") == "Sakit")
+        hari_izin = sum(1 for a in emp_att if a.get("status") == "Izin")
+        hari_alfa = sum(1 for a in emp_att if a.get("status") == "Alfa")
         hari_recorded = hari_hadir + hari_sakit + hari_izin + hari_alfa
         # Hari yang belum ada record → dianggap Hadir (default optimis)
         hari_missing = max(0, working_days - hari_recorded)
@@ -4274,12 +4275,24 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         # Deduction karena Alfa (potongan proporsional dari base salary)
         deduction_alfa = round((base / working_days) * hari_alfa, 2) if working_days > 0 else 0
         gaji_pokok_net = base - deduction_alfa
-        # Uang makan hanya dibayar untuk HADIR
+        # Uang makan hanya dibayar untuk HADIR (bukan sakit/izin/alfa)
         uang_makan = round(meal_per_day * hari_hadir_effective, 2)
-        gross = gaji_pokok_net + uang_makan
+        # Lembur: sum(overtime_hours × overtime_rate) dari attendance
+        lembur_total = 0.0
+        lembur_jam = 0.0
+        for a in emp_att:
+            oh = float(a.get("overtime_hours") or 0)
+            orate = float(a.get("overtime_rate") or 0)
+            if oh > 0 and orate > 0:
+                lembur_total += oh * orate
+                lembur_jam += oh
+        lembur_total = round(lembur_total, 2)
+
+        gross = gaji_pokok_net + uang_makan + lembur_total
 
         slips.append({
             "employee_id": emp_id,
+            "employee_no": e.get("employee_no"),
             "employee_name": e.get("full_name"),
             "position": e.get("position"),
             "base_salary": base,
@@ -4293,6 +4306,8 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
             "deduction_alfa": deduction_alfa,
             "gaji_pokok_net": gaji_pokok_net,
             "uang_makan": uang_makan,
+            "lembur_jam": lembur_jam,
+            "lembur_total": lembur_total,
             "gross": gross,
             "net": gross,  # No tax deduction untuk sekarang (user bilang tidak ada tunjangan/pajak logic)
         })
@@ -4349,6 +4364,8 @@ class AttendanceIn(BaseModel):
     check_in: Optional[str] = None  # HH:MM
     check_out: Optional[str] = None  # HH:MM
     note: Optional[str] = None
+    overtime_hours: Optional[float] = 0        # jumlah jam lembur
+    overtime_rate: Optional[float] = 0         # tarif per-jam lembur (input manual)
 
 def _derive_status_from_times(check_in: Optional[str], check_out: Optional[str]) -> str:
     """Kalau tidak ada check_in/out → Alfa. Kalau ada → Hadir (late tetap Hadir)."""
@@ -4382,6 +4399,10 @@ async def create_attendance(data: AttendanceIn, user: dict = Depends(require_fea
     if not await db.employees.find_one({"_id": _oid(data.employee_id)}):
         raise HTTPException(404, "Karyawan tidak ditemukan")
     doc = data.model_dump()
+    # Auto-compute is_late / is_under_hours dari jam kerja per hari
+    cfg = await _get_attendance_config()
+    metrics = _compute_late_underhours(cfg, doc.get("date"), doc.get("check_in"), doc.get("check_out"), doc.get("status"))
+    doc.update(metrics)
     doc["created_at"] = datetime.now(timezone.utc)
     doc["created_by"] = user["id"]
     # Upsert (unique per employee+date)
@@ -4397,7 +4418,12 @@ async def create_attendance(data: AttendanceIn, user: dict = Depends(require_fea
 async def update_attendance(aid: str, data: AttendanceIn, user: dict = Depends(require_feature("hr"))):
     if data.status not in ALLOWED_ATT_STATUS:
         raise HTTPException(400, f"Status invalid")
-    await db.attendance.update_one({"_id": _oid(aid)}, {"$set": data.model_dump()})
+    doc = data.model_dump()
+    cfg = await _get_attendance_config()
+    metrics = _compute_late_underhours(cfg, doc.get("date"), doc.get("check_in"), doc.get("check_out"), doc.get("status"))
+    doc.update(metrics)
+    doc["updated_at"] = datetime.now(timezone.utc)
+    await db.attendance.update_one({"_id": _oid(aid)}, {"$set": doc})
     return serialize(await db.attendance.find_one({"_id": _oid(aid)}))
 
 @app.delete("/api/hr/attendance/{aid}")
@@ -4415,7 +4441,76 @@ DEFAULT_ATTENDANCE_CONFIG = {
     "weekend_status": "Off",                              # status default untuk hari non-kerja
     "holiday_status": "Libur",                            # status default untuk tanggal merah
     "auto_detect_on_import": True,                        # override status kosong saat import
+    # Flexible jam kerja per hari (override work_hour_in/out kalau diset)
+    # struktur: { "mon": {"in": "08:00", "out": "17:00"}, "fri": {"in": "08:00", "out": "16:00"}, ... }
+    "work_schedule": {},
+    "late_threshold_minutes": 5,   # telat > threshold → is_late = True
 }
+
+
+def _hhmm_to_min(t: Optional[str]) -> Optional[int]:
+    """Convert 'HH:MM' → total minutes. Returns None jika invalid."""
+    if not t or not isinstance(t, str):
+        return None
+    t = t.strip()
+    if not t:
+        return None
+    try:
+        parts = t.split(":")
+        return int(parts[0]) * 60 + int(parts[1])
+    except (ValueError, IndexError):
+        return None
+
+
+def _get_day_schedule(cfg: dict, date_str: Optional[str]) -> tuple:
+    """Return (work_hour_in, work_hour_out) untuk tanggal ini.
+    Prioritas: work_schedule[dow] > default work_hour_in/out.
+    """
+    default_in = cfg.get("work_hour_in") or "08:30"
+    default_out = cfg.get("work_hour_out") or "17:30"
+    if not date_str:
+        return default_in, default_out
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        dow = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][dt.weekday()]
+        sched = (cfg.get("work_schedule") or {}).get(dow) or {}
+        return sched.get("in") or default_in, sched.get("out") or default_out
+    except Exception:
+        return default_in, default_out
+
+
+def _compute_late_underhours(cfg: dict, date_str: str, check_in: Optional[str], check_out: Optional[str], status: str) -> dict:
+    """Hitung is_late & is_under_hours berdasarkan config + jam kerja hari itu."""
+    if status != "Hadir" or not check_in:
+        return {"is_late": False, "is_under_hours": False, "late_minutes": 0, "worked_minutes": 0, "required_minutes": 0}
+    sched_in, sched_out = _get_day_schedule(cfg, date_str)
+    threshold = int(cfg.get("late_threshold_minutes") or 5)
+    ci = _hhmm_to_min(check_in)
+    co = _hhmm_to_min(check_out)
+    si = _hhmm_to_min(sched_in)
+    so = _hhmm_to_min(sched_out)
+    is_late = False
+    late_minutes = 0
+    if ci is not None and si is not None:
+        diff = ci - si
+        if diff > threshold:
+            is_late = True
+            late_minutes = diff
+    worked = 0
+    required = 0
+    is_under = False
+    if ci is not None and co is not None and si is not None and so is not None:
+        worked = max(0, co - ci)
+        required = max(0, so - si)
+        if required > 0 and worked < required:
+            is_under = True
+    return {
+        "is_late": is_late,
+        "is_under_hours": is_under,
+        "late_minutes": late_minutes,
+        "worked_minutes": worked,
+        "required_minutes": required,
+    }
 
 async def _get_attendance_config():
     row = await db.settings.find_one({"key_name": "attendance_config"})
@@ -4440,6 +4535,8 @@ class AttendanceConfigIn(BaseModel):
     weekend_status: Optional[str] = None
     holiday_status: Optional[str] = None
     auto_detect_on_import: Optional[bool] = None
+    work_schedule: Optional[dict] = None       # {"mon": {"in": "08:00", "out": "17:00"}, ...}
+    late_threshold_minutes: Optional[int] = None
 
 @app.put("/api/hr/attendance-config")
 async def update_attendance_config(data: AttendanceConfigIn, user: dict = Depends(require_feature("hr"))):
@@ -4628,10 +4725,11 @@ async def import_attendance(
                 return r[k]
         return None
 
-    # Build employee lookup: {employee_id: emp_doc, nik: emp_doc, full_name (lower): emp_doc}
+    # Build employee lookup: {employee_id: emp_doc, nik: emp_doc, employee_no, full_name (lower): emp_doc}
     employees = await db.employees.find({}).to_list(5000)
     emp_by_id = {str(e["_id"]): e for e in employees}
     emp_by_nik = {e.get("nik"): e for e in employees if e.get("nik")}
+    emp_by_no = {(e.get("employee_no") or "").strip(): e for e in employees if e.get("employee_no")}
     emp_by_name = {(e.get("full_name") or "").strip().lower(): e for e in employees}
 
     # Load attendance config & public holidays once (untuk auto-detect weekend/libur)
@@ -4649,17 +4747,20 @@ async def import_attendance(
     for idx, r in enumerate(rows):
         # Find employee
         emp_key = _get(r, "employee_id", "id_karyawan", "id")
+        emp_no = _get(r, "employee_no", "no_karyawan", "no")
         nik = _get(r, "nik", "no_ktp")
         name = _get(r, "nama", "nama_karyawan", "full_name", "name")
         emp = None
         if emp_key and emp_key in emp_by_id:
             emp = emp_by_id[emp_key]
+        elif emp_no and emp_no.strip() in emp_by_no:
+            emp = emp_by_no[emp_no.strip()]
         elif nik and nik in emp_by_nik:
             emp = emp_by_nik[nik]
         elif name:
             emp = emp_by_name.get(name.strip().lower())
         if not emp:
-            skipped.append({"row": idx + 2, "reason": f"Karyawan tidak ditemukan (id/nik/nama={emp_key or nik or name})"})
+            skipped.append({"row": idx + 2, "reason": f"Karyawan tidak ditemukan (id/no/nik/nama={emp_key or emp_no or nik or name})"})
             continue
 
         # Parse date
@@ -4726,6 +4827,16 @@ async def import_attendance(
             status = _derive_status_from_times(check_in, check_out)
 
         # Upsert
+        # Parse overtime (opsional)
+        def _num(v):
+            try:
+                return float(str(v).replace(",", ".").strip() or 0)
+            except Exception:
+                return 0.0
+        ot_hours = _num(_get(r, "overtime_hours", "lembur_jam", "jam_lembur", "overtime"))
+        ot_rate = _num(_get(r, "overtime_rate", "tarif_lembur", "rate_lembur"))
+        # Compute late / under hours
+        metrics = _compute_late_underhours(att_cfg, date_str, check_in, check_out, status)
         doc = {
             "employee_id": str(emp["_id"]),
             "date": date_str,
@@ -4737,6 +4848,13 @@ async def import_attendance(
             "holiday_name": holiday_name,
             "is_weekend": is_non_workday,
             "day_of_week": dow_key,
+            "overtime_hours": ot_hours,
+            "overtime_rate": ot_rate,
+            "is_late": metrics["is_late"],
+            "is_under_hours": metrics["is_under_hours"],
+            "late_minutes": metrics["late_minutes"],
+            "worked_minutes": metrics["worked_minutes"],
+            "required_minutes": metrics["required_minutes"],
             "created_at": datetime.now(timezone.utc),
             "created_by": user["id"],
         }

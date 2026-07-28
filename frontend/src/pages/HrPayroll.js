@@ -7,6 +7,7 @@ import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings } from 
 import { useAuth } from "../lib/auth";
 
 const EMPTY_EMP = {
+  employee_no: "",
   full_name: "", nickname: "", tempat_lahir: "", tanggal_lahir: "",
   status_pernikahan: "", jenis_kelamin: "",
   no_hp: "", alamat_ktp: "", alamat_domisili: "", nik: "", no_kk: "", npwp: "", email: "",
@@ -20,6 +21,7 @@ const EMPTY_EMP = {
 
 // Kolom yang bisa toggle di table karyawan (fixed cols not in this list)
 const TOGGLABLE_COLS = [
+  { key: "employee_no", label: "ID Karyawan" },
   { key: "nickname", label: "Nama Panggilan" },
   { key: "tanggal_lahir", label: "Tanggal Lahir" },
   { key: "jenis_kelamin", label: "Jenis Kelamin" },
@@ -39,7 +41,7 @@ const TOGGLABLE_COLS = [
   { key: "allowance", label: "Tunjangan Lain" },
 ];
 
-const DEFAULT_VISIBLE_COLS = ["nickname", "no_hp", "bank"];
+const DEFAULT_VISIBLE_COLS = ["employee_no", "nickname", "no_hp", "bank"];
 
 export default function HrPayroll() {
   const { user } = useAuth();
@@ -221,6 +223,7 @@ export default function HrPayroll() {
               <div>
                 <h4 className="text-[11px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Identitas</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div><Label>ID Karyawan / No. Pegawai</Label><Input data-testid="emp-employee-no" value={form.employee_no} onChange={(e) => setForm({ ...form, employee_no: e.target.value })} placeholder="Mis. EMP-001 (opsional)"/></div>
                   <div><Label>Nama Lengkap *</Label><Input data-testid="emp-full-name" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} required/></div>
                   <div><Label>Nama Panggilan</Label><Input data-testid="emp-nickname" value={form.nickname} onChange={(e) => setForm({ ...form, nickname: e.target.value })}/></div>
                   <div><Label>Tempat Lahir</Label><Input value={form.tempat_lahir} onChange={(e) => setForm({ ...form, tempat_lahir: e.target.value })}/></div>
@@ -380,16 +383,30 @@ export default function HrPayroll() {
                 <Button variant="danger" onClick={() => delPayroll(p.id)}><Trash2 size={13}/></Button>
               </div>
               <Table>
-                <thead><tr><Th>Karyawan</Th><Th>Posisi</Th><Th className="text-right">Gaji Pokok</Th><Th className="text-right">Tunjangan</Th><Th className="text-right">Gross</Th><Th className="text-right">PPh21</Th><Th className="text-right">Net</Th></tr></thead>
+                <thead><tr>
+                  <Th>Karyawan</Th>
+                  <Th>Posisi</Th>
+                  <Th className="text-right">Hadir/Kerja</Th>
+                  <Th className="text-right">Gaji Pokok</Th>
+                  <Th className="text-right">Uang Makan</Th>
+                  <Th className="text-right">Lembur</Th>
+                  <Th className="text-right">Gross</Th>
+                  <Th className="text-right">Net</Th>
+                </tr></thead>
                 <tbody>
                   {(p.slips || []).map((s, i) => (
                     <tr key={i}>
-                      <Td>{s.employee_name}</Td>
+                      <Td>{s.employee_name}{s.employee_no ? <div className="text-[10px] text-slate-500 font-mono">{s.employee_no}</div> : null}</Td>
                       <Td className="text-xs">{s.position || "-"}</Td>
-                      <Td className="text-right font-mono">{fmtIDR(s.base_salary)}</Td>
-                      <Td className="text-right font-mono">{fmtIDR(s.allowance)}</Td>
+                      <Td className="text-right font-mono text-xs">{s.hari_hadir || 0}/{s.working_days || 0}</Td>
+                      <Td className="text-right font-mono">{fmtIDR(s.gaji_pokok_net != null ? s.gaji_pokok_net : s.base_salary)}</Td>
+                      <Td className="text-right font-mono">{fmtIDR(s.uang_makan || 0)}</Td>
+                      <Td className="text-right font-mono">
+                        {(s.lembur_total || 0) > 0 ? (
+                          <span>{fmtIDR(s.lembur_total)}<div className="text-[10px] text-slate-500">{s.lembur_jam}j</div></span>
+                        ) : "-"}
+                      </Td>
                       <Td className="text-right font-mono">{fmtIDR(s.gross)}</Td>
-                      <Td className="text-right font-mono text-rose-700">{fmtIDR(s.pph21)}</Td>
                       <Td className="text-right font-mono font-bold">{fmtIDR(s.net)}</Td>
                     </tr>
                   ))}

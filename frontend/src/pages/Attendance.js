@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../components/ui";
 import { fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon } from "lucide-react";
+import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon, Edit2 } from "lucide-react";
 
 const STATUS_OPTIONS = ["Hadir", "Sakit", "Izin", "Alfa", "Libur", "Off"];
 const STATUS_COLORS = {
@@ -28,14 +28,15 @@ export default function Attendance() {
   const [empFilter, setEmpFilter] = useState("all");
   const [loading, setLoading] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState(null);  // null | attendance-id (untuk edit modal)
   const [showImport, setShowImport] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [form, setForm] = useState({ employee_id: "", date: "", status: "Hadir", check_in: "", check_out: "", note: "" });
+  const [form, setForm] = useState({ employee_id: "", date: "", status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 });
 
   // ---- Attendance config + Public holidays ----
   const [showSettings, setShowSettings] = useState(false);
-  const [cfg, setCfg] = useState({ work_days: ["mon","tue","wed","thu","fri"], work_hour_in: "08:30", work_hour_out: "17:30", weekend_status: "Off", holiday_status: "Libur", auto_detect_on_import: true });
+  const [cfg, setCfg] = useState({ work_days: ["mon","tue","wed","thu","fri"], work_hour_in: "08:30", work_hour_out: "17:30", weekend_status: "Off", holiday_status: "Libur", auto_detect_on_import: true, work_schedule: {}, late_threshold_minutes: 5 });
   const [holidays, setHolidays] = useState([]);
   const [newHoliday, setNewHoliday] = useState({ date: "", name: "", note: "" });
   const [savingCfg, setSavingCfg] = useState(false);
@@ -139,14 +140,40 @@ export default function Attendance() {
   const submitAdd = async () => {
     if (!form.employee_id || !form.date || !form.status) return toast.error("Karyawan, tanggal, status wajib");
     try {
-      await api.post("/hr/attendance", form);
-      toast.success("Absensi tersimpan");
+      const payload = {
+        ...form,
+        overtime_hours: Number(form.overtime_hours || 0),
+        overtime_rate: Number(form.overtime_rate || 0),
+      };
+      if (editingId) {
+        await api.put(`/hr/attendance/${editingId}`, payload);
+        toast.success("Absensi diperbarui");
+      } else {
+        await api.post("/hr/attendance", payload);
+        toast.success("Absensi tersimpan");
+      }
       setShowAdd(false);
-      setForm({ employee_id: "", date: "", status: "Hadir", check_in: "", check_out: "", note: "" });
+      setEditingId(null);
+      setForm({ employee_id: "", date: "", status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 });
       load();
     } catch (e) {
       toast.error(errMsg(e));
     }
+  };
+
+  const openEdit = (row) => {
+    setEditingId(row.id);
+    setForm({
+      employee_id: row.employee_id || "",
+      date: row.date || "",
+      status: row.status || "Hadir",
+      check_in: row.check_in || "",
+      check_out: row.check_out || "",
+      note: row.note || "",
+      overtime_hours: row.overtime_hours || 0,
+      overtime_rate: row.overtime_rate || 0,
+    });
+    setShowAdd(true);
   };
 
   const del = async (id) => {
@@ -177,22 +204,23 @@ export default function Attendance() {
 
   const downloadTemplate = () => {
     // XLSX template — bisa di-copas dari Excel lain
-    const header = ["employee_id", "nik", "nama", "tanggal", "status", "check_in", "check_out", "note"];
+    const header = ["employee_no", "employee_id", "nik", "nama", "tanggal", "status", "check_in", "check_out", "overtime_hours", "overtime_rate", "note"];
     const sample = [
-      ["", "", "Contoh Nama", "2026-02-15", "Hadir", "08:30", "17:30", ""],
-      ["", "", "Contoh Nama", "2026-02-16", "Alfa", "", "", "Tanpa kabar"],
-      ["", "", "Contoh Nama", "2026-02-17", "Sakit", "", "", "Surat dokter"],
+      ["EMP-001", "", "", "Contoh Nama", "2026-02-15", "Hadir", "08:30", "17:30", 0, 0, ""],
+      ["EMP-001", "", "", "Contoh Nama", "2026-02-16", "Alfa", "", "", 0, 0, "Tanpa kabar"],
+      ["EMP-001", "", "", "Contoh Nama", "2026-02-17", "Sakit", "", "", 0, 0, "Surat dokter"],
+      ["EMP-002", "", "", "Contoh Lembur", "2026-02-18", "Hadir", "08:30", "20:00", 2.5, 30000, "Lembur closing"],
     ];
     const aoa = [header, ...sample];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     // Kolom lebar biar rapi saat dibuka
     ws["!cols"] = [
-      { wch: 14 }, { wch: 10 }, { wch: 20 }, { wch: 12 },
-      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 20 },
+      { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 12 },
+      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 20 },
     ];
     // Format tanggal sebagai text supaya tidak diparse Excel jadi angka
     for (let r = 1; r < aoa.length; r++) {
-      const cell = ws[XLSX.utils.encode_cell({ r, c: 3 })];
+      const cell = ws[XLSX.utils.encode_cell({ r, c: 4 })];
       if (cell) cell.t = "s";
     }
     const wb = XLSX.utils.book_new();
@@ -202,16 +230,21 @@ export default function Attendance() {
       ["PETUNJUK PENGISIAN TEMPLATE ABSENSI"],
       [""],
       ["Kolom", "Wajib?", "Keterangan"],
-      ["employee_id", "Salah satu", "ID internal karyawan (dari sistem)"],
-      ["nik", "Salah satu", "NIK karyawan (kalau tidak pakai employee_id)"],
-      ["nama", "Salah satu", "Nama lengkap (fallback kalau NIK/ID kosong)"],
+      ["employee_no", "Salah satu", "ID Karyawan manual (mis. EMP-001)"],
+      ["employee_id", "Salah satu", "ID internal karyawan dari sistem"],
+      ["nik", "Salah satu", "NIK karyawan (kalau tidak pakai employee_no/id)"],
+      ["nama", "Salah satu", "Nama lengkap (fallback terakhir)"],
       ["tanggal", "Wajib", "Format YYYY-MM-DD (contoh 2026-02-15)"],
       ["status", "Wajib", "Hadir / Sakit / Izin / Alfa / Cuti / Libur"],
       ["check_in", "Opsional", "Jam masuk HH:MM (contoh 08:30)"],
       ["check_out", "Opsional", "Jam pulang HH:MM (contoh 17:30)"],
+      ["overtime_hours", "Opsional", "Jumlah jam lembur (mis. 2.5)"],
+      ["overtime_rate", "Opsional", "Tarif lembur per jam dalam IDR (mis. 30000)"],
       ["note", "Opsional", "Catatan tambahan"],
       [""],
       ["Tips:", "Boleh copy-paste dari Excel/Sheets lain — pastikan header persis sama."],
+      ["Auto:", "Kalau status kosong, sistem akan auto-detect weekend / tanggal merah."],
+      ["Late:", "Kalau check_in > jam kerja + threshold (setting), akan ditandai TELAT."],
     ];
     const wsGuide = XLSX.utils.aoa_to_sheet(guide);
     wsGuide["!cols"] = [{ wch: 16 }, { wch: 14 }, { wch: 60 }];
@@ -252,7 +285,7 @@ export default function Attendance() {
           <Button variant="secondary" onClick={() => setShowImport(true)} data-testid="att-import-btn">
             <Upload size={14}/> Import
           </Button>
-          <Button onClick={() => { setShowAdd(true); setForm({ ...form, date: `${month}-01` }); }} data-testid="att-add-btn">
+          <Button onClick={() => { setEditingId(null); setShowAdd(true); setForm({ employee_id: "", date: `${month}-01`, status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 }); }} data-testid="att-add-btn">
             <Plus size={14}/> Tambah
           </Button>
         </div>
@@ -288,6 +321,8 @@ export default function Attendance() {
               <Th>Status</Th>
               <Th>Check In</Th>
               <Th>Check Out</Th>
+              <Th className="text-right">Lembur</Th>
+              <Th>Flag</Th>
               <Th>Catatan</Th>
               <Th className="text-right">Aksi</Th>
             </tr></thead>
@@ -303,11 +338,27 @@ export default function Attendance() {
                   </Td>
                   <Td className="font-mono text-xs">{r.check_in || "-"}</Td>
                   <Td className="font-mono text-xs">{r.check_out || "-"}</Td>
+                  <Td className="text-right font-mono text-xs">
+                    {(r.overtime_hours || 0) > 0
+                      ? <span>{r.overtime_hours}j × {(r.overtime_rate || 0).toLocaleString("id-ID")}</span>
+                      : <span className="text-slate-400">-</span>}
+                  </Td>
+                  <Td>
+                    <div className="flex flex-wrap gap-1">
+                      {r.is_late && <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[9px] font-bold" title={`Telat ${r.late_minutes || 0} menit`}>TELAT{r.late_minutes ? ` ${r.late_minutes}m` : ""}</span>}
+                      {r.is_under_hours && <span className="inline-block px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-300 text-[9px] font-bold" title={`Kerja ${r.worked_minutes || 0}m dari ${r.required_minutes || 0}m`}>KURANG JAM</span>}
+                    </div>
+                  </Td>
                   <Td className="text-xs text-slate-600">{r.note || "-"}</Td>
                   <Td className="text-right">
-                    <Button variant="danger" onClick={() => del(r.id)} data-testid={`att-del-${r.id}`}>
-                      <Trash2 size={13}/>
-                    </Button>
+                    <div className="flex gap-1 justify-end">
+                      <Button variant="secondary" onClick={() => openEdit(r)} data-testid={`att-edit-${r.id}`}>
+                        <Edit2 size={13}/>
+                      </Button>
+                      <Button variant="danger" onClick={() => del(r.id)} data-testid={`att-del-${r.id}`}>
+                        <Trash2 size={13}/>
+                      </Button>
+                    </div>
                   </Td>
                 </tr>
               ))}
@@ -316,20 +367,20 @@ export default function Attendance() {
         )}
       </Card>
 
-      {/* Add Modal */}
+      {/* Add/Edit Modal */}
       {showAdd && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="add-attendance-modal">
-          <Card className="w-full max-w-md p-5">
+          <Card className="w-full max-w-md p-5 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-heading font-bold text-lg">Tambah Absensi</h3>
-              <button onClick={() => setShowAdd(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+              <h3 className="font-heading font-bold text-lg">{editingId ? "Edit Absensi" : "Tambah Absensi"}</h3>
+              <button onClick={() => { setShowAdd(false); setEditingId(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Karyawan *</label>
                 <Select value={form.employee_id} onChange={(e) => setForm({ ...form, employee_id: e.target.value })} data-testid="add-emp">
                   <option value="">— Pilih —</option>
-                  {emps.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}
+                  {emps.map((e) => <option key={e.id} value={e.id}>{e.full_name}{e.employee_no ? ` (${e.employee_no})` : ""}</option>)}
                 </Select>
               </div>
               <div>
@@ -343,16 +394,32 @@ export default function Attendance() {
                 </Select>
               </div>
               {form.status === "Hadir" && (
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Check In</label>
-                    <Input type="time" value={form.check_in} onChange={(e) => setForm({ ...form, check_in: e.target.value })}/>
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Check In</label>
+                      <Input type="time" value={form.check_in} onChange={(e) => setForm({ ...form, check_in: e.target.value })} data-testid="add-check-in"/>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Check Out</label>
+                      <Input type="time" value={form.check_out} onChange={(e) => setForm({ ...form, check_out: e.target.value })} data-testid="add-check-out"/>
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Check Out</label>
-                    <Input type="time" value={form.check_out} onChange={(e) => setForm({ ...form, check_out: e.target.value })}/>
+                  <div className="border border-slate-200 rounded p-3 bg-slate-50/50">
+                    <div className="text-[10px] uppercase font-bold text-slate-500 mb-2">Lembur (opsional)</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Jam Lembur</label>
+                        <Input type="number" step="0.5" min="0" value={form.overtime_hours} onChange={(e) => setForm({ ...form, overtime_hours: e.target.value })} placeholder="0" data-testid="add-ot-hours"/>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1">Tarif per Jam (IDR)</label>
+                        <Input type="number" min="0" value={form.overtime_rate} onChange={(e) => setForm({ ...form, overtime_rate: e.target.value })} placeholder="Mis. 30000" data-testid="add-ot-rate"/>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">Total lembur = jam × tarif. Diinput manual per hari.</p>
                   </div>
-                </div>
+                </>
               )}
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">Catatan</label>
@@ -360,8 +427,8 @@ export default function Attendance() {
               </div>
             </div>
             <div className="mt-4 pt-4 border-t flex justify-end gap-2">
-              <Button variant="secondary" onClick={() => setShowAdd(false)}>Batal</Button>
-              <Button onClick={submitAdd} data-testid="add-submit"><Save size={13}/> Simpan</Button>
+              <Button variant="secondary" onClick={() => { setShowAdd(false); setEditingId(null); }}>Batal</Button>
+              <Button onClick={submitAdd} data-testid="add-submit"><Save size={13}/> {editingId ? "Update" : "Simpan"}</Button>
             </div>
           </Card>
         </div>
@@ -479,12 +546,50 @@ export default function Attendance() {
               </div>
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-600 mb-1 block">Jam Masuk</label>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Jam Masuk Default</label>
                   <Input type="time" value={cfg.work_hour_in} onChange={(e) => setCfg({ ...cfg, work_hour_in: e.target.value })} data-testid="work-hour-in"/>
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-600 mb-1 block">Jam Pulang</label>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Jam Pulang Default</label>
                   <Input type="time" value={cfg.work_hour_out} onChange={(e) => setCfg({ ...cfg, work_hour_out: e.target.value })} data-testid="work-hour-out"/>
+                </div>
+              </div>
+              {/* --- Jam Kerja Per-Hari (Flexible) --- */}
+              <div className="mb-3 border border-slate-200 rounded p-3 bg-white">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="text-xs font-bold text-slate-600">Jam Kerja Per Hari (opsional override)</div>
+                  <span className="text-[10px] text-slate-400">Kosongkan → pakai default di atas</span>
+                </div>
+                <div className="space-y-1.5">
+                  {DAYS_ID.filter((d) => (cfg.work_days || []).includes(d.key)).map((d) => {
+                    const sched = (cfg.work_schedule || {})[d.key] || {};
+                    return (
+                      <div key={d.key} className="grid grid-cols-12 gap-2 items-center">
+                        <div className="col-span-3 text-xs font-semibold">{d.label}</div>
+                        <div className="col-span-4">
+                          <Input type="time" placeholder={cfg.work_hour_in} value={sched.in || ""} onChange={(e) => setCfg({ ...cfg, work_schedule: { ...(cfg.work_schedule || {}), [d.key]: { ...sched, in: e.target.value } } })} data-testid={`sched-in-${d.key}`}/>
+                        </div>
+                        <div className="col-span-4">
+                          <Input type="time" placeholder={cfg.work_hour_out} value={sched.out || ""} onChange={(e) => setCfg({ ...cfg, work_schedule: { ...(cfg.work_schedule || {}), [d.key]: { ...sched, out: e.target.value } } })} data-testid={`sched-out-${d.key}`}/>
+                        </div>
+                        <div className="col-span-1 text-right">
+                          {(sched.in || sched.out) && (
+                            <button type="button" title="Reset ke default" onClick={() => { const ws = { ...(cfg.work_schedule || {}) }; delete ws[d.key]; setCfg({ ...cfg, work_schedule: ws }); }} className="text-slate-400 hover:text-red-600 p-1">
+                              <X size={12}/>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* --- Late threshold --- */}
+              <div className="mb-3 grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">Batas Toleransi Telat (menit)</label>
+                  <Input type="number" min="0" value={cfg.late_threshold_minutes} onChange={(e) => setCfg({ ...cfg, late_threshold_minutes: Number(e.target.value) })} data-testid="late-threshold"/>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Check-in melampaui jam masuk + threshold → ditandai TELAT.</p>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3 mb-3">

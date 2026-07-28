@@ -4,14 +4,26 @@
 1. Total Sales terfilter tampil di Daftar AWB ✅
 2. Prorata Vendor: 1 tagihan vendor split proporsional ke banyak AWB berdasarkan sales ✅
 3. Auto-backup MongoDB rolling 30 hari + upload Google Drive (cron 00:00 WIB) ✅
+4. **HR Attendance Enhancement (Feb 2026)** — Edit absen + Import Lembur + Jam kerja flexible per-hari + Auto-flag telat & kurang jam + Field ID Karyawan manual ✅
+5. **Payroll dengan Lembur (Feb 2026)** — Auto-hitung gaji pokok + uang makan (hanya Hadir) + lembur (jam × rate manual) → slip gaji + jurnal ✅
+
+## Completed features (Feb 2026 — session update)
+- ✅ **Field `employee_no` (ID Karyawan manual)** di master karyawan (`EmployeeIn.employee_no`). Bisa dipakai lookup di import Attendance (header `employee_no`, kolom fallback ke `employee_id/nik/nama`). Tampil di form Kepegawaian + kolom toggleable di tabel.
+- ✅ **Attendance Edit modal** — tombol Edit di setiap row absen, share modal dengan Add, isi otomatis dari row.
+- ✅ **Import Lembur di Attendance** — `overtime_hours` + `overtime_rate` di `AttendanceIn`; kolom template XLSX ditambah + parser import. Manual input di modal Add/Edit juga.
+- ✅ **Flexible Working Hours per hari** — `attendance-config.work_schedule` = dict `{"mon": {"in":"08:00","out":"17:00"}, ...}` override default `work_hour_in/out`. UI Settings ada baris per hari kerja (dari `work_days`) — kosongkan untuk pakai default.
+- ✅ **Auto-flag Telat & Kurang Jam** — `_compute_late_underhours` di backend dijalankan setiap create/update/import attendance. Config `late_threshold_minutes` (default 5). Field baru: `is_late`, `is_under_hours`, `late_minutes`, `worked_minutes`, `required_minutes`. UI: badge TELAT & KURANG JAM di kolom Flag.
+- ✅ **Payroll dengan Lembur** — `run_payroll` menghitung `lembur_total = sum(overtime_hours × overtime_rate)` per karyawan. Slip payload berisi `gaji_pokok_net`, `uang_makan` (hanya hari Hadir), `lembur_jam`, `lembur_total`, `gross`, `net`. UI Payroll table diupdate menampilkan kolom Uang Makan, Lembur, Gross, Net + Hadir/Kerja.
+- ✅ **Employee ID display di Slip Payroll** — kolom Karyawan menampilkan `employee_no` di sub-line.
+- ✅ Template XLSX absensi mendukung header `employee_no` (baris pertama kolom).
 
 ## Architecture
 - Frontend: React + TailwindCSS, halaman di `/app/frontend/src/pages`
-- Backend: FastAPI monolith `server.py` (~9200 lines) + PyMongo
-- MongoDB collections: `awb_orders`, `awb_costs`, `cost_groups` (new), `invoices`, `fixed_costs`, `recurring_expenses`, `employees`, `settings`
+- Backend: FastAPI monolith `server.py` (~10,300 lines) + PyMongo
+- MongoDB collections: `awb_orders`, `awb_costs`, `cost_groups`, `invoices`, `fixed_costs`, `recurring_expenses`, `employees`, `attendance`, `public_holidays`, `payroll`, `settings`
 - Auth: JWT + granular permission
 
-## Completed features (Feb 2026)
+## Completed features (Feb 2026 — earlier)
 - ✅ **Carry-Over Sisa Panjar antar Penerima Sama** (Jan 2026): checkbox "Transfer sisa ke panjar berikutnya" di settle modal → sisa jadi carry-over (`carry_over_transferred=true`, `carry_over_amount=X`), status jadi Settled. Panjar baru dengan penerima sama bisa apply carry-over via checkboxes di settle modal — otomatis budget +carry saat validasi actual+refund. Marking source panjar `carry_over_consumed_by/consumed_number/consumed_at`. Journal balance rapi: CR 1108 di-split memo "Carry-over dari PNJ-X" + panjar sekarang. Validasi backend: penerima harus sama, source tidak boleh sudah consumed
 - ✅ **Custom Approval Flow per Panjar Kerja** (Jan 2026): `CashAdvanceIn.custom_approval_steps` optional; form Panjar punya builder alur (default dari template global `cash_advance`, tapi bisa add/edit/reorder/remove per pengajuan). BPV template selalu menambahkan **2 kolom FIXED "Disetujui Oleh: Amrullah" + "Disetujui Oleh: Abidin"** di akhir signature (untuk tanda tangan fisik owner). Preview alur ditampilkan live saat user edit
 - ✅ **Settle Panjar → Target Finance** (Jan 2026): breakdown row punya 3 opsi target — AWB / Operation / **Finance**. Untuk Finance, muncul dropdown kategori expense dengan tombol Add New inline (buat kategori baru + auto-create COA 62xx). Hasil settle Finance → auto-insert ke `fixed_costs` (halaman Expenses) + journal DR expense_account / CR 1108 → langsung tampil di P&L
