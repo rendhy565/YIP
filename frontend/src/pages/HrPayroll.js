@@ -310,7 +310,7 @@ export default function HrPayroll() {
       }
       row.getCell(7).value = s.bank_account || "";
       row.getCell(8).value = s.bank_type || "";
-      row.getCell(9).value = Number(s.base_salary) || 0;      // I: Gaji Pokok
+      row.getCell(9).value = Number(s.gaji_pokok_net) || 0;   // I: Gaji Pokok (net setelah potongan Alfa langsung)
       row.getCell(10).value = Number(s.meal_allowance_per_day) || 0;  // J: Uang makan @Hari
       row.getCell(11).value = Number(s.working_days) || 0;    // K: TOTAL Hari Kerja
       row.getCell(12).value = Number(s.working_days) || 0;    // L: Hari Kerja
@@ -321,7 +321,7 @@ export default function HrPayroll() {
       row.getCell(17).value = Number(s.uang_makan) || 0;      // Q: UANG MAKAN (total = per_day × hari_hadir)
       row.getCell(18).value = Number(s.lembur_total) || 0;    // R
       row.getCell(19).value = Number(s.gross) || 0;           // S
-      row.getCell(20).value = Number(s.deduction_alfa) || 0;  // T
+      // T (POTONGAN GAJI) sengaja dikosongkan — pengurangan Alfa sudah di-net di kolom I (Gaji Pokok)
       row.getCell(21).value = Number(s.potongan_kasbon) || 0; // U
       row.getCell(22).value = Number(s.net) || 0;             // V
 
@@ -365,7 +365,7 @@ export default function HrPayroll() {
     trow.getCell(17).value = { formula: `SUM(Q${startRow}:Q${endRow})` };
     trow.getCell(18).value = { formula: `SUM(R${startRow}:R${endRow})` };
     trow.getCell(19).value = { formula: `SUM(S${startRow}:S${endRow})` };
-    trow.getCell(20).value = { formula: `SUM(T${startRow}:T${endRow})` };
+    // T (POTONGAN GAJI) sengaja dikosongkan
     trow.getCell(21).value = { formula: `SUM(U${startRow}:U${endRow})` };
     trow.getCell(22).value = { formula: `SUM(V${startRow}:V${endRow})` };
     // Style TOTAL row (kuning terang + bold)
