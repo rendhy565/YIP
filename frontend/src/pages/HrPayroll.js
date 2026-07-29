@@ -318,7 +318,7 @@ export default function HrPayroll() {
       row.getCell(14).value = Number(s.hari_sakit || 0) + Number(s.hari_izin || 0);  // N
       row.getCell(15).value = Number(s.hari_alfa) || 0;       // O: Alpa
       row.getCell(16).value = Number(s.hari_hadir) || 0;      // P: TOTAL MASUK
-      row.getCell(17).value = Number(s.meal_allowance_per_day) || 0;  // Q
+      row.getCell(17).value = Number(s.uang_makan) || 0;      // Q: UANG MAKAN (total = per_day × hari_hadir)
       row.getCell(18).value = Number(s.lembur_total) || 0;    // R
       row.getCell(19).value = Number(s.gross) || 0;           // S
       row.getCell(20).value = Number(s.deduction_alfa) || 0;  // T
