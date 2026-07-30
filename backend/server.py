@@ -4201,7 +4201,9 @@ async def delete_employee(eid: str, user: dict = Depends(require_feature("hr")))
 
 class PayrollRunIn(BaseModel):
     period_month: str  # YYYY-MM
-    cash_account_code: Optional[str] = "1101"
+    cash_account_code: Optional[str] = "1101"          # Rekening asal transfer gaji netto (mis. Giro)
+    kasbon_source_account_code: Optional[str] = None   # Rekening asal kasbon awal (mis. Petty Cash 2922).
+                                                        # Kalau None & ada kasbon, fallback ke cash_account_code.
 
 @app.get("/api/hr/payroll")
 async def list_payroll(period: Optional[str] = None, user: dict = Depends(require_feature("hr"))):
@@ -4237,6 +4239,7 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     period_end = calc["period_end"]
 
     cash_acc = data.cash_account_code or "1101"
+    kasbon_src_acc = data.kasbon_source_account_code or cash_acc  # fallback ke bank utama
     # Snapshot kasbon docs untuk periode ini (untuk audit trail di payroll doc)
     kasbon_snapshot = await db.payroll_kasbon.find({"period_month": data.period_month}).to_list(2000)
     kasbon_snapshot = [serialize(k) for k in kasbon_snapshot]
@@ -4252,23 +4255,29 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         "total_net": round(total_net, 2),
         "kasbon_snapshot": kasbon_snapshot,
         "cash_account_code": cash_acc,
+        "kasbon_source_account_code": kasbon_src_acc if total_kasbon > 0 else None,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.payroll.insert_one(payroll_doc)
-    # Jurnal konsolidasi (Option C — cash-langsung tanpa piutang karyawan formal):
-    #   Dr 6101 Beban Gaji = gross (total kompensasi karyawan)
-    #   Cr Kas = gross (total kas keluar: net yang dibayar sekarang + kasbon yang sudah dibayar sebelumnya)
-    # Kasbon dianggap sudah keluar dari kas sebelumnya (tapi belum dijurnal), jadi konsolidasi di sini
-    # mengoreksi saldo kas ke posisi riil.
-    memo_lines = [f"Payroll {data.period_month} — net Rp {total_net:,.0f}"]
-    if total_kasbon > 0:
-        memo_lines.append(f"+ kasbon konsolidasi Rp {total_kasbon:,.0f}")
-    memo = " | ".join(memo_lines)
-    lines = [
-        {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Beban Gaji {data.period_month}"},
-        {"account_code": cash_acc, "debit": 0, "credit": total_gross, "memo": memo},
-    ]
+    # Jurnal Payroll (Option C — kasbon dari petty cash tanpa jurnal awal):
+    #   Dr 6101 Beban Gaji  = gross (total hak karyawan)
+    #   Cr {cash_acc}       = net (transfer ke rekening payroll)
+    #   Cr {kasbon_src_acc} = kasbon (koreksi petty cash yang sudah keluar duluan)
+    # Note: user harus posting transfer replenishment {cash_acc}→{kasbon_src_acc} secara terpisah
+    # kalau ingin saldo petty cash kembali ke awal.
+    if total_kasbon > 0 and kasbon_src_acc != cash_acc:
+        lines = [
+            {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Beban Gaji {data.period_month}"},
+            {"account_code": cash_acc, "debit": 0, "credit": total_net, "memo": f"Transfer gaji netto {data.period_month}"},
+            {"account_code": kasbon_src_acc, "debit": 0, "credit": total_kasbon, "memo": "Koreksi Petty Cash — kasbon yang sudah keluar sebelumnya"},
+        ]
+    else:
+        # Kalau kasbon 0 atau kasbon dari akun yang sama dengan bank payroll, konsolidasi jadi 2 baris
+        lines = [
+            {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Beban Gaji {data.period_month}"},
+            {"account_code": cash_acc, "debit": 0, "credit": total_gross, "memo": f"Bayar Gaji {data.period_month} (netto+kasbon)"},
+        ]
     try:
         await post_journal(
             date=datetime.now(timezone.utc),

@@ -54,6 +54,7 @@ export default function HrPayroll() {
   const [editing, setEditing] = useState(null);           // null | "new" | employee id (untuk modal)
   const [form, setForm] = useState({ ...EMPTY_EMP });
   const [cashAcc, setCashAcc] = useState("1101");
+  const [kasbonSrcAcc, setKasbonSrcAcc] = useState("");   // Rekening asal kasbon (Petty Cash)
   const [cashAccounts, setCashAccounts] = useState([]);
   // Kolom visibility toggle (persisted in localStorage)
   const [visibleCols, setVisibleCols] = useState(() => {
@@ -104,7 +105,7 @@ export default function HrPayroll() {
   const delFamily = (i) => setForm({ ...form, family: form.family.filter((_, idx) => idx !== i) });
   const runPayroll = async () => {
     if (!window.confirm(`Jalankan payroll periode ${period}? Akan auto-posting jurnal beban gaji.`)) return;
-    try { await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc }); toast.success("Payroll dijalankan"); setSim(null); loadPayrolls(); }
+    try { await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc, kasbon_source_account_code: kasbonSrcAcc || null }); toast.success("Payroll dijalankan"); setSim(null); loadPayrolls(); }
     catch (e) { toast.error(errMsg(e)); }
   };
   // ---- SIMULATE payroll (read-only preview) ----
@@ -165,7 +166,7 @@ export default function HrPayroll() {
     if (sim.already_executed) { toast.error(`Payroll periode ${period} sudah dijalankan sebelumnya`); return; }
     if (!window.confirm(`Konfirmasi jalankan payroll ${period}?\nTotal ${sim.slips.length} karyawan, gross ${sim.total_gross.toLocaleString("id-ID")}. Akan auto-posting jurnal beban gaji.`)) return;
     try {
-      await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc });
+      await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc, kasbon_source_account_code: kasbonSrcAcc || null });
       toast.success("Payroll dijalankan & jurnal ter-post");
       setSim(null);
       loadPayrolls();
@@ -682,8 +683,14 @@ export default function HrPayroll() {
             <h3 className="font-bold">Payroll Batch</h3>
             <div className="flex items-end gap-2 flex-wrap">
               <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => { setPeriod(e.target.value); setSim(null); }} className="w-40"/></div>
-              <div><Label>Bayar dari</Label>
+              <div><Label>Bayar dari (Netto)</Label>
                 <Select value={cashAcc} onChange={(e) => setCashAcc(e.target.value)} className="w-48">
+                  {cashAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}
+                </Select>
+              </div>
+              <div><Label>Kasbon dari <span className="text-slate-400 font-normal text-[10px]">(Petty Cash)</span></Label>
+                <Select value={kasbonSrcAcc} onChange={(e) => setKasbonSrcAcc(e.target.value)} className="w-48" data-testid="kasbon-src-acc">
+                  <option value="">— sama dgn Bayar dari —</option>
                   {cashAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}
                 </Select>
               </div>
@@ -710,6 +717,19 @@ export default function HrPayroll() {
                   </div>
                   {sim.already_executed && (
                     <div className="text-xs text-rose-700 font-bold mt-1">⚠️ Periode ini SUDAH pernah dijalankan. Hapus dulu payroll lama sebelum re-run.</div>
+                  )}
+                  {(sim.total_kasbon || 0) > 0 && (
+                    <div className="mt-2 text-[11px] bg-white/60 border border-blue-200 rounded p-2">
+                      <b>📝 Preview Jurnal saat Konfirmasi Jalankan:</b>
+                      <div className="font-mono mt-1 space-y-0.5">
+                        <div>Dr <b>6101 Beban Gaji</b> ................. {fmtIDR(sim.total_gross)}</div>
+                        <div>Cr <b>{cashAcc}</b> (Bayar dari) ........ {fmtIDR(sim.total_net)}</div>
+                        <div>Cr <b>{kasbonSrcAcc || cashAcc}</b> (Kasbon dari) ..... {fmtIDR(sim.total_kasbon)}</div>
+                      </div>
+                      <div className="mt-1 text-slate-600 italic">
+                        Jangan lupa post transfer <b>{cashAcc} → {kasbonSrcAcc || cashAcc}</b> sebesar {fmtIDR(sim.total_kasbon)} secara terpisah kalau Anda mau saldo petty cash balik ke posisi awal (replenishment).
+                      </div>
+                    </div>
                   )}
                 </div>
                 <div className="flex gap-2 flex-wrap">
