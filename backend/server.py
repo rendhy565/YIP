@@ -4237,7 +4237,6 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     period_end = calc["period_end"]
 
     cash_acc = data.cash_account_code or "1101"
-    kasbon_acc = "1109"   # Piutang Karyawan / Kasbon (default)
     # Snapshot kasbon docs untuk periode ini (untuk audit trail di payroll doc)
     kasbon_snapshot = await db.payroll_kasbon.find({"period_month": data.period_month}).to_list(2000)
     kasbon_snapshot = [serialize(k) for k in kasbon_snapshot]
@@ -4257,13 +4256,19 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.payroll.insert_one(payroll_doc)
-    # Journal: Dr 6101 Beban Gaji (gross) / Cr Kas (net) / Cr Piutang Kasbon (kasbon)
+    # Jurnal konsolidasi (Option C — cash-langsung tanpa piutang karyawan formal):
+    #   Dr 6101 Beban Gaji = gross (total kompensasi karyawan)
+    #   Cr Kas = gross (total kas keluar: net yang dibayar sekarang + kasbon yang sudah dibayar sebelumnya)
+    # Kasbon dianggap sudah keluar dari kas sebelumnya (tapi belum dijurnal), jadi konsolidasi di sini
+    # mengoreksi saldo kas ke posisi riil.
+    memo_lines = [f"Payroll {data.period_month} — net Rp {total_net:,.0f}"]
+    if total_kasbon > 0:
+        memo_lines.append(f"+ kasbon konsolidasi Rp {total_kasbon:,.0f}")
+    memo = " | ".join(memo_lines)
     lines = [
         {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Beban Gaji {data.period_month}"},
-        {"account_code": cash_acc, "debit": 0, "credit": total_net, "memo": f"Bayar gaji netto {data.period_month}"},
+        {"account_code": cash_acc, "debit": 0, "credit": total_gross, "memo": memo},
     ]
-    if total_kasbon > 0:
-        lines.append({"account_code": kasbon_acc, "debit": 0, "credit": total_kasbon, "memo": "Potongan kasbon karyawan"})
     try:
         await post_journal(
             date=datetime.now(timezone.utc),
