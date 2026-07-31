@@ -4379,34 +4379,45 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         is_lumpsum = bool(e.get("gaji_lumpsum", False))
         emp_att = att_by_emp.get(emp_id, [])
 
-        hari_hadir = sum(1 for a in emp_att if a.get("status") == "Hadir")
-        hari_sakit = sum(1 for a in emp_att if a.get("status") == "Sakit")
-        hari_izin = sum(1 for a in emp_att if a.get("status") == "Izin")
-        hari_alfa = sum(1 for a in emp_att if a.get("status") == "Alfa")
-        hari_recorded = hari_hadir + hari_sakit + hari_izin + hari_alfa
-        # Hari kerja yang tidak ada record → dianggap Alfa (konservatif).
-        # Admin sebaiknya jalankan Auto-Isi Alfa dulu di halaman Absensi.
-        hari_missing = max(0, working_days - hari_recorded)
-        hari_alfa_effective = hari_alfa + hari_missing
-
-        # Deduksi Alfa: SKIP kalau karyawan gaji lumpsum
         if is_lumpsum:
+            # Lumpsum: gaji flat, TIDAK menghitung absensi sama sekali.
+            # Uang makan tidak diberikan (dianggap termasuk lumpsum). Lembur juga tidak dihitung
+            # (kalau perlu lembur, uncheck lumpsum atau input manual di jurnal).
+            hari_hadir = 0
+            hari_sakit = 0
+            hari_izin = 0
+            hari_alfa = 0
+            hari_missing = 0
+            hari_alfa_effective = 0
             deduction_alfa = 0.0
             gaji_pokok_net = base
+            uang_makan = 0.0
+            lembur_total = 0.0
+            lembur_jam = 0.0
         else:
+            hari_hadir = sum(1 for a in emp_att if a.get("status") == "Hadir")
+            hari_sakit = sum(1 for a in emp_att if a.get("status") == "Sakit")
+            hari_izin = sum(1 for a in emp_att if a.get("status") == "Izin")
+            hari_alfa = sum(1 for a in emp_att if a.get("status") == "Alfa")
+            hari_recorded = hari_hadir + hari_sakit + hari_izin + hari_alfa
+            # Hari kerja yang tidak ada record → dianggap Alfa (konservatif).
+            hari_missing = max(0, working_days - hari_recorded)
+            hari_alfa_effective = hari_alfa + hari_missing
+
             deduction_alfa = round((base / working_days) * hari_alfa_effective, 2) if working_days > 0 else 0
             gaji_pokok_net = base - deduction_alfa
-        # Uang makan hanya untuk HADIR aktual (bukan sakit/izin/alfa/missing)
-        uang_makan = round(meal_per_day * hari_hadir, 2)
-        lembur_total = 0.0
-        lembur_jam = 0.0
-        for a in emp_att:
-            oh = float(a.get("overtime_hours") or 0)
-            orate = float(a.get("overtime_rate") or 0)
-            if oh > 0 and orate > 0:
-                lembur_total += oh * orate
-                lembur_jam += oh
-        lembur_total = round(lembur_total, 2)
+            # Uang makan hanya untuk HADIR aktual (bukan sakit/izin/alfa/missing)
+            uang_makan = round(meal_per_day * hari_hadir, 2)
+            # Lembur: sum(overtime_hours × overtime_rate) dari attendance
+            lembur_total = 0.0
+            lembur_jam = 0.0
+            for a in emp_att:
+                oh = float(a.get("overtime_hours") or 0)
+                orate = float(a.get("overtime_rate") or 0)
+                if oh > 0 and orate > 0:
+                    lembur_total += oh * orate
+                    lembur_jam += oh
+            lembur_total = round(lembur_total, 2)
         gross = gaji_pokok_net + uang_makan + lembur_total
         # Kasbon deduction dari database temporary
         kasbon_items = kasbon_by_emp.get(emp_id, [])

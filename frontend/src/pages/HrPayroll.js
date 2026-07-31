@@ -4,7 +4,8 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye, FileSpreadsheet, Wallet } from "lucide-react";
+import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye, FileSpreadsheet, Wallet, FileText } from "lucide-react";
+import PayslipPrint from "../components/PayslipPrint";
 import { useAuth } from "../lib/auth";
 
 const EMPTY_EMP = {
@@ -23,8 +24,12 @@ const EMPTY_EMP = {
 // Kolom yang bisa toggle di table karyawan (fixed cols not in this list)
 const TOGGLABLE_COLS = [
   { key: "employee_no", label: "ID Karyawan" },
+  { key: "position", label: "Posisi/Jabatan" },
+  { key: "base_salary", label: "Gaji Pokok" },
   { key: "gaji_lumpsum", label: "Lumpsum" },
+  { key: "active", label: "Status Aktif" },
   { key: "nickname", label: "Nama Panggilan" },
+  { key: "tempat_lahir", label: "Tempat Lahir" },
   { key: "tanggal_lahir", label: "Tanggal Lahir" },
   { key: "jenis_kelamin", label: "Jenis Kelamin" },
   { key: "status_pernikahan", label: "Status Pernikahan" },
@@ -43,7 +48,7 @@ const TOGGLABLE_COLS = [
   { key: "allowance", label: "Tunjangan Lain" },
 ];
 
-const DEFAULT_VISIBLE_COLS = ["employee_no", "nickname", "no_hp", "bank"];
+const DEFAULT_VISIBLE_COLS = ["employee_no", "position", "base_salary", "gaji_lumpsum", "active"];
 
 export default function HrPayroll() {
   const { user } = useAuth();
@@ -111,6 +116,8 @@ export default function HrPayroll() {
   // ---- SIMULATE payroll (read-only preview) ----
   const [sim, setSim] = useState(null);
   const [simLoading, setSimLoading] = useState(false);
+  // ---- Slip gaji preview ----
+  const [slipPreview, setSlipPreview] = useState(null);   // slip object atau null
   // ---- KASBON temporary deduction ----
   const [showKasbon, setShowKasbon] = useState(false);
   const [kasbonList, setKasbonList] = useState([]);
@@ -426,42 +433,40 @@ export default function HrPayroll() {
               <Th>Nama Lengkap</Th>
               {visibleCols.map((k) => {
                 const c = TOGGLABLE_COLS.find((x) => x.key === k);
-                return c ? <Th key={k}>{c.label}</Th> : null;
+                return c ? <Th key={k} className={["base_salary","meal_allowance","allowance"].includes(k) ? "text-right" : ""}>{c.label}</Th> : null;
               })}
-              <Th>Posisi</Th>
-              <Th className="text-right">Gaji Pokok</Th>
-              <Th>Status</Th>
               <Th className="text-right">Aksi</Th>
             </tr></thead>
             <tbody>
-              {emps.length === 0 && <tr><Td colSpan={4 + visibleCols.length} className="text-center text-slate-400 py-6">Belum ada karyawan</Td></tr>}
+              {emps.length === 0 && <tr><Td colSpan={2 + visibleCols.length} className="text-center text-slate-400 py-6">Belum ada karyawan</Td></tr>}
               {emps.map((e) => (
                 <tr key={e.id}>
                   <Td className="font-bold">{e.full_name}</Td>
                   {visibleCols.map((k) => {
                     let content = "-";
+                    let alignRight = false;
                     if (k === "sim") {
                       const parts = [e.sim_a && `A:${e.sim_a}`, e.sim_c && `C:${e.sim_c}`, e.sim_lain && `Lain:${e.sim_lain}`].filter(Boolean);
                       content = parts.length ? parts.join(" ") : "-";
                     } else if (k === "bank") {
                       content = e.bank_type ? `${e.bank_type} ${e.bank_account || ""}` : "-";
-                    } else if (k === "meal_allowance" || k === "allowance") {
+                    } else if (k === "meal_allowance" || k === "allowance" || k === "base_salary") {
                       content = e[k] ? fmtIDR(e[k]) : "-";
+                      alignRight = true;
                     } else if (k === "jenis_kelamin") {
                       content = e[k] === "L" ? "Laki-laki" : e[k] === "P" ? "Perempuan" : "-";
                     } else if (k === "gaji_lumpsum") {
                       content = e.gaji_lumpsum
                         ? <span className="inline-block px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 text-[10px] font-bold">LUMPSUM</span>
                         : "-";
+                    } else if (k === "active") {
+                      content = <span className={`inline-block px-2 py-0.5 rounded text-[10px] uppercase font-bold ${e.active ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>{e.active ? "Aktif" : "Nonaktif"}</span>;
                     } else {
                       content = e[k] || "-";
                     }
-                    const isMono = ["no_hp", "nik", "npwp", "bpjs_no"].includes(k);
-                    return <Td key={k} className={`text-xs${isMono ? " font-mono" : ""}`}>{content}</Td>;
+                    const isMono = ["no_hp", "nik", "npwp", "bpjs_no", "employee_no"].includes(k);
+                    return <Td key={k} className={`text-xs${isMono ? " font-mono" : ""}${alignRight ? " text-right" : ""}`}>{content}</Td>;
                   })}
-                  <Td>{e.position || "-"}</Td>
-                  <Td className="text-right font-mono">{fmtIDR(e.base_salary)}</Td>
-                  <Td><span className={`inline-block px-2 py-0.5 rounded text-[10px] uppercase font-bold ${e.active ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-500"}`}>{e.active ? "Aktif" : "Nonaktif"}</span></Td>
                   <Td className="text-right"><div className="flex gap-1 justify-end"><Button data-testid={`hr-emp-edit-${e.id}`} variant="secondary" onClick={() => openEdit(e)}><Edit2 size={13}/></Button><Button variant="danger" onClick={() => del(e.id)}><Trash2 size={13}/></Button></div></Td>
                 </tr>
               ))}
@@ -758,6 +763,7 @@ export default function HrPayroll() {
                     <Th className="text-right">Gross</Th>
                     <Th className="text-right">Kasbon</Th>
                     <Th className="text-right">Take Home</Th>
+                    <Th className="text-right w-14">Slip</Th>
                   </tr></thead>
                   <tbody>
                     {sim.slips.map((s, i) => (
@@ -794,6 +800,16 @@ export default function HrPayroll() {
                             : <span className="text-slate-400">-</span>}
                         </Td>
                         <Td className="text-right font-mono font-bold text-emerald-900">{fmtIDR(s.net)}</Td>
+                        <Td className="text-right">
+                          <button
+                            className="p-1 rounded hover:bg-blue-100 text-blue-700"
+                            onClick={() => setSlipPreview(s)}
+                            title="Lihat & Print Slip Gaji"
+                            data-testid={`sim-slip-${s.employee_id}`}
+                          >
+                            <FileText size={14}/>
+                          </button>
+                        </Td>
                       </tr>
                     ))}
                     <tr className="bg-blue-100 font-bold">
@@ -801,6 +817,7 @@ export default function HrPayroll() {
                       <Td className="text-right font-mono">{fmtIDR(sim.total_gross)}</Td>
                       <Td className="text-right font-mono text-rose-700">{(sim.total_kasbon || 0) > 0 ? `−${fmtIDR(sim.total_kasbon)}` : "-"}</Td>
                       <Td className="text-right font-mono text-emerald-900">{fmtIDR(sim.total_net)}</Td>
+                      <Td></Td>
                     </tr>
                   </tbody>
                 </Table>
@@ -827,6 +844,7 @@ export default function HrPayroll() {
                   <Th className="text-right">Lembur</Th>
                   <Th className="text-right">Gross</Th>
                   <Th className="text-right">Net</Th>
+                  <Th className="text-right w-14">Slip</Th>
                 </tr></thead>
                 <tbody>
                   {(p.slips || []).map((s, i) => (
@@ -842,7 +860,17 @@ export default function HrPayroll() {
                         ) : "-"}
                       </Td>
                       <Td className="text-right font-mono">{fmtIDR(s.gross)}</Td>
-                      <Td className="text-right font-mono font-bold">{fmtIDR(s.net)}</Td>
+                      <Td className="text-right font-mono font-bold">{fmtIDR(s.net != null ? s.net : s.gross)}</Td>
+                      <Td className="text-right">
+                        <button
+                          className="p-1 rounded hover:bg-blue-100 text-blue-700"
+                          onClick={() => setSlipPreview({ ...s, _period: p.period_month, _periodStart: p.period_start, _periodEnd: p.period_end })}
+                          title="Slip Gaji"
+                          data-testid={`hist-slip-${p.id}-${i}`}
+                        >
+                          <FileText size={13}/>
+                        </button>
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
@@ -933,6 +961,16 @@ export default function HrPayroll() {
             </div>
           </Card>
         </div>
+      )}
+      {/* Slip Gaji Preview Modal */}
+      {slipPreview && (
+        <PayslipPrint
+          slip={slipPreview}
+          period={slipPreview._period || period}
+          periodStart={slipPreview._periodStart || (sim && sim.period_start)}
+          periodEnd={slipPreview._periodEnd || (sim && sim.period_end)}
+          onClose={() => setSlipPreview(null)}
+        />
       )}
     </div>
   );
