@@ -62,7 +62,7 @@ export default function PanjarKerja() {
     const [ca, os, usr, st, rec, snd, ec, cfg] = await Promise.all([
       api.get("/cash-advances"),
       api.get("/orders"),
-      api.get("/users").catch(() => ({ data: [] })),
+      api.get("/users").catch(() => api.get("/users/pickable").catch(() => ({ data: [] }))),
       api.get("/settings").catch(() => ({ data: [] })),
       api.get("/payment-recipients").catch(() => ({ data: [] })),
       api.get("/payment-senders").catch(() => ({ data: [] })),

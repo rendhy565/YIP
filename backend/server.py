@@ -3874,6 +3874,21 @@ async def list_users(user: dict = Depends(require_role("administrator"))):
         out.append(s)
     return out
 
+
+@app.get("/api/users/pickable")
+async def list_pickable_users(user: dict = Depends(get_current_user)):
+    """Read-only list untuk picker (approver, assignee, dll).
+    Semua user login boleh akses — return minimal fields saja (tanpa password/permissions).
+    Filter: hanya user active.
+    """
+    docs = await db.users.find({"active": {"$ne": False}}).sort("username", 1).to_list(2000)
+    return [{
+        "id": str(d["_id"]),
+        "username": d.get("username"),
+        "full_name": d.get("full_name") or d.get("username"),
+        "role": d.get("role"),
+    } for d in docs]
+
 @app.post("/api/users")
 async def create_user(data: UserCreateIn, user: dict = Depends(require_role("administrator"))):
     if data.role not in VALID_ROLES:
