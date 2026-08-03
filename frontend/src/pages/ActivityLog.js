@@ -67,7 +67,7 @@ export default function ActivityLog() {
           <tbody>
             {rows.map((r) => (
               <tr key={r.id}>
-                <Td className="text-xs font-mono text-slate-700">{fmtDate(r.timestamp)} <span className="text-slate-400">{new Date(r.timestamp).toLocaleTimeString("id-ID")}</span></Td>
+                <Td className="text-xs font-mono text-slate-700">{new Date(r.timestamp).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric" })} <span className="text-slate-400">{new Date(r.timestamp).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })} WIB</span></Td>
                 <Td className="font-semibold">{r.user_name || "—"}</Td>
                 <Td><span className="text-[10px] uppercase font-bold text-slate-500">{r.user_role || "—"}</span></Td>
                 <Td>

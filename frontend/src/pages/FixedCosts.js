@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
-import { fmtIDR, fmtDate, currentMonth, errMsg } from "../lib/utils";
+import { fmtIDR, fmtDate, currentMonth, monthStart, monthEnd, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X, Banknote, Receipt, Copy, ChevronDown, Check, Search, Upload, FileSpreadsheet, AlertCircle } from "lucide-react";
 import { useCan } from "../lib/useCan";
@@ -148,12 +148,11 @@ export default function FixedCosts() {
   const canImportBkk = useCan("fixed_costs", "import_bkk");
   const [rows, setRows] = useState([]);
   const [categories, setCategories] = useState([]);
-  // Default date range = current month
-  const today = new Date();
-  const firstDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
-  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState(firstDay);
-  const [endDate, setEndDate] = useState(lastDay);
+  // Default filter range = current month (month picker, tanpa pilih tanggal)
+  const [startMonth, setStartMonth] = useState(currentMonth());
+  const [endMonth, setEndMonth] = useState(currentMonth());
+  const startDate = monthStart(startMonth);
+  const endDate = monthEnd(endMonth);
   const [open, setOpen] = useState(false);
   const [openCopy, setOpenCopy] = useState(false);
   const [copyTarget, setCopyTarget] = useState("");
@@ -207,7 +206,7 @@ export default function FixedCosts() {
   const load = () => api.get("/fixed-costs", { params: { start_date: startDate, end_date: endDate } }).then((r) => setRows(r.data));
   const loadCategories = () => api.get("/expense-categories").then((r) => setCategories(r.data));
   useEffect(() => { loadCategories(); }, []);
-  useEffect(() => { load(); }, [startDate, endDate]);
+  useEffect(() => { load(); }, [startMonth, endMonth]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -274,12 +273,9 @@ export default function FixedCosts() {
       });
       toast.success(`${r.data.copied} expense disalin ke ${r.data.target_month}`);
       setOpenCopy(false);
-      // Update date range to target month
-      const [ty, tm] = copyTarget.split("-").map((x) => parseInt(x, 10));
-      const newFirst = `${ty}-${String(tm).padStart(2, "0")}-01`;
-      const newLast = new Date(ty, tm, 0).toISOString().slice(0, 10);
-      setStartDate(newFirst);
-      setEndDate(newLast);
+      // Pindahkan filter bulan ke bulan tujuan
+      setStartMonth(copyTarget);
+      setEndMonth(copyTarget);
     } catch (e2) { toast.error(errMsg(e2)); }
   };
 
@@ -364,12 +360,12 @@ export default function FixedCosts() {
       <Card className="p-4 mb-5">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-[150px]">
-            <Label>Dari Tanggal</Label>
-            <Input data-testid="expense-filter-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            <Label>Dari Bulan</Label>
+            <Input data-testid="expense-filter-start" type="month" value={startMonth} onChange={(e) => setStartMonth(e.target.value)} />
           </div>
           <div className="min-w-[150px]">
-            <Label>Sampai Tanggal</Label>
-            <Input data-testid="expense-filter-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            <Label>Sampai Bulan</Label>
+            <Input data-testid="expense-filter-end" type="month" value={endMonth} onChange={(e) => setEndMonth(e.target.value)} />
           </div>
           <div className="ml-auto flex flex-wrap gap-4 items-end">
             <div className="text-right">

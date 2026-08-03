@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td, StatusBadge } from "../components/ui";
-import { fmtIDR, fmtDate, currentMonth } from "../lib/utils";
+import { fmtIDR, fmtDate, currentMonth, monthStart, monthEnd } from "../lib/utils";
 import { TrendingUp, TrendingDown, Wallet, Download, Info, Banknote } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -17,12 +17,11 @@ const FIXED_CAT_COLORS = {
 export default function ProfitLoss() {
   const [data, setData] = useState({ rows: [], fixed_costs: [], fixed_breakdown: {}, summary: {} });
   const [customers, setCustomers] = useState([]);
-  // Default date range = current month
-  const today = new Date();
-  const firstDay = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
-  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState(firstDay);
-  const [endDate, setEndDate] = useState(lastDay);
+  // Default filter range = current month (month picker, tanpa pilih tanggal)
+  const [startMonth, setStartMonth] = useState(currentMonth());
+  const [endMonth, setEndMonth] = useState(currentMonth());
+  const startDate = monthStart(startMonth);
+  const endDate = monthEnd(endMonth);
   const [customerId, setCustomerId] = useState("");
 
   const load = () => {
@@ -31,7 +30,7 @@ export default function ProfitLoss() {
     api.get("/reports/profit-loss", { params }).then((r) => setData(r.data));
   };
   useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); }, []);
-  useEffect(() => { load(); }, [startDate, endDate, customerId]);
+  useEffect(() => { load(); }, [startMonth, endMonth, customerId]);
 
   const exportXLS = () => {
     const rows = data.rows.map((r) => ({
@@ -83,8 +82,8 @@ export default function ProfitLoss() {
 
       <Card className="p-4 mb-5">
         <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[150px]"><Label>Dari Tanggal</Label><Input data-testid="pnl-start-date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)}/></div>
-          <div className="min-w-[150px]"><Label>Sampai Tanggal</Label><Input data-testid="pnl-end-date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}/></div>
+          <div className="min-w-[150px]"><Label>Dari Bulan</Label><Input data-testid="pnl-start-date" type="month" value={startMonth} onChange={(e) => setStartMonth(e.target.value)}/></div>
+          <div className="min-w-[150px]"><Label>Sampai Bulan</Label><Input data-testid="pnl-end-date" type="month" value={endMonth} onChange={(e) => setEndMonth(e.target.value)}/></div>
           <div className="min-w-[200px]"><Label>Customer</Label>
             <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               <option value="">Semua Customer</option>

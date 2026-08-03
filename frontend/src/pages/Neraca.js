@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Label } from "../components/ui";
-import { fmtIDR, fmtDate } from "../lib/utils";
+import { fmtIDR, fmtDate, currentMonth, monthEnd } from "../lib/utils";
 import { CheckCircle2, AlertTriangle } from "lucide-react";
 
 function Section({ title, items, total, color }) {
@@ -26,11 +26,13 @@ function Section({ title, items, total, color }) {
 }
 
 export default function Neraca() {
-  const [asOf, setAsOf] = useState(new Date().toISOString().slice(0, 10));
+  // Month picker → posisi neraca per akhir bulan terpilih
+  const [asOf, setAsOf] = useState(currentMonth());
   const [data, setData] = useState(null);
 
   useEffect(() => {
-    const params = asOf ? { as_of: new Date(asOf).toISOString() } : {};
+    const end = monthEnd(asOf);
+    const params = end ? { as_of: new Date(end + "T23:59:59").toISOString() } : {};
     api.get("/reports/balance-sheet", { params }).then((r) => setData(r.data));
   }, [asOf]);
 
@@ -39,7 +41,7 @@ export default function Neraca() {
       <PageHeader title="Neraca (Balance Sheet)" subtitle="Posisi keuangan: ASET = LIABILITAS + EKUITAS" />
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div><Label>Per Tanggal</Label><Input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)}/></div>
+          <div><Label>Per Bulan</Label><Input type="month" value={asOf} onChange={(e) => setAsOf(e.target.value)}/></div>
         </div>
       </Card>
       {data && (

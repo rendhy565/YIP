@@ -36,6 +36,17 @@ export const currentMonth = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 };
 
+// Month-picker helpers: convert "YYYY-MM" into full boundary dates "YYYY-MM-DD".
+// Tolerant of legacy full-date input ("YYYY-MM-DD") by normalizing to the month.
+export const monthStart = (ym) => (ym ? `${ym.slice(0, 7)}-01` : "");
+export const monthEnd = (ym) => {
+  if (!ym) return "";
+  const ym7 = ym.slice(0, 7);
+  const [y, m] = ym7.split("-").map(Number);
+  const lastDay = new Date(y, m, 0).getDate();
+  return `${ym7}-${String(lastDay).padStart(2, "0")}`;
+};
+
 export const errMsg = (e, fallback = "Terjadi kesalahan") => {
   const d = e?.response?.data?.detail;
   if (typeof d === "string") return d;

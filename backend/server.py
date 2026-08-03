@@ -10228,9 +10228,11 @@ async def list_activity_logs(
         try:
             sy, sm, sd = [int(x) for x in start_date.split("-")]
             ey, em, ed = [int(x) for x in end_date.split("-")]
+            # Filter boundaries are interpreted in WIB (GMT+7), then converted to UTC
+            wib = timedelta(hours=7)
             q["timestamp"] = {
-                "$gte": datetime(sy, sm, sd, tzinfo=timezone.utc),
-                "$lte": datetime(ey, em, ed, 23, 59, 59, tzinfo=timezone.utc),
+                "$gte": datetime(sy, sm, sd, tzinfo=timezone.utc) - wib,
+                "$lte": datetime(ey, em, ed, 23, 59, 59, tzinfo=timezone.utc) - wib,
             }
         except Exception:
             pass

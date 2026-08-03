@@ -274,3 +274,10 @@ See `/app/memory/test_credentials.md`
   - Gaji pokok net = Rp 4.791.666,67
   - Uang makan = 25rb × 20 = Rp 500.000
   - **Total = Rp 5.291.666,67** ✅
+
+## Update — 2026-06 · Month picker for date filters
+- Converted report/list **date filters** from `type="date"` to **month picker** (`type="month"`, no day selection):
+  - ProfitLoss (Dari/Sampai Bulan), FixedCosts/Expense filter, AnalyticsDashboard (Bulan Dari/Sampai), Neraca (Per Bulan → akhir bulan), VendorAging (As of month → akhir bulan).
+  - Month range expands to full-date boundaries before hitting backend: start=`monthStart` (tgl 1), end=`monthEnd` (tgl terakhir). Helpers in `frontend/src/lib/utils.js`.
+- Transaction-entry dates (order/pickup/payment/PO/POD/expense_date, etc.) kept as **date picker** (time-sensitive) — unchanged.
+- ActivityLog kept as date picker (audit trail). Timestamps now render in **WIB (Asia/Jakarta)**; backend `/api/activity-logs` filter boundaries interpreted in WIB (GMT+7).

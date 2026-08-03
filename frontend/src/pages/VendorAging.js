@@ -1,17 +1,14 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Label, Table, Th, Td, Button } from "../components/ui";
-import { fmtIDR, errMsg } from "../lib/utils";
+import { fmtIDR, currentMonth, monthEnd, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Calendar, RefreshCw, FileSpreadsheet } from "lucide-react";
 
-function todayStr() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 export default function VendorAging() {
-  const [asOf, setAsOf] = useState(todayStr());
+  // Month picker → aging dihitung per akhir bulan terpilih
+  const [asOfMonth, setAsOfMonth] = useState(currentMonth());
+  const asOf = monthEnd(asOfMonth);
   const [data, setData] = useState(null);
   const [expanded, setExpanded] = useState({});
 
@@ -38,8 +35,8 @@ export default function VendorAging() {
       <Card className="p-4 mb-5">
         <div className="flex items-end gap-3 flex-wrap">
           <div>
-            <Label>As of date</Label>
-            <Input data-testid="aging-as-of" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)}/>
+            <Label>As of month</Label>
+            <Input data-testid="aging-as-of" type="month" value={asOfMonth} onChange={(e) => setAsOfMonth(e.target.value)}/>
           </div>
           <Button data-testid="reload-aging-btn" onClick={load}><RefreshCw size={14}/> Reload</Button>
           <Button data-testid="export-aging-btn" variant="secondary" onClick={async () => {

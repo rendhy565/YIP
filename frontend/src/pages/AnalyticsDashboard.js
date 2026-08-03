@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label } from "../components/ui";
-import { fmtIDR } from "../lib/utils";
+import { fmtIDR, monthStart, monthEnd } from "../lib/utils";
 import { TrendingUp, DollarSign, Package, AlertCircle, Filter, RotateCcw, ChevronLeft, ChevronRight, Download, Bookmark, Share2, Plus, Globe, Lock, X } from "lucide-react";
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -65,22 +65,34 @@ export default function AnalyticsDashboard() {
     api.get("/masters/armada-types").then((r) => setArmadaTypes(r.data || []));
   }, []);
 
+  // Build backend params from applied filters; month pickers (period_from/to)
+  // are expanded into full-date range boundaries (awal bulan → akhir bulan).
+  const buildParams = (base = {}) => {
+    const params = { ...base };
+    Object.entries(appliedFilters).forEach(([k, v]) => {
+      if (!v) return;
+      if (k === "period_from") params.period_from = monthStart(v);
+      else if (k === "period_to") params.period_to = monthEnd(v);
+      else params[k] = v;
+    });
+    return params;
+  };
+
   // Load dashboard whenever applied filters change
   useEffect(() => {
-    const params = {};
-    Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params[k] = v; });
-    api.get("/analytics/dashboard", { params }).then((r) => setDash(r.data));
+    api.get("/analytics/dashboard", { params: buildParams() }).then((r) => setDash(r.data));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedFilters]);
 
   // Load detail rows whenever filters/page/sort change
   useEffect(() => {
-    const params = { page, page_size: pageSize, sort_by: sortBy, sort_dir: sortDir };
-    Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params[k] = v; });
+    const params = buildParams({ page, page_size: pageSize, sort_by: sortBy, sort_dir: sortDir });
     if (appliedSearch) params.search = appliedSearch;
     api.get("/analytics/awbs-detail", { params }).then((r) => {
       setRows(r.data.rows || []);
       setTotal(r.data.total || 0);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedFilters, appliedSearch, page, pageSize, sortBy, sortDir]);
 
   const apply = () => { setPage(1); setAppliedFilters({ ...filters }); setAppliedSearch(search); };
@@ -188,7 +200,12 @@ export default function AnalyticsDashboard() {
   const exportExcel = async () => {
     try {
       const params = new URLSearchParams();
-      Object.entries(appliedFilters).forEach(([k, v]) => { if (v) params.append(k, v); });
+      Object.entries(appliedFilters).forEach(([k, v]) => {
+        if (!v) return;
+        if (k === "period_from") params.append("period_from", monthStart(v));
+        else if (k === "period_to") params.append("period_to", monthEnd(v));
+        else params.append(k, v);
+      });
       if (appliedSearch) params.append("search", appliedSearch);
       const resp = await api.get(`/analytics/awbs-detail/export?${params.toString()}`, { responseType: "blob" });
       const blob = new Blob([resp.data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
@@ -348,8 +365,8 @@ export default function AnalyticsDashboard() {
           </div>
         </div>
         <div className="p-4 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          <div><Label>Tanggal Dari</Label><Input type="date" value={filters.period_from} onChange={(e) => setFilters({...filters, period_from: e.target.value})}/></div>
-          <div><Label>Tanggal Sampai</Label><Input type="date" value={filters.period_to} onChange={(e) => setFilters({...filters, period_to: e.target.value})}/></div>
+          <div><Label>Bulan Dari</Label><Input type="month" value={filters.period_from} onChange={(e) => setFilters({...filters, period_from: e.target.value})}/></div>
+          <div><Label>Bulan Sampai</Label><Input type="month" value={filters.period_to} onChange={(e) => setFilters({...filters, period_to: e.target.value})}/></div>
           <div>
             <Label>Customer</Label>
             <Select value={filters.customer_id} onChange={(e) => setFilters({...filters, customer_id: e.target.value})}>
