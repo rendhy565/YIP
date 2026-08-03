@@ -1,7 +1,7 @@
 # Test Credentials — ARC TMS
 
 ## Login URL
-`https://jni-project-test.preview.emergentagent.com/arc/login`
+`https://date-filter-refactor.preview.emergentagent.com/arc/login`
 
 ## Users (seeded automatically)
 | Username  | Password      | Role           | Permissions             |
@@ -18,10 +18,10 @@
 ## Quick API test
 ```bash
 # Login
-TOKEN=$(curl -s -X POST https://jni-project-test.preview.emergentagent.com/api/auth/login \
+TOKEN=$(curl -s -X POST https://date-filter-refactor.preview.emergentagent.com/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"admin123"}' | python3 -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
 
 # Sample call
-curl -s https://jni-project-test.preview.emergentagent.com/api/petty-cash -H "Authorization: Bearer $TOKEN"
+curl -s https://date-filter-refactor.preview.emergentagent.com/api/petty-cash -H "Authorization: Bearer $TOKEN"
 ```

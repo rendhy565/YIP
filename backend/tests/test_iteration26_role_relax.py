@@ -23,7 +23,7 @@ import requests
 
 BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL",
-    "https://jni-project-test.preview.emergentagent.com",
+    "https://date-filter-refactor.preview.emergentagent.com",
 ).rstrip("/")
 ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
