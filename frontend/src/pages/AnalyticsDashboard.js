@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label } from "../components/ui";
@@ -365,8 +366,8 @@ export default function AnalyticsDashboard() {
           </div>
         </div>
         <div className="p-4 grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          <div><Label>Bulan Dari</Label><Input type="month" value={filters.period_from} onChange={(e) => setFilters({...filters, period_from: e.target.value})}/></div>
-          <div><Label>Bulan Sampai</Label><Input type="month" value={filters.period_to} onChange={(e) => setFilters({...filters, period_to: e.target.value})}/></div>
+          <div><Label>Bulan Dari</Label><MonthPicker allowEmpty value={filters.period_from} onChange={(v) => setFilters({...filters, period_from: v})}/></div>
+          <div><Label>Bulan Sampai</Label><MonthPicker allowEmpty value={filters.period_to} onChange={(v) => setFilters({...filters, period_to: v})}/></div>
           <div>
             <Label>Customer</Label>
             <Select value={filters.customer_id} onChange={(e) => setFilters({...filters, customer_id: e.target.value})}>

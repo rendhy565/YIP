@@ -281,3 +281,8 @@ See `/app/memory/test_credentials.md`
   - Month range expands to full-date boundaries before hitting backend: start=`monthStart` (tgl 1), end=`monthEnd` (tgl terakhir). Helpers in `frontend/src/lib/utils.js`.
 - Transaction-entry dates (order/pickup/payment/PO/POD/expense_date, etc.) kept as **date picker** (time-sensitive) — unchanged.
 - ActivityLog kept as date picker (audit trail). Timestamps now render in **WIB (Asia/Jakarta)**; backend `/api/activity-logs` filter boundaries interpreted in WIB (GMT+7).
+
+## Update — 2026-06 · Dropdown MonthPicker + WIB timestamp fix
+- New reusable component `frontend/src/components/MonthPicker.js`: dropdown Bulan + Tahun (tanpa ketik manual, tanpa tanggal). Value tetap "YYYY-MM". Prop `allowEmpty` untuk filter opsional.
+- Semua 20 input `type="month"` di aplikasi diganti ke `<MonthPicker>` (ProfitLoss, FixedCosts, Analytics, Neraca, VendorAging, LaporanLabaRugi, BukuBesar, SaldoAwal, TaxModule, BankReconciliation, NeracaSaldo, Costs, AssetModule, LaporanArusKas, HrPayroll, JournalUmum).
+- WIB fix: MongoDB mengembalikan datetime naive (tanpa offset) → browser salah anggap local. Helper `parseServerDate()` di utils.js menambahkan 'Z' agar diparse sebagai UTC. `fmtDate`/`fmtDateTime` + Activity Log kini render WIB (Asia/Jakarta) dengan benar.

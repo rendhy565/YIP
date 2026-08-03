@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import ExcelJS from "exceljs";
 import api from "../lib/api";
@@ -687,7 +688,7 @@ export default function HrPayroll() {
           <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-end justify-between gap-2">
             <h3 className="font-bold">Payroll Batch</h3>
             <div className="flex items-end gap-2 flex-wrap">
-              <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => { setPeriod(e.target.value); setSim(null); }} className="w-40"/></div>
+              <div><Label>Periode</Label><MonthPicker value={period} onChange={(v) => { setPeriod(v); setSim(null); }} className="w-56"/></div>
               <div><Label>Bayar dari (Netto)</Label>
                 <Select value={cashAcc} onChange={(e) => setCashAcc(e.target.value)} className="w-48">
                   {cashAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}

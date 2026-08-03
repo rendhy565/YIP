@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
@@ -95,7 +96,7 @@ export default function TaxModule() {
 
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)}/></div>
+          <div><Label>Periode</Label><MonthPicker value={period} onChange={setPeriod}/></div>
         </div>
       </Card>
 

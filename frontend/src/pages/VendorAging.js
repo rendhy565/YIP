@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Label, Table, Th, Td, Button } from "../components/ui";
@@ -36,7 +37,7 @@ export default function VendorAging() {
         <div className="flex items-end gap-3 flex-wrap">
           <div>
             <Label>As of month</Label>
-            <Input data-testid="aging-as-of" type="month" value={asOfMonth} onChange={(e) => setAsOfMonth(e.target.value)}/>
+            <MonthPicker testId="aging-as-of" value={asOfMonth} onChange={setAsOfMonth}/>
           </div>
           <Button data-testid="reload-aging-btn" onClick={load}><RefreshCw size={14}/> Reload</Button>
           <Button data-testid="export-aging-btn" variant="secondary" onClick={async () => {

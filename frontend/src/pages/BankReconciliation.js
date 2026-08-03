@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
@@ -56,7 +57,7 @@ export default function BankReconciliation() {
           <div><Label>Bank/Akun</Label>
             <Select value={bankCode} onChange={(e) => setBankCode(e.target.value)}>{cashAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}</Select>
           </div>
-          <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)}/></div>
+          <div><Label>Periode</Label><MonthPicker value={period} onChange={setPeriod}/></div>
           <div><Label>Status</Label>
             <Select value={matchedFilter} onChange={(e) => setMatchedFilter(e.target.value)}>
               <option value="">Semua</option><option value="0">Belum match</option><option value="1">Sudah match</option>

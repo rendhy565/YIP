@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
@@ -97,7 +98,7 @@ export default function SaldoAwal() {
           <h3 className="font-bold">Tutup Buku Periodik</h3>
           {isAdmin && (
             <div className="flex items-end gap-2">
-              <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-40"/></div>
+              <div><Label>Periode</Label><MonthPicker value={period} onChange={setPeriod} className="w-56"/></div>
               <Button variant="danger" onClick={closeP}><Lock size={14}/> Tutup Buku</Button>
             </div>
           )}

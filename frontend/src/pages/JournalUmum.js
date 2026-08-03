@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from "../components/ui";
@@ -72,7 +73,7 @@ export default function JournalUmum() {
 
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)}/></div>
+          <div><Label>Periode</Label><MonthPicker value={period} onChange={setPeriod}/></div>
           <div><Label>Tipe Referensi</Label>
             <Select value={refType} onChange={(e) => setRefType(e.target.value)}>
               <option value="">Semua</option>

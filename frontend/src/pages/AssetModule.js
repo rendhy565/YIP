@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
@@ -47,7 +48,7 @@ export default function AssetModule() {
           <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-end justify-between gap-2">
             <h3 className="font-bold">Daftar Aset</h3>
             <div className="flex items-end gap-2">
-              <div><Label>Periode Depresiasi</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)} className="w-40"/></div>
+              <div><Label>Periode Depresiasi</Label><MonthPicker value={period} onChange={setPeriod} className="w-56"/></div>
               <Button variant="success" onClick={runDepr}><PlayCircle size={14}/> Jalankan</Button>
               <Button onClick={() => setOpenForm(!openForm)}><Plus size={14}/> Tambah</Button>
             </div>

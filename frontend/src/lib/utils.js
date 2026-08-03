@@ -6,7 +6,7 @@ export const fmtIDR = (n) => {
 export const fmtDate = (s) => {
   if (!s) return "-";
   try {
-    return new Date(s).toLocaleDateString("id-ID", {
+    return parseServerDate(s).toLocaleDateString("id-ID", {
       day: "2-digit",
       month: "short",
       year: "numeric",
@@ -16,15 +16,26 @@ export const fmtDate = (s) => {
   }
 };
 
+// Parse a server datetime. MongoDB returns naive datetimes (no timezone suffix),
+// which JS would wrongly treat as local time. Append 'Z' so it's parsed as UTC.
+export const parseServerDate = (s) => {
+  if (s instanceof Date) return s;
+  if (typeof s === "string" && s.includes("T") && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) {
+    return new Date(s + "Z");
+  }
+  return new Date(s);
+};
+
 export const fmtDateTime = (s) => {
   if (!s) return "-";
   try {
-    return new Date(s).toLocaleString("id-ID", {
+    return parseServerDate(s).toLocaleString("id-ID", {
       day: "2-digit",
       month: "short",
       year: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      timeZone: "Asia/Jakarta",
     });
   } catch {
     return s;

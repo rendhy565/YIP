@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import api from "../lib/api";
@@ -361,11 +362,11 @@ export default function FixedCosts() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-[150px]">
             <Label>Dari Bulan</Label>
-            <Input data-testid="expense-filter-start" type="month" value={startMonth} onChange={(e) => setStartMonth(e.target.value)} />
+            <MonthPicker testId="expense-filter-start" value={startMonth} onChange={setStartMonth} />
           </div>
           <div className="min-w-[150px]">
             <Label>Sampai Bulan</Label>
-            <Input data-testid="expense-filter-end" type="month" value={endMonth} onChange={(e) => setEndMonth(e.target.value)} />
+            <MonthPicker testId="expense-filter-end" value={endMonth} onChange={setEndMonth} />
           </div>
           <div className="ml-auto flex flex-wrap gap-4 items-end">
             <div className="text-right">
@@ -504,7 +505,7 @@ export default function FixedCosts() {
             <form onSubmit={doCopy} className="space-y-3">
               <div>
                 <Label>Periode Tujuan *</Label>
-                <Input data-testid="copy-target-month-input" type="month" value={copyTarget} onChange={(e) => setCopyTarget(e.target.value)} required />
+                <MonthPicker testId="copy-target-month-input" value={copyTarget} onChange={setCopyTarget} />
               </div>
               <label className="flex items-start gap-2 p-3 rounded border border-slate-200 cursor-pointer hover:bg-slate-50">
                 <input

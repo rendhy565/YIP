@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import api from "../lib/api";
@@ -383,7 +384,7 @@ export default function Costs() {
                 </div>
                 <div>
                   <Label>Periode Bulan *</Label>
-                  <Input type="month" value={proForm.period_month} onChange={(e) => setProForm({ ...proForm, period_month: e.target.value, awb_ids: [] })} required/>
+                  <MonthPicker value={proForm.period_month} onChange={(v) => setProForm({ ...proForm, period_month: v, awb_ids: [] })}/>
                 </div>
                 <div>
                   <Label>Total Tagihan (IDR) *</Label>

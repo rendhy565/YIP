@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Label } from "../components/ui";
@@ -41,7 +42,7 @@ export default function Neraca() {
       <PageHeader title="Neraca (Balance Sheet)" subtitle="Posisi keuangan: ASET = LIABILITAS + EKUITAS" />
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div><Label>Per Bulan</Label><Input type="month" value={asOf} onChange={(e) => setAsOf(e.target.value)}/></div>
+          <div><Label>Per Bulan</Label><MonthPicker value={asOf} onChange={setAsOf}/></div>
         </div>
       </Card>
       {data && (

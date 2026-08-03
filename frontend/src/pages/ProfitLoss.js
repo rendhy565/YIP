@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td, StatusBadge } from "../components/ui";
@@ -82,8 +83,8 @@ export default function ProfitLoss() {
 
       <Card className="p-4 mb-5">
         <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[150px]"><Label>Dari Bulan</Label><Input data-testid="pnl-start-date" type="month" value={startMonth} onChange={(e) => setStartMonth(e.target.value)}/></div>
-          <div className="min-w-[150px]"><Label>Sampai Bulan</Label><Input data-testid="pnl-end-date" type="month" value={endMonth} onChange={(e) => setEndMonth(e.target.value)}/></div>
+          <div className="min-w-[220px]"><Label>Dari Bulan</Label><MonthPicker testId="pnl-start-date" value={startMonth} onChange={setStartMonth}/></div>
+          <div className="min-w-[220px]"><Label>Sampai Bulan</Label><MonthPicker testId="pnl-end-date" value={endMonth} onChange={setEndMonth}/></div>
           <div className="min-w-[200px]"><Label>Customer</Label>
             <Select value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               <option value="">Semua Customer</option>

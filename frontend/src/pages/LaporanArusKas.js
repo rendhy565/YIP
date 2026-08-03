@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Label, Table, Th, Td } from "../components/ui";
@@ -43,7 +44,7 @@ export default function LaporanArusKas() {
       <PageHeader title="Laporan Arus Kas (Cash Flow)" subtitle="Metode langsung — mutasi seluruh akun kas/bank dikelompokkan ke Operasi · Investasi · Pendanaan." />
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div><Label>Periode</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)}/></div>
+          <div><Label>Periode</Label><MonthPicker value={period} onChange={setPeriod}/></div>
         </div>
       </Card>
       {data && (

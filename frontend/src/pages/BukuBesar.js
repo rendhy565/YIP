@@ -1,3 +1,4 @@
+import MonthPicker from "../components/MonthPicker";
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Select, Label, Table, Th, Td } from "../components/ui";
@@ -33,7 +34,7 @@ export default function BukuBesar() {
               {accounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}
             </Select>
           </div>
-          <div><Label>Periode (opsional, kosong = semua)</Label><Input type="month" value={period} onChange={(e) => setPeriod(e.target.value)}/></div>
+          <div><Label>Periode (opsional, kosong = semua)</Label><MonthPicker allowEmpty value={period} onChange={setPeriod}/></div>
         </div>
       </Card>
 
