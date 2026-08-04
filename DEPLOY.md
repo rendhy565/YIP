@@ -51,6 +51,20 @@ docker compose up -d --build backend && \
 echo "✅ ALL deployed (ARC + ARCWEB + Backend)"
 ```
 
+## 5) ARC Frontend + Backend saja  (TANPA sentuh ARCWEB) — one-liner
+```bash
+cd ~/ARC && git pull origin main && \
+cd frontend && npm install --silent && npm run build && cd .. && \
+sudo rsync -a --delete --exclude 'arcweb/' frontend/build/ /usr/share/nginx/html/arc/ && \
+sudo chown -R www-data:www-data /usr/share/nginx/html/arc && \
+sudo chmod -R 755 /usr/share/nginx/html/arc && \
+docker compose up -d --build backend && \
+docker logs arc-backend-1 --tail 20 && \
+echo "✅ ARC Frontend + Backend deployed (ARCWEB tidak disentuh)"
+```
+- `--exclude 'arcweb/'` menjaga folder arcweb tetap utuh meski ada `--delete`.
+- Build arcweb sengaja dilewati (tidak ada `cd arcweb && npm run build`).
+
 ## Ringkasan perubahan vs command lama
 1. **ARC-only**: buang dance `cp arcweb → /tmp → rm arc/* → mv balik`. Ganti 1 baris `rsync --delete --exclude arcweb/`. Lebih pendek, tak ada downtime wipe, arcweb aman.
 2. **Tambah `npm install`** sebelum `frontend build` (dulu hanya ada di arcweb). Mencegah build gagal saat ada dependency baru.
