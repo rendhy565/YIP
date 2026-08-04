@@ -1,7 +1,7 @@
 """
-Generator dokumen Kontrak Kerja (PKWT) — .docx (python-docx) & .pdf (weasyprint).
-Kop surat = logo AR CARGO + info perusahaan dari settings. Layout meniru template lampiran,
-dengan page-break yang rapi (tiap Pasal & blok tanda tangan tidak terpotong antar halaman).
+Generator dokumen Kontrak Kerja (PKWT) — .docx (python-docx) & .pdf (xhtml2pdf).
+Pure-python, tanpa dependency system (aman untuk deploy Docker). Kop surat = logo AR CARGO
++ info perusahaan dari settings. Layout meniru template lampiran.
 """
 import io
 import os
@@ -14,7 +14,6 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-from weasyprint import HTML
 
 HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
 BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni",
@@ -46,7 +45,7 @@ def _sign_parts(s):
         return {"hari": "…………", "tgl": "……", "bulan": "…………", "tahun": "………"}
     try:
         d = datetime.strptime(str(s)[:10], "%Y-%m-%d")
-        return {"hari": HARI[d.weekday() + 1 if d.weekday() < 6 else 0] if False else HARI[(d.weekday() + 1) % 7],
+        return {"hari": HARI[(d.weekday() + 1) % 7],
                 "tgl": d.day, "bulan": BULAN[d.month - 1], "tahun": d.year}
     except Exception:
         return {"hari": "…………", "tgl": "……", "bulan": "…………", "tahun": "………"}
@@ -106,13 +105,13 @@ def build_context(contract: dict, employee: dict, settings: dict) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# HTML (dipakai weasyprint → PDF)
-# ---------------------------------------------------------------------------
 def _v(x):
     return x if x not in (None, "") else BLANK
 
 
+# ---------------------------------------------------------------------------
+# HTML (table-based, kompatibel xhtml2pdf → PDF)
+# ---------------------------------------------------------------------------
 def build_contract_html(ctx: dict) -> str:
     logo_uri = ""
     try:
@@ -122,14 +121,11 @@ def build_contract_html(ctx: dict) -> str:
         logo_uri = ""
 
     sp = ctx["sign"]
-    gaji = f'<b>{ctx["gaji_pokok"]}</b>' if ctx["gaji_pokok"] else f'<b>{BLANK}</b>'
+    gaji = ctx["gaji_pokok"] or BLANK
     gaji_w = f' (<i>{ctx["gaji_pokok_words"]}</i>)' if ctx["gaji_pokok_words"] else ""
-    makan = f'<b>{ctx["uang_makan"]}</b>' if ctx["uang_makan"] else f'<b>{BLANK}</b>'
+    makan = ctx["uang_makan"] or BLANK
     makan_w = f' (<i>{ctx["uang_makan_words"]}</i>)' if ctx["uang_makan_words"] else ""
 
-    kop_lines = []
-    if ctx["kop_address"]:
-        kop_lines.append(ctx["kop_address"])
     contact = []
     if ctx["kop_phone"]:
         contact.append(f'Telp: {ctx["kop_phone"]}')
@@ -137,125 +133,132 @@ def build_contract_html(ctx: dict) -> str:
         contact.append(f'Email: {ctx["kop_email"]}')
     if ctx["kop_website"]:
         contact.append(f'Website: {ctx["kop_website"]}')
-    if contact:
-        kop_lines.append(" · ".join(contact))
-    kop_html = "".join(f'<div class="kline">{l}</div>' for l in kop_lines)
+    contact_line = " &middot; ".join(contact)
+
+    logo_cell = f'<img src="{logo_uri}" width="120" />' if logo_uri else ""
+    addr_html = f'<div class="kline">{ctx["kop_address"]}</div>' if ctx["kop_address"] else ""
+    contact_html = f'<div class="kline">{contact_line}</div>' if contact_line else ""
     tagline_html = f'<div class="tagline">{ctx["kop_tagline"]}</div>' if ctx["kop_tagline"] else ""
 
-    return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-      @page {{ size: A4; margin: 16mm 20mm; }}
-      * {{ box-sizing: border-box; }}
-      body {{ font-family: 'Times New Roman', Georgia, serif; font-size: 11.5pt; line-height: 1.5; color:#111; }}
-      .kop {{ display:flex; align-items:center; gap:18px; border-bottom:3px double #1e3a8a; padding-bottom:10px; margin-bottom:14px; }}
-      .kop img {{ height:64px; }}
-      .kop .info {{ flex:1; text-align:center; }}
-      .kop .cname {{ font-size:15pt; font-weight:bold; letter-spacing:.5px; text-transform:uppercase; }}
-      .kop .kline {{ font-size:9pt; color:#333; }}
-      .kop .tagline {{ font-size:8.5pt; font-style:italic; color:#555; margin-top:2px; }}
-      .title {{ text-align:center; font-weight:bold; font-size:13.5pt; margin-top:6px; }}
-      .subno {{ text-align:center; margin-bottom:4px; }}
-      p {{ text-align:justify; margin:6px 0; }}
-      table.party {{ margin:6px 0; border-collapse:collapse; }}
-      table.party td {{ vertical-align:top; padding:1px 0; }}
-      .pasal {{ margin-top:12px; page-break-inside: avoid; }}
-      .pasal .ph {{ text-align:center; font-weight:bold; }}
-      ol {{ margin:4px 0 0 0; padding-left:22px; }}
-      ol.alpha {{ list-style-type: lower-alpha; margin-top:3px; }}
-      li {{ text-align:justify; margin-bottom:3px; }}
-      .sign {{ display:flex; justify-content:space-between; margin-top:38px; page-break-inside: avoid; }}
-      .sign .box {{ width:46%; text-align:center; }}
-      .sign .space {{ height:78px; }}
-      .sign .nm {{ font-weight:bold; text-decoration:underline; }}
-    </style></head><body>
+    rep_sig = ctx["rep_name"] or "……………………"
+    rep_pos = ctx["rep_position"] or "Direktur Utama"
+    emp_sig = ctx["emp_name"] or "……………………"
 
-    <div class="kop">
-      {'<img src="' + logo_uri + '"/>' if logo_uri else ''}
-      <div class="info">
-        <div class="cname">{ctx["company_name"]}</div>
-        {kop_html}
-        {tagline_html}
-      </div>
-    </div>
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+@page {{ size: a4 portrait; margin: 1.5cm 2cm; }}
+body {{ font-family: "Times-Roman", serif; font-size: 11pt; color: #111; line-height: 1.4; }}
+.cname {{ font-size: 15pt; font-weight: bold; }}
+.kline {{ font-size: 8.5pt; color: #333; }}
+.tagline {{ font-size: 8pt; font-style: italic; color: #555; }}
+hr {{ border: none; border-bottom: 2px solid #1e3a8a; margin: 3px 0 10px 0; }}
+.title {{ text-align: center; font-weight: bold; font-size: 13pt; margin-top: 4px; }}
+.subno {{ text-align: center; margin-bottom: 4px; }}
+p {{ text-align: justify; margin: 5px 0; }}
+.ph {{ text-align: center; font-weight: bold; margin: 1px 0; -pdf-keep-with-next: true; }}
+.pasal {{ margin-top: 8px; }}
+ol {{ margin: 2px 0 2px 16px; padding: 0; }}
+li {{ text-align: justify; margin-bottom: 2px; }}
+td {{ vertical-align: top; }}
+.nm {{ font-weight: bold; }}
+</style></head><body>
 
-    <div class="title">PERJANJIAN KERJA WAKTU TERTENTU ({ctx["contract_type"]})</div>
-    <div class="subno">No: {_v(ctx["contract_no"])}</div>
+<table width="100%"><tr>
+  <td width="24%">{logo_cell}</td>
+  <td align="center">
+    <div class="cname">{ctx["company_name"]}</div>
+    {addr_html}{contact_html}{tagline_html}
+  </td>
+</tr></table>
+<hr/>
 
-    <p>Pada hari ini, <b>{sp["hari"]}</b>, tanggal <b>{sp["tgl"]}</b> bulan <b>{sp["bulan"]}</b> tahun <b>{sp["tahun"]}</b>, bertempat di {ctx["sign_place"]}, yang bertanda tangan di bawah ini :</p>
+<div class="title">PERJANJIAN KERJA WAKTU TERTENTU ({ctx["contract_type"]})</div>
+<div class="subno">No: {_v(ctx["contract_no"])}</div>
 
-    <table class="party"><tr><td style="width:150px">Nama</td><td style="width:12px">:</td><td>{_v(ctx["rep_name"])}</td></tr>
-      <tr><td>Jabatan</td><td>:</td><td>{_v(ctx["rep_position"])}</td></tr>
-      <tr><td>Alamat</td><td>:</td><td>{_v(ctx["rep_address"])}</td></tr></table>
-    <p>Dalam hal ini bertindak untuk dan atas nama <b>{ctx["company_name"]}</b>, selanjutnya disebut sebagai <b>PIHAK PERTAMA</b>.</p>
+<p>Pada hari ini, <b>{sp["hari"]}</b>, tanggal <b>{sp["tgl"]}</b> bulan <b>{sp["bulan"]}</b> tahun <b>{sp["tahun"]}</b>, bertempat di {ctx["sign_place"]}, yang bertanda tangan di bawah ini :</p>
 
-    <table class="party"><tr><td style="width:150px">Nama</td><td style="width:12px">:</td><td>{_v(ctx["emp_name"])}</td></tr>
-      <tr><td>No. KTP</td><td>:</td><td>{_v(ctx["emp_ktp"])}</td></tr>
-      <tr><td>Tempat, Tgl Lahir</td><td>:</td><td>{_v(ctx["emp_ttl"])}</td></tr>
-      <tr><td>Alamat</td><td>:</td><td>{_v(ctx["emp_address"])}</td></tr></table>
-    <p>Dalam hal ini bertindak untuk dan atas nama diri sendiri, selanjutnya disebut sebagai <b>PIHAK KEDUA</b>.</p>
+<table width="100%">
+  <tr><td width="26%">Nama</td><td width="3%">:</td><td>{_v(ctx["rep_name"])}</td></tr>
+  <tr><td>Jabatan</td><td>:</td><td>{_v(ctx["rep_position"])}</td></tr>
+  <tr><td>Alamat</td><td>:</td><td>{_v(ctx["rep_address"])}</td></tr>
+</table>
+<p>Dalam hal ini bertindak untuk dan atas nama <b>{ctx["company_name"]}</b>, selanjutnya disebut sebagai <b>PIHAK PERTAMA</b>.</p>
 
-    <p>PIHAK PERTAMA dan PIHAK KEDUA secara bersama-sama disebut "Para Pihak".</p>
-    <p>Para Pihak sepakat untuk mengikatkan diri dalam Perjanjian Kerja Waktu Tertentu (selanjutnya disebut "Perjanjian") dengan syarat-syarat dan ketentuan sebagai berikut :</p>
+<table width="100%">
+  <tr><td width="26%">Nama</td><td width="3%">:</td><td>{_v(ctx["emp_name"])}</td></tr>
+  <tr><td>No. KTP</td><td>:</td><td>{_v(ctx["emp_ktp"])}</td></tr>
+  <tr><td>Tempat, Tgl Lahir</td><td>:</td><td>{_v(ctx["emp_ttl"])}</td></tr>
+  <tr><td>Alamat</td><td>:</td><td>{_v(ctx["emp_address"])}</td></tr>
+</table>
+<p>Dalam hal ini bertindak untuk dan atas nama diri sendiri, selanjutnya disebut sebagai <b>PIHAK KEDUA</b>.</p>
 
-    <div class="pasal"><div class="ph">Pasal 1</div><div class="ph">TUGAS DAN PENEMPATAN</div>
-      <ol>
-        <li>PIHAK PERTAMA menerima dan mempekerjakan PIHAK KEDUA sebagai <b>{_v(ctx["position"])}</b>.</li>
-        <li>PIHAK KEDUA akan ditempatkan di {_v(ctx["placement"])}.</li>
-        <li>PIHAK PERTAMA berhak memindahkan, merotasi, atau menugaskan PIHAK KEDUA ke divisi atau lokasi kerja lain sesuai dengan kebutuhan operasional perusahaan.</li>
-      </ol></div>
+<p>PIHAK PERTAMA dan PIHAK KEDUA secara bersama-sama disebut "Para Pihak".</p>
+<p>Para Pihak sepakat untuk mengikatkan diri dalam Perjanjian Kerja Waktu Tertentu (selanjutnya disebut "Perjanjian") dengan syarat-syarat dan ketentuan sebagai berikut :</p>
 
-    <div class="pasal"><div class="ph">Pasal 2</div><div class="ph">JANGKA WAKTU PERJANJIAN</div>
-      <p>Perjanjian ini berlaku selama <b>{_v(ctx["duration_text"])}</b>, terhitung efektif sejak tanggal <b>{ctx["start_date"]}</b> dan akan berakhir dengan sendirinya pada tanggal <b>{ctx["end_date"]}</b>.</p></div>
+<div class="pasal"><div class="ph">Pasal 1</div><div class="ph">TUGAS DAN PENEMPATAN</div>
+<ol>
+<li>PIHAK PERTAMA menerima dan mempekerjakan PIHAK KEDUA sebagai <b>{_v(ctx["position"])}</b>.</li>
+<li>PIHAK KEDUA akan ditempatkan di {_v(ctx["placement"])}.</li>
+<li>PIHAK PERTAMA berhak memindahkan, merotasi, atau menugaskan PIHAK KEDUA ke divisi atau lokasi kerja lain sesuai dengan kebutuhan operasional perusahaan.</li>
+</ol></div>
 
-    <div class="pasal"><div class="ph">Pasal 3</div><div class="ph">WAKTU KERJA DAN TATA TERTIB</div>
-      <ol>
-        <li>Waktu kerja dan jam kerja operasional yang berlaku bagi PIHAK KEDUA disesuaikan dengan ritme kebutuhan operasional perusahaan, yaitu <b>{_v(ctx["work_days_text"])}</b>.</li>
-        <li>Pengaturan lebih lanjut mengenai rincian jam masuk, jam pulang, dan waktu istirahat akan diatur secara terpisah dalam Peraturan Perusahaan dan/atau Standar Operasional Prosedur (SOP) yang ditetapkan oleh PIHAK PERTAMA.</li>
-        <li>PIHAK KEDUA wajib tunduk dan patuh pada Peraturan Perusahaan, Standar Operasional Prosedur (SOP), serta kebijakan tata tertib kehadiran yang berlaku di lingkungan {ctx["company_name"]}.</li>
-      </ol></div>
+<div class="pasal"><div class="ph">Pasal 2</div><div class="ph">JANGKA WAKTU PERJANJIAN</div>
+<p>Perjanjian ini berlaku selama <b>{_v(ctx["duration_text"])}</b>, terhitung efektif sejak tanggal <b>{ctx["start_date"]}</b> dan akan berakhir dengan sendirinya pada tanggal <b>{ctx["end_date"]}</b>.</p></div>
 
-    <div class="pasal"><div class="ph">Pasal 4</div><div class="ph">UPAH, TUNJANGAN, DAN KERJA LEMBUR</div>
-      <ol>
-        <li>Selama masa Perjanjian ini, PIHAK PERTAMA akan memberikan kompensasi kepada PIHAK KEDUA dengan rincian sebagai berikut :
-          <ol class="alpha">
-            <li>Gaji Pokok : Sebesar {gaji}{gaji_w} nett/bulan.</li>
-            <li>Tunjangan Tidak Tetap (Uang Makan): Sebesar {makan}{makan_w} / hari kehadiran kerja.</li>
-          </ol></li>
-        <li>Uang makan sebagaimana diatur pada ayat (1) huruf b bersifat fluktuatif dan hanya dibayarkan apabila PIHAK KEDUA hadir secara fisik serta menyelesaikan waktu kerja reguler pada hari tersebut. Apabila PIHAK KEDUA mangkir, sakit, cuti, atau izin, maka uang makan tidak dibayarkan.</li>
-        <li>Upah sebagaimana dimaksud pada ayat (1) dibayarkan pada tanggal terakhir setiap bulannya melalui transfer ke rekening bank milik PIHAK KEDUA.</li>
-        <li>Apabila terdapat kebutuhan operasional yang mendesak, PIHAK PERTAMA dapat menugaskan PIHAK KEDUA untuk melakukan Kerja Lembur. Pelaksanaan Kerja Lembur wajib didasarkan pada Surat Perintah Lembur (SPL) resmi yang disetujui dan ditandatangani terlebih dahulu oleh atasan langsung PIHAK KEDUA. Tanpa adanya SPL tertulis, segala bentuk perpanjangan waktu kerja (kehadiran di luar jam kerja operasional atas inisiatif pribadi) tidak diakui dan tidak sah dibayarkan sebagai lembur.</li>
-        <li>Perhitungan dan pembayaran upah Kerja Lembur yang disetujui melalui SPL akan dilaksanakan sesuai dengan kebijakan internal yang sejalan dengan peraturan perundang-undangan di bidang ketenagakerjaan yang berlaku.</li>
-      </ol></div>
+<div class="pasal"><div class="ph">Pasal 3</div><div class="ph">WAKTU KERJA DAN TATA TERTIB</div>
+<ol>
+<li>Waktu kerja dan jam kerja operasional yang berlaku bagi PIHAK KEDUA disesuaikan dengan ritme kebutuhan operasional perusahaan, yaitu <b>{_v(ctx["work_days_text"])}</b>.</li>
+<li>Pengaturan lebih lanjut mengenai rincian jam masuk, jam pulang, dan waktu istirahat akan diatur secara terpisah dalam Peraturan Perusahaan dan/atau Standar Operasional Prosedur (SOP) yang ditetapkan oleh PIHAK PERTAMA.</li>
+<li>PIHAK KEDUA wajib tunduk dan patuh pada Peraturan Perusahaan, Standar Operasional Prosedur (SOP), serta kebijakan tata tertib kehadiran yang berlaku di lingkungan {ctx["company_name"]}.</li>
+</ol></div>
 
-    <div class="pasal"><div class="ph">Pasal 5</div><div class="ph">FASILITAS DAN KERAHASIAAN PERUSAHAAN</div>
-      <ol>
-        <li>PIHAK PERTAMA dapat meminjamkan fasilitas atau perlengkapan kerja kepada PIHAK KEDUA. Seluruh aset tersebut tetap menjadi milik sah PIHAK PERTAMA dan wajib dikembalikan dalam keadaan baik saat Perjanjian ini berakhir.</li>
-        <li>PIHAK KEDUA diwajibkan untuk menjaga kerahasiaan seluruh data operasional, administrasi, sistem kerja, serta informasi konfidensial lainnya milik PIHAK PERTAMA, baik selama Perjanjian ini berlangsung maupun setelah berakhirnya hubungan kerja.</li>
-      </ol></div>
+<div class="pasal"><div class="ph">Pasal 4</div><div class="ph">UPAH, TUNJANGAN, DAN KERJA LEMBUR</div>
+<ol>
+<li>Selama masa Perjanjian ini, PIHAK PERTAMA akan memberikan kompensasi kepada PIHAK KEDUA dengan rincian sebagai berikut :
+<ol style="list-style-type: lower-alpha">
+<li>Gaji Pokok : Sebesar <b>{gaji}</b>{gaji_w} nett/bulan.</li>
+<li>Tunjangan Tidak Tetap (Uang Makan): Sebesar <b>{makan}</b>{makan_w} / hari kehadiran kerja.</li>
+</ol></li>
+<li>Uang makan sebagaimana diatur pada ayat (1) huruf b bersifat fluktuatif dan hanya dibayarkan apabila PIHAK KEDUA hadir secara fisik serta menyelesaikan waktu kerja reguler pada hari tersebut. Apabila PIHAK KEDUA mangkir, sakit, cuti, atau izin, maka uang makan tidak dibayarkan.</li>
+<li>Upah sebagaimana dimaksud pada ayat (1) dibayarkan pada tanggal terakhir setiap bulannya melalui transfer ke rekening bank milik PIHAK KEDUA.</li>
+<li>Apabila terdapat kebutuhan operasional yang mendesak, PIHAK PERTAMA dapat menugaskan PIHAK KEDUA untuk melakukan Kerja Lembur. Pelaksanaan Kerja Lembur wajib didasarkan pada Surat Perintah Lembur (SPL) resmi yang disetujui dan ditandatangani terlebih dahulu oleh atasan langsung PIHAK KEDUA. Tanpa adanya SPL tertulis, segala bentuk perpanjangan waktu kerja (kehadiran di luar jam kerja operasional atas inisiatif pribadi) tidak diakui dan tidak sah dibayarkan sebagai lembur.</li>
+<li>Perhitungan dan pembayaran upah Kerja Lembur yang disetujui melalui SPL akan dilaksanakan sesuai dengan kebijakan internal yang sejalan dengan peraturan perundang-undangan di bidang ketenagakerjaan yang berlaku.</li>
+</ol></div>
 
-    <div class="pasal"><div class="ph">Pasal 6</div><div class="ph">PENGAKHIRAN PERJANJIAN</div>
-      <ol>
-        <li>Pemutusan hubungan kerja dapat terjadi sebelum berakhirnya jangka waktu Perjanjian apabila PIHAK KEDUA melakukan pelanggaran berat, melanggar tata tertib perusahaan, atau tidak mampu memenuhi standar kinerja yang ditetapkan oleh PIHAK PERTAMA.</li>
-        <li>Pemenuhan hak-hak normatif PIHAK KEDUA akibat berakhirnya Perjanjian ini akan diselesaikan dengan mengacu pada ketentuan perundang-undangan di bidang ketenagakerjaan yang berlaku di Republik Indonesia.</li>
-      </ol></div>
+<div class="pasal"><div class="ph">Pasal 5</div><div class="ph">FASILITAS DAN KERAHASIAAN PERUSAHAAN</div>
+<ol>
+<li>PIHAK PERTAMA dapat meminjamkan fasilitas atau perlengkapan kerja kepada PIHAK KEDUA. Seluruh aset tersebut tetap menjadi milik sah PIHAK PERTAMA dan wajib dikembalikan dalam keadaan baik saat Perjanjian ini berakhir.</li>
+<li>PIHAK KEDUA diwajibkan untuk menjaga kerahasiaan seluruh data operasional, administrasi, sistem kerja, serta informasi konfidensial lainnya milik PIHAK PERTAMA, baik selama Perjanjian ini berlangsung maupun setelah berakhirnya hubungan kerja.</li>
+</ol></div>
 
-    <div class="pasal"><div class="ph">Pasal 7</div><div class="ph">PENUTUP</div>
-      <ol>
-        <li>Perjanjian ini dibuat secara sadar, dibaca, dimengerti, dan disepakati bersama. Khusus mengenai besaran Upah sebagaimana diatur dalam Pasal 4, Para Pihak menyadari bahwa PIHAK PERTAMA diklasifikasikan sebagai Usaha Kecil berdasarkan regulasi yang berlaku, sehingga besaran upah ditetapkan murni berdasarkan kesepakatan Para Pihak.</li>
-        <li>Dibuat rangkap 2 (dua) yang masing-masing dibubuhi meterai secukupnya dan memiliki kekuatan hukum yang sama.</li>
-      </ol></div>
+<div class="pasal"><div class="ph">Pasal 6</div><div class="ph">PENGAKHIRAN PERJANJIAN</div>
+<ol>
+<li>Pemutusan hubungan kerja dapat terjadi sebelum berakhirnya jangka waktu Perjanjian apabila PIHAK KEDUA melakukan pelanggaran berat, melanggar tata tertib perusahaan, atau tidak mampu memenuhi standar kinerja yang ditetapkan oleh PIHAK PERTAMA.</li>
+<li>Pemenuhan hak-hak normatif PIHAK KEDUA akibat berakhirnya Perjanjian ini akan diselesaikan dengan mengacu pada ketentuan perundang-undangan di bidang ketenagakerjaan yang berlaku di Republik Indonesia.</li>
+</ol></div>
 
-    <div class="sign">
-      <div class="box"><div>PIHAK PERTAMA</div><div>{ctx["company_name"]}</div><div class="space"></div>
-        <div class="nm">( {ctx["rep_name"] or "……………………"} )</div><div>{ctx["rep_position"] or "Direktur Utama"}</div></div>
-      <div class="box"><div>PIHAK KEDUA</div><div class="space" style="height:96px"></div>
-        <div class="nm">( {ctx["emp_name"] or "……………………"} )</div><div>{ctx["signer2_title"]}</div></div>
-    </div>
-    </body></html>"""
+<div class="pasal"><div class="ph">Pasal 7</div><div class="ph">PENUTUP</div>
+<ol>
+<li>Perjanjian ini dibuat secara sadar, dibaca, dimengerti, dan disepakati bersama. Khusus mengenai besaran Upah sebagaimana diatur dalam Pasal 4, Para Pihak menyadari bahwa PIHAK PERTAMA diklasifikasikan sebagai Usaha Kecil berdasarkan regulasi yang berlaku, sehingga besaran upah ditetapkan murni berdasarkan kesepakatan Para Pihak.</li>
+<li>Dibuat rangkap 2 (dua) yang masing-masing dibubuhi meterai secukupnya dan memiliki kekuatan hukum yang sama.</li>
+</ol></div>
+
+<table width="100%" style="margin-top:34px">
+<tr>
+  <td width="50%" align="center">PIHAK PERTAMA<br/>{ctx["company_name"]}<br/><br/><br/><br/><span class="nm">( {rep_sig} )</span><br/>{rep_pos}</td>
+  <td width="50%" align="center">PIHAK KEDUA<br/><br/><br/><br/><br/><span class="nm">( {emp_sig} )</span><br/>{ctx["signer2_title"]}</td>
+</tr>
+</table>
+
+</body></html>"""
 
 
 def build_contract_pdf(ctx: dict) -> bytes:
+    from xhtml2pdf import pisa
     html = build_contract_html(ctx)
-    return HTML(string=html, base_url=os.path.dirname(__file__)).write_pdf()
+    out = io.BytesIO()
+    pisa.CreatePDF(html, dest=out, encoding="utf-8")
+    return out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -359,8 +362,6 @@ def build_contract_docx(ctx: dict) -> bytes:
     sp = ctx["sign"]
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
     p.add_run("Pada hari ini, ")
-    for label in [str(sp["hari"]), None, str(sp["tgl"]), None, str(sp["bulan"]), None, str(sp["tahun"])]:
-        pass
     p.add_run(str(sp["hari"])).bold = True
     p.add_run(", tanggal ")
     p.add_run(str(sp["tgl"])).bold = True
@@ -432,7 +433,7 @@ def build_contract_docx(ctx: dict) -> bytes:
     ga.add_run("a. Gaji Pokok : Sebesar ")
     ga.add_run(ctx["gaji_pokok"] or BLANK).bold = True
     if ctx["gaji_pokok_words"]:
-        ga.add_run(" (").italic = False; ga.add_run(ctx["gaji_pokok_words"]).italic = True; ga.add_run(")")
+        ga.add_run(" ("); ga.add_run(ctx["gaji_pokok_words"]).italic = True; ga.add_run(")")
     ga.add_run(" nett/bulan.")
     gb = doc.add_paragraph(); gb.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY; gb.paragraph_format.left_indent = Cm(1.6)
     gb.add_run("b. Tunjangan Tidak Tetap (Uang Makan): Sebesar ")
@@ -460,7 +461,7 @@ def build_contract_docx(ctx: dict) -> bytes:
     _num_item(doc, [("Perjanjian ini dibuat secara sadar, dibaca, dimengerti, dan disepakati bersama. Khusus mengenai besaran Upah sebagaimana diatur dalam Pasal 4, Para Pihak menyadari bahwa PIHAK PERTAMA diklasifikasikan sebagai Usaha Kecil berdasarkan regulasi yang berlaku, sehingga besaran upah ditetapkan murni berdasarkan kesepakatan Para Pihak.", False, False)], 1)
     _num_item(doc, [("Dibuat rangkap 2 (dua) yang masing-masing dibubuhi meterai secukupnya dan memiliki kekuatan hukum yang sama.", False, False)], 2)
 
-    # Signatures (keep together)
+    # Signatures
     doc.add_paragraph()
     sig = doc.add_table(rows=1, cols=2)
     c0, c1 = sig.rows[0].cells

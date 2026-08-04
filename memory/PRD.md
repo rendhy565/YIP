@@ -298,3 +298,9 @@ See `/app/memory/test_credentials.md`
 - **Kop surat**: logo AR CARGO (dari lampiran "KOP SURAT (AR NEW LOGO)"), dioptimasi → `backend/assets/ar_cargo_logo.png` + `frontend/public/ar-cargo-logo.png`. Header pakai nama perusahaan + kop_address/website/tagline dari settings. TTD digital di-skip; disediakan space TTD basah.
 - **Riwayat Kontrak**: satu karyawan bisa punya banyak kontrak (perpanjangan). List menampilkan kontrak terbaru + toggle "Riwayat (N)" yang expand semua kontrak (Edit/Print/Hapus per kontrak). Tombol "Baru" untuk buat kontrak perpanjangan.
 - Deps baru: python-docx==1.2.0, weasyprint==69.0 (sudah di requirements.txt). Modul generator: `backend/contract_docs.py`.
+
+## Update — 2026-06 · Fix deploy (500) + slim requirements + review deploy cmd
+- **Root cause 500 (Word/PDF/Print)**: `contract_docs.py` import weasyprint di top-level; weasyprint butuh system lib (pango/cairo) yang tak ada di Docker → modul gagal import → ketiga endpoint 500.
+- **Fix**: ganti engine PDF ke **xhtml2pdf** (pure-python, tanpa system lib). weasyprint dihapus. HTML kontrak dibuat table-based agar kompatibel xhtml2pdf. python-docx tetap untuk .docx. Print button = buka PDF server di tab baru.
+- **requirements.txt dirampingkan**: hapus emergentintegrations, litellm, openai, google-*, boto3, pandas, numpy, stripe, dll (tidak diimport). Sisakan hanya deps runtime (fastapi, uvicorn, motor/pymongo, pydantic, PyJWT, python-jose, bcrypt, python-dotenv, openpyxl, python-docx, xhtml2pdf, Pillow). Diverifikasi install bersih di venv baru.
+- **Deploy commands**: direview & dirampingkan di `/app/DEPLOY.md` (ARC-only pakai rsync --exclude arcweb, tambah npm install). Catatan: pastikan `backend/assets/ar_cargo_logo.png` ikut ke image Docker.
