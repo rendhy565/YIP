@@ -4,6 +4,7 @@
  */
 import React, { useEffect, useState } from "react";
 import { X, Printer, FileText, FileDown } from "lucide-react";
+import { toast } from "sonner";
 import api from "../lib/api";
 
 const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
@@ -49,10 +50,38 @@ export default function ContractPrint({ contract, employee, onClose }) {
   const empBirthDate = c.emp_birth_date || e.tanggal_lahir;
   const empAddress = c.emp_address || e.alamat_ktp || e.alamat_domisili;
 
-  const handlePrint = () => window.print();
+  const handlePrint = async () => {
+    if (!c.id) { toast.error("Simpan kontrak dulu sebelum mencetak."); return; }
+    setDownloading("print");
+    try {
+      const res = await api.get(`/hr/contracts/${c.id}/pdf`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const w = window.open(url, "_blank");
+      if (!w) {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `Kontrak_Kerja_${(empName || "karyawan").replace(/\s+/g, "_")}.pdf`;
+        document.body.appendChild(a); a.click(); a.remove();
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) { await explainErr(err); }
+    finally { setDownloading(""); }
+  };
+
+  const explainErr = async (err) => {
+    let msg = "Gagal memproses dokumen. Coba lagi sesaat lagi.";
+    try {
+      const data = err?.response?.data;
+      if (data instanceof Blob) {
+        const txt = await data.text();
+        try { msg = JSON.parse(txt).detail || msg; } catch { if (txt) msg = txt.slice(0, 200); }
+      } else if (err?.message) { msg = err.message; }
+    } catch (_) {}
+    toast.error(msg);
+  };
 
   const download = async (type) => {
-    if (!c.id) return;
+    if (!c.id) { toast.error("Simpan kontrak dulu sebelum mengunduh."); return; }
     setDownloading(type);
     try {
       const res = await api.get(`/hr/contracts/${c.id}/${type}`, { responseType: "blob" });
@@ -69,9 +98,9 @@ export default function ContractPrint({ contract, employee, onClose }) {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     } catch (err) {
-      alert("Gagal mengunduh file. Coba lagi.");
+      await explainErr(err);
     } finally {
       setDownloading("");
     }
@@ -95,14 +124,14 @@ export default function ContractPrint({ contract, employee, onClose }) {
         <div className="no-print flex items-center justify-between p-3 border-b bg-slate-50 sticky top-0 z-10">
           <h3 className="font-bold text-sm">Kontrak Kerja — {empName || "(tanpa nama)"}</h3>
           <div className="flex gap-2">
-            <button onClick={() => download("docx")} disabled={downloading} className="px-3 py-1.5 bg-blue-700 text-white text-xs rounded hover:bg-blue-800 disabled:opacity-50 flex items-center gap-1" data-testid="contract-download-docx">
+            <button onClick={() => download("docx")} disabled={!!downloading} className="px-3 py-1.5 bg-blue-700 text-white text-xs rounded hover:bg-blue-800 disabled:opacity-50 flex items-center gap-1" data-testid="contract-download-docx">
               <FileText size={13} /> {downloading === "docx" ? "Menyiapkan…" : "Word"}
             </button>
-            <button onClick={() => download("pdf")} disabled={downloading} className="px-3 py-1.5 bg-rose-600 text-white text-xs rounded hover:bg-rose-700 disabled:opacity-50 flex items-center gap-1" data-testid="contract-download-pdf">
+            <button onClick={() => download("pdf")} disabled={!!downloading} className="px-3 py-1.5 bg-rose-600 text-white text-xs rounded hover:bg-rose-700 disabled:opacity-50 flex items-center gap-1" data-testid="contract-download-pdf">
               <FileDown size={13} /> {downloading === "pdf" ? "Menyiapkan…" : "PDF"}
             </button>
-            <button onClick={handlePrint} className="px-3 py-1.5 bg-slate-700 text-white text-xs rounded hover:bg-slate-800 flex items-center gap-1" data-testid="contract-print-btn">
-              <Printer size={13} /> Print
+            <button onClick={handlePrint} disabled={!!downloading} className="px-3 py-1.5 bg-slate-700 text-white text-xs rounded hover:bg-slate-800 disabled:opacity-50 flex items-center gap-1" data-testid="contract-print-btn">
+              <Printer size={13} /> {downloading === "print" ? "Membuka…" : "Print"}
             </button>
             <button onClick={onClose} className="p-1.5 hover:bg-slate-200 rounded" data-testid="contract-print-close"><X size={16} /></button>
           </div>
