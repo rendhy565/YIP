@@ -508,6 +508,7 @@ DEFAULT_COA = [
     {"code": "1101", "name": "Kas", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
     {"code": "1102", "name": "Bank BCA", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
     {"code": "1103", "name": "Bank Mandiri", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
+    {"code": "1104", "name": "Biaya Dibayar di Muka", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     {"code": "1201", "name": "Piutang Usaha", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     {"code": "1301", "name": "Persediaan", "type": "asset", "subtype": "current_asset", "normal": "debit"},
     {"code": "1501", "name": "Peralatan & Kendaraan", "type": "asset", "subtype": "fixed_asset", "normal": "debit"},
@@ -3154,6 +3155,214 @@ async def delete_fixed_cost(fid: str, user: dict = Depends(require_role("operati
     # Also clean up associated journals to keep books consistent
     await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": fid})
     return {"ok": True}
+
+# ---------------------------------------------------------------------------
+# Amortisasi Beban (Prepaid Expense Amortization) — PSAK
+# Ambil beban (fixed_cost) yang SUDAH ada, reklas jadi Biaya Dibayar di Muka (1104),
+# lalu sebar pengakuan bebannya rata selama N bulan.
+# ---------------------------------------------------------------------------
+PREPAID_CODE = "1104"
+
+async def _require_accounting(user: dict = Depends(get_current_user)) -> dict:
+    """Guard modul accounting (setara require_feature('accounting'), didefinisikan lebih awal)."""
+    if not await is_feature_enabled("accounting"):
+        raise HTTPException(status_code=503, detail="Modul 'accounting' sedang dinonaktifkan oleh administrator")
+    if user.get("role") != "administrator" and "accounting" not in (user.get("permissions") or []):
+        raise HTTPException(status_code=403, detail="Anda tidak memiliki izin untuk modul 'accounting'. Hubungi administrator.")
+    return user
+
+class AmortizationIn(BaseModel):
+    source_id: str                       # id fixed_cost yang mau diamortisasi
+    months: int                          # jumlah bulan amortisasi
+    start_month: Optional[str] = None    # YYYY-MM (default: bulan beban asal)
+    notes: Optional[str] = None
+
+def _add_months(ym: str, k: int) -> str:
+    y, m = [int(x) for x in ym.split("-")]
+    idx = y * 12 + (m - 1) + k
+    return f"{idx // 12}-{str(idx % 12 + 1).zfill(2)}"
+
+def _cur_month() -> str:
+    d = datetime.now(timezone.utc)
+    return f"{d.year}-{str(d.month).zfill(2)}"
+
+def _build_schedule(total: float, months: int, start_month: str) -> list:
+    total = int(round(total))
+    per = total // months
+    sched = []
+    acc = 0
+    for k in range(months):
+        amt = per if k < months - 1 else (total - per * (months - 1))
+        acc += amt
+        sched.append({"period": _add_months(start_month, k), "amount": amt, "status": "scheduled"})
+    return sched
+
+async def _amort_progress(am: dict) -> dict:
+    cur = _cur_month()
+    sched = am.get("schedule", [])
+    recognized = sum(s["amount"] for s in sched if s.get("status") != "cancelled" and s["period"] <= cur)
+    total = int(round(am.get("total_amount") or 0))
+    out = serialize(am)
+    out["recognized_amount"] = recognized
+    out["remaining_prepaid"] = max(total - recognized, 0)
+    out["recognized_count"] = len([s for s in sched if s.get("status") != "cancelled" and s["period"] <= cur])
+    out["total_count"] = len([s for s in sched if s.get("status") != "cancelled"])
+    return out
+
+@app.get("/api/amortizations/available-expenses")
+async def amort_available_expenses(user: dict = Depends(_require_accounting)):
+    """Daftar beban (fixed_cost) yang belum diamortisasi — bisa dari history."""
+    used = set()
+    async for a in db.amortizations.find({}, {"source_id": 1}):
+        if a.get("source_id"):
+            used.add(a["source_id"])
+    out = []
+    for f in await db.fixed_costs.find().sort("expense_date", -1).to_list(5000):
+        fid = str(f["_id"])
+        if fid in used:
+            continue
+        out.append({
+            "id": fid,
+            "expense_date": f.get("expense_date"),
+            "period_month": f.get("period_month"),
+            "category": f.get("category"),
+            "description": f.get("description"),
+            "amount": f.get("amount"),
+            "account_code": f.get("account_code"),
+            "posting_type": f.get("posting_type"),
+        })
+    return out
+
+@app.get("/api/amortizations")
+async def list_amortizations(user: dict = Depends(_require_accounting)):
+    rows = await db.amortizations.find().sort("created_at", -1).to_list(2000)
+    return [await _amort_progress(a) for a in rows]
+
+@app.get("/api/amortizations/{aid}")
+async def get_amortization(aid: str, user: dict = Depends(_require_accounting)):
+    a = await db.amortizations.find_one({"_id": _oid(aid)})
+    if not a:
+        raise HTTPException(404, "Amortisasi tidak ditemukan")
+    return await _amort_progress(a)
+
+@app.post("/api/amortizations")
+async def create_amortization(data: AmortizationIn, user: dict = Depends(_require_accounting)):
+    if data.months < 2:
+        raise HTTPException(400, "Jumlah bulan amortisasi minimal 2")
+    fc = await db.fixed_costs.find_one({"_id": _oid(data.source_id)})
+    if not fc:
+        raise HTTPException(404, "Beban sumber tidak ditemukan")
+    if await db.amortizations.find_one({"source_id": data.source_id}):
+        raise HTTPException(400, "Beban ini sudah diamortisasi")
+    total = float(fc.get("amount") or 0)
+    if total <= 0:
+        raise HTTPException(400, "Nominal beban tidak valid")
+    expense_code = fc.get("account_code") or FIXED_COST_TO_COA.get(fc.get("category"), "6199")
+    label = "Beban Operasional" if fc.get("posting_type") == "cogs" else "Beban"
+    src_date_str = fc.get("expense_date") or (fc.get("period_month") + "-01" if fc.get("period_month") else None)
+    if not src_date_str:
+        raise HTTPException(400, "Tanggal beban sumber tidak valid")
+    src_dt = datetime.strptime(src_date_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    start_month = data.start_month or src_dt.strftime("%Y-%m")
+    schedule = _build_schedule(total, data.months, start_month)
+
+    doc = {
+        "source_type": "fixed_cost",
+        "source_id": data.source_id,
+        "name": fc.get("description") or fc.get("category"),
+        "category": fc.get("category"),
+        "expense_account_code": expense_code,
+        "posting_type": fc.get("posting_type", "expense"),
+        "prepaid_account_code": PREPAID_CODE,
+        "total_amount": int(round(total)),
+        "months": data.months,
+        "start_month": start_month,
+        "src_date": src_date_str[:10],
+        "schedule": schedule,
+        "status": "active",
+        "notes": data.notes,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": user["id"],
+    }
+    r = await db.amortizations.insert_one(doc)
+    aid = str(r.inserted_id)
+
+    # 1) Reklas: pindahkan beban asal ke Biaya Dibayar di Muka (netralkan PnL bulan asal)
+    await post_journal(
+        date=src_dt,
+        description=f"Reklas amortisasi: {doc['name']} → Biaya Dibayar di Muka",
+        lines=[
+            {"account_code": PREPAID_CODE, "debit": int(round(total)), "credit": 0, "memo": doc["name"]},
+            {"account_code": expense_code, "debit": 0, "credit": int(round(total)), "memo": "Reklas ke prepaid"},
+        ],
+        reference_type="amortization_reclass", reference_id=aid, posted_by=user["id"],
+    )
+    # 2) Pengakuan beban bulanan: Dr Beban / Cr Prepaid
+    for s in schedule:
+        py, pm = [int(x) for x in s["period"].split("-")]
+        await post_journal(
+            date=datetime(py, pm, 1, tzinfo=timezone.utc),
+            description=f"Amortisasi {label.lower()} {doc['name']} ({s['period']})",
+            lines=[
+                {"account_code": expense_code, "debit": s["amount"], "credit": 0, "memo": doc["name"]},
+                {"account_code": PREPAID_CODE, "debit": 0, "credit": s["amount"], "memo": "Amortisasi"},
+            ],
+            reference_type="amortization", reference_id=aid, posted_by=user["id"],
+            extra_fields={"amort_period": s["period"]},
+        )
+    return await _amort_progress(await db.amortizations.find_one({"_id": r.inserted_id}))
+
+@app.post("/api/amortizations/{aid}/stop")
+async def stop_amortization(aid: str, user: dict = Depends(_require_accounting)):
+    a = await db.amortizations.find_one({"_id": _oid(aid)})
+    if not a:
+        raise HTTPException(404, "Amortisasi tidak ditemukan")
+    if a.get("status") != "active":
+        raise HTTPException(400, "Amortisasi sudah tidak aktif")
+    stop_month = _cur_month()
+    # Hapus jurnal pengakuan untuk periode SETELAH bulan stop
+    future = [s for s in a.get("schedule", []) if s["period"] > stop_month and s.get("status") != "cancelled"]
+    remaining = sum(s["amount"] for s in future)
+    await db.journal_entries.delete_many({
+        "reference_type": "amortization", "reference_id": aid,
+        "amort_period": {"$gt": stop_month},
+    })
+    expense_code = a["expense_account_code"]
+    # Bebankan sisa sekaligus di bulan stop
+    if remaining > 0:
+        sy, sm = [int(x) for x in stop_month.split("-")]
+        await post_journal(
+            date=datetime(sy, sm, 1, tzinfo=timezone.utc),
+            description=f"Amortisasi dihentikan — sisa dibebankan sekaligus: {a.get('name')}",
+            lines=[
+                {"account_code": expense_code, "debit": remaining, "credit": 0, "memo": a.get("name")},
+                {"account_code": PREPAID_CODE, "debit": 0, "credit": remaining, "memo": "Sisa amortisasi"},
+            ],
+            reference_type="amortization_stop", reference_id=aid, posted_by=user["id"],
+        )
+    # Update schedule: tandai future sebagai cancelled, tambah baris lump-sum
+    new_sched = [s if s["period"] <= stop_month else {**s, "status": "cancelled"} for s in a.get("schedule", [])]
+    if remaining > 0:
+        new_sched.append({"period": stop_month, "amount": remaining, "status": "stopped_lumpsum"})
+    await db.amortizations.update_one({"_id": _oid(aid)}, {"$set": {
+        "status": "stopped", "stopped_at_month": stop_month, "schedule": new_sched,
+        "stopped_at": datetime.now(timezone.utc),
+    }})
+    return await _amort_progress(await db.amortizations.find_one({"_id": _oid(aid)}))
+
+@app.delete("/api/amortizations/{aid}")
+async def delete_amortization(aid: str, user: dict = Depends(_require_accounting)):
+    a = await db.amortizations.find_one({"_id": _oid(aid)})
+    if not a:
+        raise HTTPException(404, "Amortisasi tidak ditemukan")
+    # Balikkan semua jurnal → beban asal kembali penuh di bulan asal
+    await db.journal_entries.delete_many({
+        "reference_type": {"$in": ["amortization_reclass", "amortization", "amortization_stop"]},
+        "reference_id": aid,
+    })
+    await db.amortizations.delete_one({"_id": _oid(aid)})
+    return {"ok": True}
+
 
 # ---------------------------------------------------------------------------
 # Profit & Loss (Module 7)

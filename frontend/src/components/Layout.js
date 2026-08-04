@@ -7,7 +7,7 @@ import {
   Wallet, ClipboardCheck, BadgeDollarSign, TrendingUp, Settings as SettingsIcon,
   LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck,
   BookOpen, BookText, Library, Scale, Building, LineChart, Lock,
-  UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity, FileSignature,
+  UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity, FileSignature, CalendarClock,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 
@@ -49,6 +49,7 @@ const NAV = [
   { to: "/accounting/balance-sheet", label: "Neraca", icon: Building, perm: "accounting", feature: "accounting" },
   { to: "/accounting/income-statement", label: "Laporan Laba Rugi", icon: TrendingUp, perm: "accounting", feature: "accounting" },
   { to: "/accounting/cash-flow", label: "Arus Kas", icon: LineChart, perm: "accounting", feature: "accounting" },
+  { to: "/accounting/amortization", label: "Amortisasi Beban", icon: CalendarClock, perm: "accounting", feature: "accounting" },
   { to: "/accounting/opening-closing", label: "Saldo Awal & Tutup Buku", icon: Lock, perm: "accounting", feature: "accounting" },
 
   { type: "section", label: "HR & Payroll", feature: "hr" },

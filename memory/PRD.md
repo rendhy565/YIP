@@ -304,3 +304,13 @@ See `/app/memory/test_credentials.md`
 - **Fix**: ganti engine PDF ke **xhtml2pdf** (pure-python, tanpa system lib). weasyprint dihapus. HTML kontrak dibuat table-based agar kompatibel xhtml2pdf. python-docx tetap untuk .docx. Print button = buka PDF server di tab baru.
 - **requirements.txt dirampingkan**: hapus emergentintegrations, litellm, openai, google-*, boto3, pandas, numpy, stripe, dll (tidak diimport). Sisakan hanya deps runtime (fastapi, uvicorn, motor/pymongo, pydantic, PyJWT, python-jose, bcrypt, python-dotenv, openpyxl, python-docx, xhtml2pdf, Pillow). Diverifikasi install bersih di venv baru.
 - **Deploy commands**: direview & dirampingkan di `/app/DEPLOY.md` (ARC-only pakai rsync --exclude arcweb, tambah npm install). Catatan: pastikan `backend/assets/ar_cargo_logo.png` ikut ke image Docker.
+
+## Update — 2026-06 · Modul Amortisasi Beban (Prepaid, PSAK)
+- Submenu baru **Akunting (PSAK) → Amortisasi Beban** (`/accounting/amortization`, feature "accounting").
+- Ambil beban yang SUDAH ada (dari `fixed_costs`, termasuk history) → tidak buat beban baru.
+- COA baru: `1104 Biaya Dibayar di Muka` (auto-seed via DEFAULT_COA idempotent).
+- Jurnal: (1) reklas bulan asal `Dr 1104 / Cr Beban` (netralkan PnL akrual bulan itu); (2) N× bulanan `Dr Beban / Cr 1104`. Kas tidak disentuh (basis kas tetap, PnL PSAK akrual jadi rata).
+- Stop di tengah → hapus jurnal bulan depan, sisa prepaid dibebankan sekaligus di bulan stop. Delete → reverse semua jurnal (beban kembali penuh di bulan asal).
+- Endpoints: GET `/api/amortizations`, `/available-expenses`, `/{id}`; POST `/`, `/{id}/stop`; DELETE `/{id}`. Guard `_require_accounting`.
+- Terverifikasi: PnL PSAK (income-statement) sebar 1jt/bulan (bukan 12jt sekaligus), Neraca prepaid 11jt→10jt, stop melumpsum sisa. Cash-basis `profit-loss` (ProfitLoss.js) tetap tampil kas penuh (memang beda basis).
+- File: `pages/Amortisasi.js`. Menu di Layout.js, route di App.js.

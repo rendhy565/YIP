@@ -32,6 +32,7 @@ import NeracaSaldo from "./pages/NeracaSaldo";
 import Neraca from "./pages/Neraca";
 import LaporanLabaRugi from "./pages/LaporanLabaRugi";
 import LaporanArusKas from "./pages/LaporanArusKas";
+import Amortisasi from "./pages/Amortisasi";
 import SaldoAwal from "./pages/SaldoAwal";
 // Optional module pages
 import HrPayroll from "./pages/HrPayroll";
@@ -125,6 +126,7 @@ export default function App() {
             <Route path="/accounting/balance-sheet" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><Neraca /></Shell></FeatureGate></Protected>} />
             <Route path="/accounting/income-statement" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><LaporanLabaRugi /></Shell></FeatureGate></Protected>} />
             <Route path="/accounting/cash-flow" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><LaporanArusKas /></Shell></FeatureGate></Protected>} />
+            <Route path="/accounting/amortization" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><Amortisasi /></Shell></FeatureGate></Protected>} />
             <Route path="/accounting/opening-closing" element={<Protected module="accounting"><FeatureGate feature="accounting"><Shell><SaldoAwal /></Shell></FeatureGate></Protected>} />
 
             {/* Optional modules */}
