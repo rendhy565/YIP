@@ -3463,6 +3463,51 @@ async def profit_loss(
             total_fixed += amt
             fixed_breakdown[cat_name] = fixed_breakdown.get(cat_name, 0) + amt
 
+    # ---- Amortisasi: sebar pengakuan beban sesuai jurnal amortisasi ----
+    # Report ini basis kas; agar THR/beban di-amortisasi tidak masuk penuh di bulan asal,
+    # kita netralkan bulan asal (reklas ke prepaid) & tambahkan slice bulanan pada periode terkait.
+    def _period_in_range(period_month_str):  # "YYYY-MM"
+        if start_date and end_date:
+            return start_date <= f"{period_month_str}-01" <= end_date
+        if month:
+            return period_month_str == month
+        return True  # tanpa filter → semua ikut
+
+    def _date_in_range(date_str):  # "YYYY-MM-DD" atau "YYYY-MM"
+        d = date_str[:10] if len(date_str) >= 10 else f"{date_str[:7]}-01"
+        if start_date and end_date:
+            return start_date <= d <= end_date
+        if month:
+            return d[:7] == month
+        return True
+
+    def _apply_amort_delta(cat, ptype, delta):
+        nonlocal total_fixed, total_cogs_expense
+        if ptype == "cogs":
+            total_cogs_expense += delta
+            cogs_expense_breakdown[cat] = cogs_expense_breakdown.get(cat, 0) + delta
+        else:
+            total_fixed += delta
+            fixed_breakdown[cat] = fixed_breakdown.get(cat, 0) + delta
+
+    for a in await db.amortizations.find({}).to_list(5000):
+        cat = a.get("category")
+        ptype = a.get("posting_type", "expense")
+        # 1) Netralkan beban penuh di bulan asal (reklas ke Biaya Dibayar di Muka)
+        src_date = a.get("src_date") or (a.get("start_month", "") + "-01")
+        if src_date and _date_in_range(src_date):
+            _apply_amort_delta(cat, ptype, -float(a.get("total_amount", 0) or 0))
+        # 2) Tambahkan slice bulanan yang jatuh pada periode (kecuali yang dibatalkan)
+        for s in a.get("schedule", []):
+            if s.get("status") == "cancelled":
+                continue
+            if _period_in_range(s.get("period", "")):
+                _apply_amort_delta(cat, ptype, float(s.get("amount", 0) or 0))
+
+    # Bersihkan kategori yang jadi 0 (mis. bulan asal ternetralkan penuh)
+    fixed_breakdown = {k: v for k, v in fixed_breakdown.items() if round(v) != 0}
+    cogs_expense_breakdown = {k: v for k, v in cogs_expense_breakdown.items() if round(v) != 0}
+
     # Add COGS-typed expenses into total_cogs so Gross Margin reflects them
     total_cogs += total_cogs_expense
 
