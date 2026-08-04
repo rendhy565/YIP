@@ -286,3 +286,9 @@ See `/app/memory/test_credentials.md`
 - New reusable component `frontend/src/components/MonthPicker.js`: dropdown Bulan + Tahun (tanpa ketik manual, tanpa tanggal). Value tetap "YYYY-MM". Prop `allowEmpty` untuk filter opsional.
 - Semua 20 input `type="month"` di aplikasi diganti ke `<MonthPicker>` (ProfitLoss, FixedCosts, Analytics, Neraca, VendorAging, LaporanLabaRugi, BukuBesar, SaldoAwal, TaxModule, BankReconciliation, NeracaSaldo, Costs, AssetModule, LaporanArusKas, HrPayroll, JournalUmum).
 - WIB fix: MongoDB mengembalikan datetime naive (tanpa offset) → browser salah anggap local. Helper `parseServerDate()` di utils.js menambahkan 'Z' agar diparse sebagai UTC. `fmtDate`/`fmtDateTime` + Activity Log kini render WIB (Asia/Jakarta) dengan benar.
+
+## Update — 2026-06 · Submenu Kontrak Kerja (PKWT) di HR & Payroll
+- Menu baru **HR & Payroll → Kontrak Kerja** (`/hr/contracts`). Halaman list semua karyawan + kontrak kerjanya (awalnya blank; tombol "Buat Kontrak" per karyawan).
+- Backend: collection `employment_contracts` + CRUD `/api/hr/contracts` (GET list join karyawan, GET/{id}, POST, PUT, DELETE) — semua `require_feature("hr")`. Model `EmploymentContractIn` menyimpan semua variabel PKWT (No kontrak, para pihak, jabatan, jangka waktu, gaji pokok + uang makan + terbilang, dll).
+- Frontend: `pages/KontrakKerja.js` (list + form modal, prefill identitas dari master karyawan, auto-terbilang Rupiah editable) + `components/ContractPrint.js` (template PKWT A4 siap print sesuai lampiran "Draft PKWT Reeza Marwan", Pasal 1-7, field kosong tampil garis bawah).
+- CATATAN: **Feature flag `hr` di-set ON** agar menu tampil (sebelumnya OFF). Bisa ditoggle admin via feature flags bila perlu.

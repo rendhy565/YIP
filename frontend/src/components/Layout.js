@@ -7,7 +7,7 @@ import {
   Wallet, ClipboardCheck, BadgeDollarSign, TrendingUp, Settings as SettingsIcon,
   LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck,
   BookOpen, BookText, Library, Scale, Building, LineChart, Lock,
-  UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity,
+  UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity, FileSignature,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 
@@ -54,6 +54,7 @@ const NAV = [
   { type: "section", label: "HR & Payroll", feature: "hr" },
   { to: "/hr", label: "Karyawan & Gaji", icon: UserCog, perm: "hr", feature: "hr" },
   { to: "/hr/attendance", label: "Absensi", icon: ClipboardCheck, perm: "hr", feature: "hr" },
+  { to: "/hr/contracts", label: "Kontrak Kerja", icon: FileSignature, perm: "hr", feature: "hr" },
 
   { type: "section", label: "Perpajakan", feature: "tax" },
   { to: "/tax", label: "PPN & PPh", icon: Percent, perm: "tax", feature: "tax" },

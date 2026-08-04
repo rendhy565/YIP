@@ -4214,6 +4214,95 @@ async def delete_employee(eid: str, user: dict = Depends(require_feature("hr")))
     await db.employees.delete_one({"_id": _oid(eid)})
     return {"ok": True}
 
+# ---------------------------------------------------------------------------
+# HR — Kontrak Kerja (Employment Contract / PKWT)
+# ---------------------------------------------------------------------------
+class EmploymentContractIn(BaseModel):
+    employee_id: str
+    contract_no: Optional[str] = None
+    contract_type: Optional[str] = "PKWT"           # PKWT | PKWTT
+    sign_place: Optional[str] = "Kota Bekasi"
+    sign_date: Optional[str] = None                 # YYYY-MM-DD (tanggal tanda tangan)
+    # --- Pihak Pertama (Perusahaan) ---
+    company_name: Optional[str] = "PT. Abirama Mitra Pratama"
+    rep_name: Optional[str] = None                  # nama penandatangan perusahaan
+    rep_position: Optional[str] = None              # jabatan penandatangan (mis. Direktur Utama)
+    rep_address: Optional[str] = None
+    # --- Pihak Kedua (Karyawan) — snapshot, boleh beda dari master ---
+    emp_name: Optional[str] = None
+    emp_ktp: Optional[str] = None
+    emp_birth_place: Optional[str] = None
+    emp_birth_date: Optional[str] = None            # YYYY-MM-DD atau teks bebas
+    emp_address: Optional[str] = None
+    # --- Isi Kontrak ---
+    position: Optional[str] = None                  # Pasal 1 — jabatan
+    placement: Optional[str] = None                 # Pasal 1 — penempatan
+    duration_text: Optional[str] = None             # Pasal 2 — mis. "satu tahun"
+    start_date: Optional[str] = None                # Pasal 2 — mulai (YYYY-MM-DD)
+    end_date: Optional[str] = None                  # Pasal 2 — berakhir (YYYY-MM-DD)
+    work_days_text: Optional[str] = None            # Pasal 3 — mis. "6 (enam) hari kerja dalam 1 (satu) minggu"
+    gaji_pokok: Optional[float] = 0                 # Pasal 4
+    gaji_pokok_words: Optional[str] = None
+    uang_makan: Optional[float] = 0                 # Pasal 4 (per hari kehadiran)
+    uang_makan_words: Optional[str] = None
+    signer2_title: Optional[str] = "Karyawan"
+    notes: Optional[str] = None
+    status: Optional[str] = "draft"                 # draft | active | expired
+
+@app.get("/api/hr/contracts")
+async def list_employment_contracts(user: dict = Depends(require_feature("hr"))):
+    """List semua karyawan beserta kontrak kerjanya (untuk halaman Kontrak Kerja)."""
+    employees = await db.employees.find().sort("full_name", 1).to_list(2000)
+    contracts = await db.employment_contracts.find().sort("created_at", -1).to_list(5000)
+    by_emp: dict = {}
+    for c in contracts:
+        by_emp.setdefault(c.get("employee_id"), []).append(serialize(c))
+    out = []
+    for e in employees:
+        eid = str(e["_id"])
+        clist = by_emp.get(eid, [])
+        out.append({
+            "employee": serialize(e),
+            "contracts": clist,
+            "latest": clist[0] if clist else None,
+        })
+    return out
+
+@app.get("/api/hr/contracts/{cid}")
+async def get_employment_contract(cid: str, user: dict = Depends(require_feature("hr"))):
+    doc = await db.employment_contracts.find_one({"_id": _oid(cid)})
+    if not doc:
+        raise HTTPException(404, "Kontrak kerja tidak ditemukan")
+    return serialize(doc)
+
+@app.post("/api/hr/contracts")
+async def create_employment_contract(data: EmploymentContractIn, user: dict = Depends(require_feature("hr"))):
+    emp = await db.employees.find_one({"_id": _oid(data.employee_id)})
+    if not emp:
+        raise HTTPException(404, "Karyawan tidak ditemukan")
+    doc = data.model_dump()
+    now = datetime.now(timezone.utc)
+    doc["created_at"] = now
+    doc["updated_at"] = now
+    r = await db.employment_contracts.insert_one(doc)
+    return serialize(await db.employment_contracts.find_one({"_id": r.inserted_id}))
+
+@app.put("/api/hr/contracts/{cid}")
+async def update_employment_contract(cid: str, data: EmploymentContractIn, user: dict = Depends(require_feature("hr"))):
+    existing = await db.employment_contracts.find_one({"_id": _oid(cid)})
+    if not existing:
+        raise HTTPException(404, "Kontrak kerja tidak ditemukan")
+    doc = data.model_dump()
+    doc["updated_at"] = datetime.now(timezone.utc)
+    await db.employment_contracts.update_one({"_id": _oid(cid)}, {"$set": doc})
+    return serialize(await db.employment_contracts.find_one({"_id": _oid(cid)}))
+
+@app.delete("/api/hr/contracts/{cid}")
+async def delete_employment_contract(cid: str, user: dict = Depends(require_feature("hr"))):
+    await db.employment_contracts.delete_one({"_id": _oid(cid)})
+    return {"ok": True}
+
+
 class PayrollRunIn(BaseModel):
     period_month: str  # YYYY-MM
     cash_account_code: Optional[str] = "1101"          # Rekening asal transfer gaji netto (mis. Giro)
