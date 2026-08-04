@@ -3,6 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import MonthPicker from "../components/MonthPicker";
+import SearchableSelect from "../components/SearchableSelect";
 import { toast } from "sonner";
 import { CalendarClock, Plus, X, ChevronDown, ChevronRight, Ban, Trash2 } from "lucide-react";
 
@@ -152,14 +153,18 @@ export default function Amortisasi() {
             <div className="p-4 space-y-4">
               <div>
                 <Label>Pilih Beban (dari yang sudah dibuat / history)</Label>
-                <Select data-testid="amort-source-select" value={sourceId} onChange={(e) => onSelectExpense(e.target.value)}>
-                  <option value="">— Pilih beban —</option>
-                  {expenses.map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {(e.expense_date || e.period_month || "")} · {e.category} · {e.description || "(tanpa deskripsi)"} · {fmtIDR(e.amount)}
-                    </option>
-                  ))}
-                </Select>
+                <SearchableSelect
+                  testid="amort-source-select"
+                  value={sourceId}
+                  onChange={onSelectExpense}
+                  placeholder="— Pilih beban —"
+                  emptyText="Tidak ada beban yang cocok"
+                  options={expenses.map((e) => ({
+                    value: e.id,
+                    label: `${e.category} · ${e.description || "(tanpa deskripsi)"}`,
+                    sub: `${e.expense_date || e.period_month || ""} · ${fmtIDR(e.amount)}`,
+                  }))}
+                />
                 {expenses.length === 0 && <div className="text-xs text-slate-400 mt-1">Tidak ada beban yang bisa diamortisasi (atau semua sudah diamortisasi). Buat beban dulu di menu Expense.</div>}
               </div>
 

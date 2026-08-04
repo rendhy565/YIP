@@ -314,3 +314,4 @@ See `/app/memory/test_credentials.md`
 - Endpoints: GET `/api/amortizations`, `/available-expenses`, `/{id}`; POST `/`, `/{id}/stop`; DELETE `/{id}`. Guard `_require_accounting`.
 - Terverifikasi: PnL PSAK (income-statement) sebar 1jt/bulan (bukan 12jt sekaligus), Neraca prepaid 11jt→10jt, stop melumpsum sisa. Cash-basis `profit-loss` (ProfitLoss.js) tetap tampil kas penuh (memang beda basis).
 - File: `pages/Amortisasi.js`. Menu di Layout.js, route di App.js.
+- Update 2026-06: Field "Pilih Beban" di form Amortisasi kini pakai `SearchableSelect` (combobox ketik-untuk-cari, filter label+sub) menggantikan dropdown murni. Verified via screenshot.
