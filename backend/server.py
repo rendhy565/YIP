@@ -4302,6 +4302,45 @@ async def delete_employment_contract(cid: str, user: dict = Depends(require_feat
     await db.employment_contracts.delete_one({"_id": _oid(cid)})
     return {"ok": True}
 
+async def _build_contract_ctx(cid: str):
+    from fastapi.responses import Response  # local import to avoid top clutter
+    import contract_docs
+    doc = await db.employment_contracts.find_one({"_id": _oid(cid)})
+    if not doc:
+        raise HTTPException(404, "Kontrak kerja tidak ditemukan")
+    emp = await db.employees.find_one({"_id": _oid(doc.get("employee_id"))}) if doc.get("employee_id") else None
+    settings = {s["key_name"]: s["key_value"] for s in await db.settings.find().to_list(1000)}
+    ctx = contract_docs.build_context(serialize(doc), serialize(emp) if emp else {}, settings)
+    fname_emp = (ctx.get("emp_name") or "kontrak").replace(" ", "_")
+    fname_no = (ctx.get("contract_no") or "").replace("/", "-").replace(" ", "")
+    fname = f"Kontrak_Kerja_{fname_emp}{('_' + fname_no) if fname_no else ''}"
+    return ctx, fname
+
+@app.get("/api/hr/contracts/{cid}/docx")
+async def download_contract_docx(cid: str, user: dict = Depends(require_feature("hr"))):
+    from fastapi.responses import Response
+    import contract_docs
+    ctx, fname = await _build_contract_ctx(cid)
+    data = contract_docs.build_contract_docx(ctx)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.docx"'},
+    )
+
+@app.get("/api/hr/contracts/{cid}/pdf")
+async def download_contract_pdf(cid: str, user: dict = Depends(require_feature("hr"))):
+    from fastapi.responses import Response
+    import contract_docs
+    ctx, fname = await _build_contract_ctx(cid)
+    data = contract_docs.build_contract_pdf(ctx)
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}.pdf"'},
+    )
+
+
 
 class PayrollRunIn(BaseModel):
     period_month: str  # YYYY-MM

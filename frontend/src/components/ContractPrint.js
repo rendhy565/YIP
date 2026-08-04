@@ -2,8 +2,9 @@
  * ContractPrint — tampilan Kontrak Kerja / PKWT siap print (A4), meniru format lampiran.
  * Dipanggil dari halaman Kontrak Kerja (KontrakKerja.js).
  */
-import React from "react";
-import { X, Printer } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { X, Printer, FileText, FileDown } from "lucide-react";
+import api from "../lib/api";
 
 const HARI = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
 const BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
@@ -31,6 +32,16 @@ export default function ContractPrint({ contract, employee, onClose }) {
   const c = contract || {};
   const e = employee || {};
   const sp = signParts(c.sign_date);
+  const [kop, setKop] = useState({});
+  const [downloading, setDownloading] = useState("");
+
+  useEffect(() => {
+    api.get("/settings").then((r) => {
+      const d = r.data;
+      const m = Array.isArray(d) ? Object.fromEntries(d.map((x) => [x.key_name, x.key_value])) : d;
+      setKop(m || {});
+    }).catch(() => {});
+  }, []);
 
   const empName = c.emp_name || e.full_name;
   const empKtp = c.emp_ktp || e.nik;
@@ -40,6 +51,32 @@ export default function ContractPrint({ contract, employee, onClose }) {
 
   const handlePrint = () => window.print();
 
+  const download = async (type) => {
+    if (!c.id) return;
+    setDownloading(type);
+    try {
+      const res = await api.get(`/hr/contracts/${c.id}/${type}`, { responseType: "blob" });
+      let fname = `Kontrak_Kerja_${(empName || "karyawan").replace(/\s+/g, "_")}.${type}`;
+      const cd = res.headers["content-disposition"];
+      if (cd) {
+        const m = cd.match(/filename="?([^"]+)"?/);
+        if (m) fname = m[1];
+      }
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fname;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Gagal mengunduh file. Coba lagi.");
+    } finally {
+      setDownloading("");
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-slate-900/70 z-[60] flex items-start justify-center p-4 overflow-y-auto" data-testid="contract-print-modal">
       <style>{`
@@ -48,17 +85,24 @@ export default function ContractPrint({ contract, employee, onClose }) {
           #contract-print-area, #contract-print-area * { visibility: visible; }
           #contract-print-area { position: absolute; top: 0; left: 0; width: 100%; background: white !important; }
           .no-print { display: none !important; }
-          @page { size: A4 portrait; margin: 20mm 22mm; }
+          .pasal-block, .sign-block, .kop-block { page-break-inside: avoid; break-inside: avoid; }
+          @page { size: A4 portrait; margin: 16mm 20mm; }
         }
       `}</style>
 
       <div className="bg-white rounded shadow-xl max-w-3xl w-full my-4">
         {/* Toolbar */}
-        <div className="no-print flex items-center justify-between p-3 border-b bg-slate-50 sticky top-0">
-          <h3 className="font-bold text-sm">Cetak Kontrak Kerja — {empName || "(tanpa nama)"}</h3>
+        <div className="no-print flex items-center justify-between p-3 border-b bg-slate-50 sticky top-0 z-10">
+          <h3 className="font-bold text-sm">Kontrak Kerja — {empName || "(tanpa nama)"}</h3>
           <div className="flex gap-2">
-            <button onClick={handlePrint} className="px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 flex items-center gap-1" data-testid="contract-print-btn">
-              <Printer size={13} /> Print / Save PDF
+            <button onClick={() => download("docx")} disabled={downloading} className="px-3 py-1.5 bg-blue-700 text-white text-xs rounded hover:bg-blue-800 disabled:opacity-50 flex items-center gap-1" data-testid="contract-download-docx">
+              <FileText size={13} /> {downloading === "docx" ? "Menyiapkan…" : "Word"}
+            </button>
+            <button onClick={() => download("pdf")} disabled={downloading} className="px-3 py-1.5 bg-rose-600 text-white text-xs rounded hover:bg-rose-700 disabled:opacity-50 flex items-center gap-1" data-testid="contract-download-pdf">
+              <FileDown size={13} /> {downloading === "pdf" ? "Menyiapkan…" : "PDF"}
+            </button>
+            <button onClick={handlePrint} className="px-3 py-1.5 bg-slate-700 text-white text-xs rounded hover:bg-slate-800 flex items-center gap-1" data-testid="contract-print-btn">
+              <Printer size={13} /> Print
             </button>
             <button onClick={onClose} className="p-1.5 hover:bg-slate-200 rounded" data-testid="contract-print-close"><X size={16} /></button>
           </div>
@@ -66,6 +110,21 @@ export default function ContractPrint({ contract, employee, onClose }) {
 
         {/* Print area */}
         <div id="contract-print-area" className="px-10 py-8 text-slate-900" style={{ fontFamily: "'Times New Roman', Georgia, serif", fontSize: "12pt", lineHeight: 1.5 }}>
+          {/* Kop surat */}
+          <div className="kop-block" style={{ display: "flex", alignItems: "center", gap: "18px", borderBottom: "3px double #1e3a8a", paddingBottom: "10px", marginBottom: "14px" }}>
+            <img src={`${process.env.PUBLIC_URL || ""}/ar-cargo-logo.png`} alt="AR CARGO" style={{ height: "64px" }} />
+            <div style={{ flex: 1, textAlign: "center" }}>
+              <div style={{ fontSize: "15pt", fontWeight: "bold", textTransform: "uppercase", letterSpacing: ".5px" }}>{c.company_name || "PT. Abirama Mitra Pratama"}</div>
+              {kop.kop_address && <div style={{ fontSize: "9pt", color: "#333" }}>{kop.kop_address}</div>}
+              {(kop.kop_phone || kop.kop_email || kop.kop_website) && (
+                <div style={{ fontSize: "9pt", color: "#333" }}>
+                  {[kop.kop_phone && `Telp: ${kop.kop_phone}`, kop.kop_email && `Email: ${kop.kop_email}`, kop.kop_website && `Website: ${kop.kop_website}`].filter(Boolean).join(" · ")}
+                </div>
+              )}
+              {kop.kop_tagline && <div style={{ fontSize: "8.5pt", fontStyle: "italic", color: "#555", marginTop: "2px" }}>{kop.kop_tagline}</div>}
+            </div>
+          </div>
+
           {/* Title */}
           <div className="text-center mb-1">
             <div className="font-bold uppercase" style={{ fontSize: "14pt" }}>PERJANJIAN KERJA WAKTU TERTENTU ({c.contract_type || "PKWT"})</div>
@@ -173,7 +232,7 @@ export default function ContractPrint({ contract, employee, onClose }) {
           </Article>
 
           {/* Signatures */}
-          <div style={{ display: "flex", justifyContent: "space-between", marginTop: "40px" }}>
+          <div className="sign-block" style={{ display: "flex", justifyContent: "space-between", marginTop: "40px" }}>
             <div style={{ textAlign: "center", width: "45%" }}>
               <div>PIHAK PERTAMA</div>
               <div>{c.company_name || "PT. Abirama Mitra Pratama"}</div>
@@ -196,7 +255,7 @@ export default function ContractPrint({ contract, employee, onClose }) {
 
 function Article({ title, subtitle, children }) {
   return (
-    <div style={{ marginTop: "16px" }}>
+    <div className="pasal-block" style={{ marginTop: "16px" }}>
       <div className="text-center" style={{ fontWeight: "bold" }}>{title}</div>
       <div className="text-center" style={{ fontWeight: "bold", marginBottom: "6px" }}>{subtitle}</div>
       {children}

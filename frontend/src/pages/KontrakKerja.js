@@ -3,7 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { FileSignature, Printer, Plus, Pencil, Trash2, X } from "lucide-react";
+import { FileSignature, Printer, Plus, Pencil, Trash2, X, ChevronDown, ChevronRight } from "lucide-react";
 import ContractPrint from "../components/ContractPrint";
 
 // Terbilang Rupiah (Indonesian number-to-words) — hasil bisa diedit user
@@ -71,6 +71,7 @@ export default function KontrakKerja() {
   const [form, setForm] = useState(blankForm());
   const [saving, setSaving] = useState(false);
   const [printData, setPrintData] = useState(null); // {contract, employee}
+  const [expandedId, setExpandedId] = useState(null); // employee id for riwayat
 
   const load = () => {
     setLoading(true);
@@ -170,39 +171,67 @@ export default function KontrakKerja() {
             {!loading && rows.length === 0 && (
               <tr><Td colSpan={6} className="text-center text-slate-500 py-10">Belum ada karyawan. Tambahkan karyawan di menu "Karyawan & Gaji" dulu.</Td></tr>
             )}
-            {!loading && rows.map(({ employee, latest }) => (
-              <tr key={employee.id} data-testid={`kontrak-row-${employee.id}`} className="hover:bg-slate-50">
-                <Td>
-                  <div className="font-semibold">{employee.full_name}</div>
-                  {employee.employee_no && <div className="text-[10px] font-mono text-slate-400">{employee.employee_no}</div>}
-                </Td>
-                <Td className="text-sm">{latest?.position || employee.position || <span className="text-slate-400">—</span>}</Td>
-                <Td className="text-sm font-mono">{latest?.contract_no || <span className="text-slate-400">—</span>}</Td>
-                <Td className="text-xs">
-                  {latest?.start_date || latest?.end_date
-                    ? `${latest?.start_date ? fmtDate(latest.start_date) : "…"} → ${latest?.end_date ? fmtDate(latest.end_date) : "…"}`
-                    : <span className="text-slate-400">—</span>}
-                </Td>
-                <Td>
-                  {latest
-                    ? <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_BADGE[latest.status] || STATUS_BADGE.draft}`}>{latest.status || "draft"}</span>
-                    : <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-400">Belum ada</span>}
-                </Td>
-                <Td className="text-right">
-                  <div className="inline-flex gap-1.5">
-                    {latest ? (
-                      <>
-                        <Button data-testid={`edit-contract-${employee.id}`} variant="secondary" onClick={() => openEdit(latest)}><Pencil size={13} /> Edit</Button>
-                        <Button data-testid={`print-contract-${employee.id}`} onClick={() => doPrint(latest, employee)}><Printer size={13} /> Print</Button>
-                        <Button data-testid={`delete-contract-${employee.id}`} variant="ghost" onClick={() => remove(latest)}><Trash2 size={13} /></Button>
-                      </>
-                    ) : (
-                      <Button data-testid={`create-contract-${employee.id}`} onClick={() => openCreate(employee)}><Plus size={13} /> Buat Kontrak</Button>
-                    )}
-                  </div>
-                </Td>
-              </tr>
-            ))}
+            {!loading && rows.map(({ employee, contracts, latest }) => {
+              const expanded = expandedId === employee.id;
+              return (
+                <React.Fragment key={employee.id}>
+                  <tr data-testid={`kontrak-row-${employee.id}`} className="hover:bg-slate-50">
+                    <Td>
+                      <div className="font-semibold">{employee.full_name}</div>
+                      {employee.employee_no && <div className="text-[10px] font-mono text-slate-400">{employee.employee_no}</div>}
+                    </Td>
+                    <Td className="text-sm">{latest?.position || employee.position || <span className="text-slate-400">—</span>}</Td>
+                    <Td className="text-sm font-mono">{latest?.contract_no || <span className="text-slate-400">—</span>}</Td>
+                    <Td className="text-xs">
+                      {latest?.start_date || latest?.end_date
+                        ? `${latest?.start_date ? fmtDate(latest.start_date) : "…"} → ${latest?.end_date ? fmtDate(latest.end_date) : "…"}`
+                        : <span className="text-slate-400">—</span>}
+                    </Td>
+                    <Td><StatusBadge status={latest?.status} hasContract={!!latest} /></Td>
+                    <Td className="text-right">
+                      <div className="inline-flex gap-1.5 items-center">
+                        {latest ? (
+                          <>
+                            {contracts.length > 0 && (
+                              <button
+                                onClick={() => setExpandedId(expanded ? null : employee.id)}
+                                data-testid={`riwayat-toggle-${employee.id}`}
+                                className="inline-flex items-center gap-0.5 text-xs text-slate-600 hover:text-slate-900 px-2 py-1 rounded hover:bg-slate-100"
+                                title="Lihat riwayat kontrak"
+                              >
+                                {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Riwayat ({contracts.length})
+                              </button>
+                            )}
+                            <Button data-testid={`edit-contract-${employee.id}`} variant="secondary" onClick={() => openEdit(latest)}><Pencil size={13} /> Edit</Button>
+                            <Button data-testid={`print-contract-${employee.id}`} onClick={() => doPrint(latest, employee)}><Printer size={13} /> Print</Button>
+                            <Button data-testid={`new-contract-${employee.id}`} variant="ghost" onClick={() => openCreate(employee)} title="Buat kontrak baru / perpanjangan"><Plus size={13} /> Baru</Button>
+                          </>
+                        ) : (
+                          <Button data-testid={`create-contract-${employee.id}`} onClick={() => openCreate(employee)}><Plus size={13} /> Buat Kontrak</Button>
+                        )}
+                      </div>
+                    </Td>
+                  </tr>
+
+                  {expanded && contracts.map((ct) => (
+                    <tr key={ct.id} data-testid={`riwayat-row-${ct.id}`} className="bg-slate-50">
+                      <Td className="pl-8 text-xs text-slate-500">↳ Kontrak</Td>
+                      <Td className="text-xs">{ct.position || <span className="text-slate-400">—</span>}</Td>
+                      <Td className="text-xs font-mono">{ct.contract_no || <span className="text-slate-400">—</span>}</Td>
+                      <Td className="text-xs">{ct.start_date ? fmtDate(ct.start_date) : "…"} → {ct.end_date ? fmtDate(ct.end_date) : "…"}</Td>
+                      <Td><StatusBadge status={ct.status} hasContract /></Td>
+                      <Td className="text-right">
+                        <div className="inline-flex gap-1.5">
+                          <Button data-testid={`edit-riwayat-${ct.id}`} variant="secondary" onClick={() => openEdit(ct)}><Pencil size={13} /></Button>
+                          <Button data-testid={`print-riwayat-${ct.id}`} onClick={() => doPrint(ct, employee)}><Printer size={13} /></Button>
+                          <Button data-testid={`delete-riwayat-${ct.id}`} variant="ghost" onClick={() => remove(ct)}><Trash2 size={13} /></Button>
+                        </div>
+                      </Td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </Table>
       </Card>
@@ -302,4 +331,8 @@ function Grid({ children }) {
 }
 function Field({ label, children, full }) {
   return <div className={full ? "md:col-span-2" : ""}><Label>{label}</Label>{children}</div>;
+}
+function StatusBadge({ status, hasContract }) {
+  if (!hasContract) return <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-400">Belum ada</span>;
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_BADGE[status] || STATUS_BADGE.draft}`}>{status || "draft"}</span>;
 }

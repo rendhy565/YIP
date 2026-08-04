@@ -292,3 +292,9 @@ See `/app/memory/test_credentials.md`
 - Backend: collection `employment_contracts` + CRUD `/api/hr/contracts` (GET list join karyawan, GET/{id}, POST, PUT, DELETE) — semua `require_feature("hr")`. Model `EmploymentContractIn` menyimpan semua variabel PKWT (No kontrak, para pihak, jabatan, jangka waktu, gaji pokok + uang makan + terbilang, dll).
 - Frontend: `pages/KontrakKerja.js` (list + form modal, prefill identitas dari master karyawan, auto-terbilang Rupiah editable) + `components/ContractPrint.js` (template PKWT A4 siap print sesuai lampiran "Draft PKWT Reeza Marwan", Pasal 1-7, field kosong tampil garis bawah).
 - CATATAN: **Feature flag `hr` di-set ON** agar menu tampil (sebelumnya OFF). Bisa ditoggle admin via feature flags bila perlu.
+
+## Update — 2026-06 · Kontrak Kerja: Export Word/PDF + Kop + Riwayat
+- **Export Word (.docx)** & **PDF**: endpoint `/api/hr/contracts/{id}/docx` (python-docx) & `/pdf` (weasyprint). Page-break rapi (tiap Pasal & blok TTD `page-break-inside: avoid`), layout estetik. Tombol "Word" & "PDF" di modal cetak (ContractPrint).
+- **Kop surat**: logo AR CARGO (dari lampiran "KOP SURAT (AR NEW LOGO)"), dioptimasi → `backend/assets/ar_cargo_logo.png` + `frontend/public/ar-cargo-logo.png`. Header pakai nama perusahaan + kop_address/website/tagline dari settings. TTD digital di-skip; disediakan space TTD basah.
+- **Riwayat Kontrak**: satu karyawan bisa punya banyak kontrak (perpanjangan). List menampilkan kontrak terbaru + toggle "Riwayat (N)" yang expand semua kontrak (Edit/Print/Hapus per kontrak). Tombol "Baru" untuk buat kontrak perpanjangan.
+- Deps baru: python-docx==1.2.0, weasyprint==69.0 (sudah di requirements.txt). Modul generator: `backend/contract_docs.py`.
