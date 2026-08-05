@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye, FileSpreadsheet, Wallet, FileText } from "lucide-react";
 import PayslipPrint from "../components/PayslipPrint";
 import { useAuth } from "../lib/auth";
+import { useNavigate } from "react-router-dom";
 
 const EMPTY_EMP = {
   employee_no: "",
@@ -53,6 +54,7 @@ const DEFAULT_VISIBLE_COLS = ["employee_no", "position", "base_salary", "gaji_lu
 
 export default function HrPayroll() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [tab, setTab] = useState("employees");
   const [emps, setEmps] = useState([]);
   const [payrolls, setPayrolls] = useState([]);
@@ -60,7 +62,6 @@ export default function HrPayroll() {
   const [editing, setEditing] = useState(null);           // null | "new" | employee id (untuk modal)
   const [form, setForm] = useState({ ...EMPTY_EMP });
   const [cashAcc, setCashAcc] = useState("1101");
-  const [kasbonSrcAcc, setKasbonSrcAcc] = useState("");   // Rekening asal kasbon (Petty Cash)
   const [cashAccounts, setCashAccounts] = useState([]);
   // Kolom visibility toggle (persisted in localStorage)
   const [visibleCols, setVisibleCols] = useState(() => {
@@ -111,7 +112,7 @@ export default function HrPayroll() {
   const delFamily = (i) => setForm({ ...form, family: form.family.filter((_, idx) => idx !== i) });
   const runPayroll = async () => {
     if (!window.confirm(`Jalankan payroll periode ${period}? Akan auto-posting jurnal beban gaji.`)) return;
-    try { await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc, kasbon_source_account_code: kasbonSrcAcc || null }); toast.success("Payroll dijalankan"); setSim(null); loadPayrolls(); }
+    try { await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc }); toast.success("Payroll dijalankan"); setSim(null); loadPayrolls(); }
     catch (e) { toast.error(errMsg(e)); }
   };
   // ---- SIMULATE payroll (read-only preview) ----
@@ -119,47 +120,6 @@ export default function HrPayroll() {
   const [simLoading, setSimLoading] = useState(false);
   // ---- Slip gaji preview ----
   const [slipPreview, setSlipPreview] = useState(null);   // slip object atau null
-  // ---- KASBON temporary deduction ----
-  const [showKasbon, setShowKasbon] = useState(false);
-  const [kasbonList, setKasbonList] = useState([]);
-  const [kasbonForm, setKasbonForm] = useState({ employee_id: "", amount: "", note: "" });
-  const [kasbonSaving, setKasbonSaving] = useState(false);
-  const loadKasbon = async () => {
-    try {
-      const r = await api.get("/hr/payroll/kasbon", { params: { period_month: period } });
-      setKasbonList(r.data || []);
-    } catch (e) { toast.error(errMsg(e)); }
-  };
-  const openKasbonModal = () => { setShowKasbon(true); loadKasbon(); };
-  const addKasbon = async () => {
-    if (!kasbonForm.employee_id) return toast.error("Pilih karyawan");
-    const amt = Number(kasbonForm.amount);
-    if (!amt || amt <= 0) return toast.error("Jumlah harus > 0");
-    setKasbonSaving(true);
-    try {
-      await api.post("/hr/payroll/kasbon", {
-        employee_id: kasbonForm.employee_id,
-        period_month: period,
-        amount: amt,
-        note: kasbonForm.note || null,
-      });
-      toast.success("Kasbon ditambahkan");
-      setKasbonForm({ employee_id: "", amount: "", note: "" });
-      loadKasbon();
-      // Auto refresh simulasi supaya angka net terupdate
-      if (sim) simulate();
-    } catch (e) { toast.error(errMsg(e)); }
-    finally { setKasbonSaving(false); }
-  };
-  const delKasbon = async (id) => {
-    if (!window.confirm("Hapus entry kasbon ini?")) return;
-    try {
-      await api.delete(`/hr/payroll/kasbon/${id}`);
-      toast.success("Terhapus");
-      loadKasbon();
-      if (sim) simulate();
-    } catch (e) { toast.error(errMsg(e)); }
-  };
   const simulate = async () => {
     setSimLoading(true);
     setSim(null);
@@ -174,7 +134,7 @@ export default function HrPayroll() {
     if (sim.already_executed) { toast.error(`Payroll periode ${period} sudah dijalankan sebelumnya`); return; }
     if (!window.confirm(`Konfirmasi jalankan payroll ${period}?\nTotal ${sim.slips.length} karyawan, gross ${sim.total_gross.toLocaleString("id-ID")}. Akan auto-posting jurnal beban gaji.`)) return;
     try {
-      await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc, kasbon_source_account_code: kasbonSrcAcc || null });
+      await api.post("/hr/payroll/run", { period_month: period, cash_account_code: cashAcc });
       toast.success("Payroll dijalankan & jurnal ter-post");
       setSim(null);
       loadPayrolls();
@@ -694,12 +654,6 @@ export default function HrPayroll() {
                   {cashAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}
                 </Select>
               </div>
-              <div><Label>Kasbon dari <span className="text-slate-400 font-normal text-[10px]">(Petty Cash)</span></Label>
-                <Select value={kasbonSrcAcc} onChange={(e) => setKasbonSrcAcc(e.target.value)} className="w-48" data-testid="kasbon-src-acc">
-                  <option value="">— sama dgn Bayar dari —</option>
-                  {cashAccounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}
-                </Select>
-              </div>
               <Button data-testid="hr-simulate-payroll" variant="secondary" onClick={simulate} disabled={simLoading}>
                 <Eye size={14}/> {simLoading ? "Menghitung..." : "Simulasi"}
               </Button>
@@ -729,19 +683,19 @@ export default function HrPayroll() {
                       <b>📝 Preview Jurnal saat Konfirmasi Jalankan:</b>
                       <div className="font-mono mt-1 space-y-0.5">
                         <div>Dr <b>6101 Beban Gaji</b> ................. {fmtIDR(sim.total_gross)}</div>
-                        <div>Cr <b>{cashAcc}</b> (Bayar dari) ........ {fmtIDR(sim.total_net)}</div>
-                        <div>Cr <b>{kasbonSrcAcc || cashAcc}</b> (Kasbon dari) ..... {fmtIDR(sim.total_kasbon)}</div>
+                        <div>Cr <b>{cashAcc}</b> (Transfer netto) ...... {fmtIDR(sim.total_net)}</div>
+                        <div>Cr <b>1109 Piutang Karyawan</b> (Kasbon) .. {fmtIDR(sim.total_kasbon)}</div>
                       </div>
                       <div className="mt-1 text-slate-600 italic">
-                        Jangan lupa post transfer <b>{cashAcc} → {kasbonSrcAcc || cashAcc}</b> sebesar {fmtIDR(sim.total_kasbon)} secara terpisah kalau Anda mau saldo petty cash balik ke posisi awal (replenishment).
+                        Potongan kasbon otomatis mengurangi piutang kasbon karyawan (1109). Cicilan dikelola di menu <b>Kasbon Karyawan</b>.
                       </div>
                     </div>
                   )}
                 </div>
                 <div className="flex gap-2 flex-wrap">
                   <Button variant="ghost" onClick={() => setSim(null)}><X size={13}/> Tutup Preview</Button>
-                  <Button variant="secondary" onClick={openKasbonModal} data-testid="sim-kasbon-btn">
-                    <Wallet size={14}/> Kasbon{sim.total_kasbon > 0 ? ` (${fmtIDR(sim.total_kasbon)})` : ""}
+                  <Button variant="secondary" onClick={() => navigate("/hr/kasbon")} data-testid="sim-kasbon-btn">
+                    <Wallet size={14}/> Kelola Kasbon{sim.total_kasbon > 0 ? ` (${fmtIDR(sim.total_kasbon)})` : ""}
                   </Button>
                   <Button variant="secondary" onClick={exportSimToExcel} data-testid="sim-export-excel">
                     <FileSpreadsheet size={14}/> Export Excel
@@ -881,88 +835,6 @@ export default function HrPayroll() {
         </Card>
       )}
 
-      {/* Kasbon Modal */}
-      {showKasbon && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="kasbon-modal">
-          <Card className="w-full max-w-2xl p-5 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-heading font-bold text-lg flex items-center gap-2">
-                <Wallet size={18}/> Kasbon Karyawan — Periode {period}
-              </h3>
-              <button onClick={() => setShowKasbon(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
-            </div>
-            <p className="text-xs text-slate-500 mb-3">
-              Kasbon tersimpan sebagai <b>potongan sementara</b>. Saat Konfirmasi Jalankan payroll, kasbon akan <b>otomatis menjadi pemotong gaji</b> dan hilang dari list ini.
-            </p>
-            {/* Form tambah kasbon */}
-            <div className="border border-slate-200 rounded p-3 bg-slate-50/50 mb-3">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
-                <div>
-                  <Label>Karyawan</Label>
-                  <Select value={kasbonForm.employee_id} onChange={(e) => setKasbonForm({ ...kasbonForm, employee_id: e.target.value })} data-testid="kasbon-emp">
-                    <option value="">— Pilih karyawan —</option>
-                    {emps.filter((e) => e.active !== false).map((e) => (
-                      <option key={e.id} value={e.id}>{e.full_name}{e.employee_no ? ` (${e.employee_no})` : ""}</option>
-                    ))}
-                  </Select>
-                </div>
-                <div>
-                  <Label>Jumlah (Rp)</Label>
-                  <Input type="number" min="0" value={kasbonForm.amount} onChange={(e) => setKasbonForm({ ...kasbonForm, amount: e.target.value })} placeholder="500000" data-testid="kasbon-amount"/>
-                </div>
-                <div>
-                  <Label>Catatan (opsional)</Label>
-                  <Input value={kasbonForm.note} onChange={(e) => setKasbonForm({ ...kasbonForm, note: e.target.value })} placeholder="Mis. Kasbon minggu ke-2"/>
-                </div>
-              </div>
-              <div className="flex justify-end mt-2">
-                <Button onClick={addKasbon} disabled={kasbonSaving} data-testid="kasbon-add"><Plus size={13}/> {kasbonSaving ? "Menyimpan..." : "Tambah Kasbon"}</Button>
-              </div>
-            </div>
-            {/* List existing kasbon */}
-            <div className="border border-slate-200 rounded overflow-hidden">
-              <Table>
-                <thead><tr>
-                  <Th>Karyawan</Th>
-                  <Th>Catatan</Th>
-                  <Th className="text-right">Jumlah</Th>
-                  <Th className="text-right w-16">Aksi</Th>
-                </tr></thead>
-                <tbody>
-                  {kasbonList.length === 0 && (
-                    <tr><Td colSpan={4} className="text-center text-slate-400 italic py-4">Belum ada kasbon untuk periode ini</Td></tr>
-                  )}
-                  {kasbonList.map((k) => (
-                    <tr key={k.id} data-testid={`kasbon-row-${k.id}`}>
-                      <Td className="font-semibold">
-                        {k.employee_name}
-                        {k.employee_no && <div className="text-[10px] text-slate-500 font-mono">{k.employee_no}</div>}
-                      </Td>
-                      <Td className="text-xs text-slate-600">{k.note || "-"}</Td>
-                      <Td className="text-right font-mono text-rose-700">−{fmtIDR(k.amount)}</Td>
-                      <Td className="text-right">
-                        <Button variant="danger" onClick={() => delKasbon(k.id)} data-testid={`kasbon-del-${k.id}`}>
-                          <Trash2 size={12}/>
-                        </Button>
-                      </Td>
-                    </tr>
-                  ))}
-                  {kasbonList.length > 0 && (
-                    <tr className="bg-slate-100 font-bold">
-                      <Td colSpan={2} className="text-right">TOTAL</Td>
-                      <Td className="text-right font-mono text-rose-700">−{fmtIDR(kasbonList.reduce((a, k) => a + Number(k.amount || 0), 0))}</Td>
-                      <Td></Td>
-                    </tr>
-                  )}
-                </tbody>
-              </Table>
-            </div>
-            <div className="mt-4 flex justify-end">
-              <Button variant="secondary" onClick={() => setShowKasbon(false)}>Selesai</Button>
-            </div>
-          </Card>
-        </div>
-      )}
       {/* Slip Gaji Preview Modal */}
       {slipPreview && (
         <PayslipPrint

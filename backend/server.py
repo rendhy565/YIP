@@ -537,6 +537,7 @@ DEFAULT_COA = [
     {"code": "5104", "name": "Beban Marketing (COGS)", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
     {"code": "5105", "name": "Beban Panjar Kerja", "type": "cogs", "subtype": "cogs", "normal": "debit", "is_system": True},
     {"code": "1108", "name": "Panjar Kerja", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
+    {"code": "1109", "name": "Piutang Karyawan (Kasbon)", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     # 6xxx - BEBAN OPERASIONAL / FIXED COST
     {"code": "6101", "name": "Beban Gaji", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
     {"code": "6102", "name": "Beban Sewa", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
@@ -4835,10 +4836,6 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     period_end = calc["period_end"]
 
     cash_acc = data.cash_account_code or "1101"
-    kasbon_src_acc = data.kasbon_source_account_code or cash_acc  # fallback ke bank utama
-    # Snapshot kasbon docs untuk periode ini (untuk audit trail di payroll doc)
-    kasbon_snapshot = await db.payroll_kasbon.find({"period_month": data.period_month}).to_list(2000)
-    kasbon_snapshot = [serialize(k) for k in kasbon_snapshot]
 
     payroll_doc = {
         "period_month": data.period_month,
@@ -4849,44 +4846,49 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         "total_gross": round(total_gross, 2),
         "total_kasbon": round(total_kasbon, 2),
         "total_net": round(total_net, 2),
-        "kasbon_snapshot": kasbon_snapshot,
         "cash_account_code": cash_acc,
-        "kasbon_source_account_code": kasbon_src_acc if total_kasbon > 0 else None,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc),
     }
     r = await db.payroll.insert_one(payroll_doc)
-    # Jurnal Payroll (Option C — kasbon dari petty cash tanpa jurnal awal):
-    #   Dr 6101 Beban Gaji  = gross (total hak karyawan)
-    #   Cr {cash_acc}       = net (transfer ke rekening payroll)
-    #   Cr {kasbon_src_acc} = kasbon (koreksi petty cash yang sudah keluar duluan)
-    # Note: user harus posting transfer replenishment {cash_acc}→{kasbon_src_acc} secara terpisah
-    # kalau ingin saldo petty cash kembali ke awal.
-    if total_kasbon > 0 and kasbon_src_acc != cash_acc:
-        lines = [
-            {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Beban Gaji {data.period_month}"},
-            {"account_code": cash_acc, "debit": 0, "credit": total_net, "memo": f"Transfer gaji netto {data.period_month}"},
-            {"account_code": kasbon_src_acc, "debit": 0, "credit": total_kasbon, "memo": "Koreksi Petty Cash — kasbon yang sudah keluar sebelumnya"},
-        ]
+    pid = str(r.inserted_id)
+    # Jurnal Payroll:
+    #   Dr 6101 Beban Gaji      = gross (hak penuh karyawan → beban tetap full)
+    #   Cr {cash_acc}           = net (yang benar-benar ditransfer)
+    #   Cr 1109 Piutang Kasbon  = total cicilan (mengurangi piutang kasbon karyawan)
+    lines = [{"account_code": "6101", "debit": round(total_gross, 2), "credit": 0, "memo": f"Beban Gaji {data.period_month}"}]
+    if total_kasbon > 0:
+        lines.append({"account_code": cash_acc, "debit": 0, "credit": round(total_net, 2), "memo": f"Transfer gaji netto {data.period_month}"})
+        lines.append({"account_code": "1109", "debit": 0, "credit": round(total_kasbon, 2), "memo": f"Potong cicilan kasbon {data.period_month}"})
     else:
-        # Kalau kasbon 0 atau kasbon dari akun yang sama dengan bank payroll, konsolidasi jadi 2 baris
-        lines = [
-            {"account_code": "6101", "debit": total_gross, "credit": 0, "memo": f"Beban Gaji {data.period_month}"},
-            {"account_code": cash_acc, "debit": 0, "credit": total_gross, "memo": f"Bayar Gaji {data.period_month} (netto+kasbon)"},
-        ]
+        lines.append({"account_code": cash_acc, "debit": 0, "credit": round(total_gross, 2), "memo": f"Bayar Gaji {data.period_month}"})
     try:
         await post_journal(
             date=datetime.now(timezone.utc),
             description=f"Payroll {data.period_month}",
             lines=lines,
-            reference_type="payroll", reference_id=str(r.inserted_id),
+            reference_type="payroll", reference_id=pid,
             posted_by=user["id"], auto=True,
         )
     except HTTPException:
         pass
-    # Konsumsi kasbon: hapus dari koleksi temporary
-    if kasbon_snapshot:
-        await db.payroll_kasbon.delete_many({"period_month": data.period_month})
+    # Update pinjaman kasbon: kurangi outstanding & catat cicilan yang dipotong per slip
+    for s in slips:
+        for it in s.get("kasbon_items", []):
+            amt = round(float(it.get("amount", 0)), 2)
+            if amt <= 0:
+                continue
+            loan = await db.employee_kasbon.find_one({"_id": _oid(it["id"])})
+            if not loan:
+                continue
+            new_out = round(float(loan.get("outstanding", 0)) - amt, 2)
+            payment = {"period_month": data.period_month, "amount": amt, "payroll_id": pid,
+                       "date": datetime.now(timezone.utc).isoformat()}
+            upd = {"$push": {"payments": payment}, "$set": {"outstanding": max(0.0, new_out)}}
+            if new_out <= 0.01:
+                upd["$set"]["status"] = "settled"
+                upd["$set"]["settled_at"] = datetime.now(timezone.utc)
+            await db.employee_kasbon.update_one({"_id": loan["_id"]}, upd)
     return serialize(await db.payroll.find_one({"_id": r.inserted_id}))
 
 
@@ -4940,14 +4942,20 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         eid = str(a.get("employee_id"))
         att_by_emp.setdefault(eid, []).append(a)
 
-    # Load kasbon pending untuk periode ini (index by employee_id)
-    kasbon_docs = await db.payroll_kasbon.find({"period_month": period_month}).to_list(2000)
+    # Load kasbon (pinjaman karyawan) yang punya cicilan jatuh tempo s/d periode ini.
+    # Cicilan dipotong tiap gajian mulai start_period sampai outstanding habis.
+    kasbon_loans = await db.employee_kasbon.find({
+        "status": "active",
+        "outstanding": {"$gt": 0},
+        "start_period": {"$lte": period_month},
+    }).to_list(2000)
     kasbon_by_emp = {}
-    for k in kasbon_docs:
+    for k in kasbon_loans:
         eid = str(k.get("employee_id"))
         kasbon_by_emp.setdefault(eid, []).append({
             "id": str(k.get("_id")),
-            "amount": float(k.get("amount", 0)),
+            "installment": round(float(k.get("installment_amount", 0)), 2),
+            "outstanding": round(float(k.get("outstanding", 0)), 2),
             "note": k.get("note"),
         })
 
@@ -5000,10 +5008,21 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
                     lembur_jam += oh
             lembur_total = round(lembur_total, 2)
         gross = gaji_pokok_net + uang_makan + lembur_total
-        # Kasbon deduction dari database temporary
-        kasbon_items = kasbon_by_emp.get(emp_id, [])
+        # Potong cicilan kasbon (cap: tidak melebihi gross gaji bulan ini).
+        # Sisa cicilan yang tak tertutup otomatis tergeser ke bulan berikutnya
+        # (outstanding hanya berkurang sebesar yang benar-benar dipotong).
+        kasbon_loans_emp = kasbon_by_emp.get(emp_id, [])
+        remaining_cap = gross
+        kasbon_items = []
+        for k in kasbon_loans_emp:
+            due = min(k["installment"], k["outstanding"])
+            ded = round(min(due, remaining_cap), 2)
+            if ded <= 0:
+                continue
+            remaining_cap = round(remaining_cap - ded, 2)
+            kasbon_items.append({"id": k["id"], "amount": ded, "note": k.get("note")})
         potongan_kasbon = round(sum(k["amount"] for k in kasbon_items), 2)
-        net = gross - potongan_kasbon
+        net = round(gross - potongan_kasbon, 2)
 
         slips.append({
             "employee_id": emp_id,
@@ -5075,54 +5094,181 @@ async def delete_payroll(pid: str, user: dict = Depends(require_feature("hr"))):
     pdoc = await db.payroll.find_one({"_id": _oid(pid)})
     if not pdoc:
         raise HTTPException(404, "Payroll tidak ditemukan")
+    # Restore cicilan kasbon yang dipotong oleh payroll ini (kembalikan outstanding)
+    async for loan in db.employee_kasbon.find({"payments.payroll_id": pid}):
+        restored = round(sum(float(p.get("amount", 0)) for p in loan.get("payments", []) if p.get("payroll_id") == pid), 2)
+        remaining = [p for p in loan.get("payments", []) if p.get("payroll_id") != pid]
+        new_out = round(float(loan.get("outstanding", 0)) + restored, 2)
+        await db.employee_kasbon.update_one(
+            {"_id": loan["_id"]},
+            {"$set": {"payments": remaining, "outstanding": new_out, "status": "active"}, "$unset": {"settled_at": ""}},
+        )
     await db.journal_entries.delete_many({"reference_type": "payroll", "reference_id": pid})
     await db.payroll.delete_one({"_id": _oid(pid)})
     return {"ok": True}
 
 
 # ===========================================================================
-# PAYROLL KASBON (temporary deduction, di-consume saat run_payroll)
+# KASBON KARYAWAN — pinjaman karyawan (Piutang 1109) + cicilan potong gaji
 # ===========================================================================
 class KasbonIn(BaseModel):
     employee_id: str
-    period_month: str    # YYYY-MM
-    amount: float
+    principal: float                 # total pinjaman
+    installments: int                # jumlah cicilan (N)
+    start_period: str                # YYYY-MM (periode gajian mulai potong)
+    source_account_code: str = "1101"  # Kas (sumber pencairan)
     note: Optional[str] = None
 
 
-@app.get("/api/hr/payroll/kasbon")
-async def list_kasbon(period_month: Optional[str] = None, user: dict = Depends(require_feature("hr"))):
+def _kasbon_public(loan) -> dict:
+    d = serialize(loan)
+    return d
+
+
+@app.get("/api/hr/kasbon")
+async def list_kasbon(employee_id: Optional[str] = None, status: Optional[str] = None,
+                      user: dict = Depends(require_feature("hr"))):
     q = {}
-    if period_month:
-        q["period_month"] = period_month
-    docs = await db.payroll_kasbon.find(q).sort("created_at", -1).to_list(2000)
-    return [serialize(d) for d in docs]
+    if employee_id:
+        q["employee_id"] = employee_id
+    if status:
+        q["status"] = status
+    docs = await db.employee_kasbon.find(q).sort("created_at", -1).to_list(2000)
+    return [_kasbon_public(d) for d in docs]
 
 
-@app.post("/api/hr/payroll/kasbon")
+@app.get("/api/hr/kasbon/{kid}")
+async def get_kasbon(kid: str, user: dict = Depends(require_feature("hr"))):
+    loan = await db.employee_kasbon.find_one({"_id": _oid(kid)})
+    if not loan:
+        raise HTTPException(404, "Kasbon tidak ditemukan")
+    return _kasbon_public(loan)
+
+
+@app.post("/api/hr/kasbon")
 async def create_kasbon(data: KasbonIn, user: dict = Depends(require_feature("hr"))):
+    if user.get("role") not in ("administrator", "finance"):
+        raise HTTPException(403, "Hanya finance/admin yang dapat membuat kasbon")
     emp = await db.employees.find_one({"_id": _oid(data.employee_id)})
     if not emp:
         raise HTTPException(404, "Karyawan tidak ditemukan")
-    if not data.amount or data.amount <= 0:
-        raise HTTPException(400, "Jumlah kasbon harus > 0")
+    principal = round(float(data.principal or 0), 2)
+    if principal <= 0:
+        raise HTTPException(400, "Jumlah pinjaman harus > 0")
+    n = int(data.installments or 0)
+    if n < 1:
+        raise HTTPException(400, "Jumlah cicilan minimal 1")
+    if not re.match(r"^\d{4}-\d{2}$", data.start_period or ""):
+        raise HTTPException(400, "Periode mulai harus format YYYY-MM")
+    src = data.source_account_code or "1101"
+    src_acc = await db.chart_of_accounts.find_one({"code": src})
+    if not src_acc:
+        raise HTTPException(400, f"Akun sumber {src} tidak ditemukan")
+    # Cicilan rata otomatis (bulan terakhir menyerap pembulatan)
+    per = round(principal / n, 2)
+    schedule = []
+    y, m = map(int, data.start_period.split("-"))
+    acc = 0.0
+    for i in range(n):
+        amt = per if i < n - 1 else round(principal - per * (n - 1), 2)
+        acc += amt
+        schedule.append({"period_month": f"{y:04d}-{m:02d}", "amount": amt})
+        m += 1
+        if m > 12:
+            m = 1; y += 1
+    now = datetime.now(timezone.utc)
     doc = {
         "employee_id": data.employee_id,
         "employee_name": emp.get("full_name"),
         "employee_no": emp.get("employee_no"),
-        "period_month": data.period_month,
-        "amount": float(data.amount),
+        "principal": principal,
+        "installments": n,
+        "installment_amount": per,
+        "start_period": data.start_period,
+        "source_account_code": src,
+        "schedule": schedule,
+        "payments": [],
+        "outstanding": principal,
+        "status": "active",
         "note": (data.note or "").strip() or None,
         "created_by": user["id"],
-        "created_at": datetime.now(timezone.utc),
+        "created_at": now,
     }
-    r = await db.payroll_kasbon.insert_one(doc)
-    return serialize(await db.payroll_kasbon.find_one({"_id": r.inserted_id}))
+    r = await db.employee_kasbon.insert_one(doc)
+    kid = str(r.inserted_id)
+    # Jurnal pencairan: Dr 1109 Piutang Karyawan / Cr {source} Kas
+    try:
+        await post_journal(
+            date=now,
+            description=f"Pencairan Kasbon {emp.get('full_name')}",
+            lines=[
+                {"account_code": "1109", "debit": principal, "credit": 0, "memo": f"Kasbon {emp.get('full_name')}"},
+                {"account_code": src, "debit": 0, "credit": principal, "memo": f"Pencairan kasbon {emp.get('full_name')}"},
+            ],
+            reference_type="employee_kasbon", reference_id=kid,
+            posted_by=user["id"], auto=True,
+        )
+    except HTTPException:
+        pass
+    return _kasbon_public(await db.employee_kasbon.find_one({"_id": r.inserted_id}))
 
 
-@app.delete("/api/hr/payroll/kasbon/{kid}")
+class KasbonSettleIn(BaseModel):
+    account_code: str = "1101"   # Kas penerima pelunasan
+
+
+@app.post("/api/hr/kasbon/{kid}/settle")
+async def settle_kasbon(kid: str, data: KasbonSettleIn, user: dict = Depends(require_feature("hr"))):
+    """Pelunasan dipercepat: bayar sisa outstanding sekaligus (di luar payroll)."""
+    if user.get("role") not in ("administrator", "finance"):
+        raise HTTPException(403, "Hanya finance/admin yang dapat melunasi kasbon")
+    loan = await db.employee_kasbon.find_one({"_id": _oid(kid)})
+    if not loan:
+        raise HTTPException(404, "Kasbon tidak ditemukan")
+    if loan.get("status") != "active":
+        raise HTTPException(400, "Kasbon sudah tidak aktif")
+    outstanding = round(float(loan.get("outstanding", 0)), 2)
+    if outstanding <= 0:
+        raise HTTPException(400, "Tidak ada sisa untuk dilunasi")
+    acc = data.account_code or "1101"
+    now = datetime.now(timezone.utc)
+    # Jurnal pelunasan: Dr {kas} / Cr 1109 Piutang
+    try:
+        await post_journal(
+            date=now,
+            description=f"Pelunasan Kasbon {loan.get('employee_name')}",
+            lines=[
+                {"account_code": acc, "debit": outstanding, "credit": 0, "memo": f"Pelunasan kasbon {loan.get('employee_name')}"},
+                {"account_code": "1109", "debit": 0, "credit": outstanding, "memo": f"Pelunasan kasbon {loan.get('employee_name')}"},
+            ],
+            reference_type="employee_kasbon_settle", reference_id=kid,
+            posted_by=user["id"], auto=True,
+        )
+    except HTTPException:
+        pass
+    await db.employee_kasbon.update_one(
+        {"_id": loan["_id"]},
+        {"$push": {"payments": {"period_month": None, "amount": outstanding, "type": "early_settlement",
+                                "account_code": acc, "date": now.isoformat()}},
+         "$set": {"outstanding": 0.0, "status": "settled", "settled_at": now}},
+    )
+    return _kasbon_public(await db.employee_kasbon.find_one({"_id": loan["_id"]}))
+
+
+@app.delete("/api/hr/kasbon/{kid}")
 async def delete_kasbon(kid: str, user: dict = Depends(require_feature("hr"))):
-    await db.payroll_kasbon.delete_one({"_id": _oid(kid)})
+    """Batalkan kasbon: hanya boleh jika belum ada cicilan terbayar. Reverse jurnal pencairan."""
+    if user.get("role") not in ("administrator", "finance"):
+        raise HTTPException(403, "Hanya finance/admin yang dapat membatalkan kasbon")
+    loan = await db.employee_kasbon.find_one({"_id": _oid(kid)})
+    if not loan:
+        raise HTTPException(404, "Kasbon tidak ditemukan")
+    paid = round(float(loan.get("principal", 0)) - float(loan.get("outstanding", 0)), 2)
+    if paid > 0.01:
+        raise HTTPException(400, "Sudah ada cicilan terbayar — gunakan Pelunasan untuk menutup sisa, bukan batalkan.")
+    # Hapus jurnal pencairan (reverse)
+    await db.journal_entries.delete_many({"reference_type": "employee_kasbon", "reference_id": kid})
+    await db.employee_kasbon.delete_one({"_id": loan["_id"]})
     return {"ok": True}
 
 # ---------------------------------------------------------------------------

@@ -56,6 +56,7 @@ const NAV = [
   { to: "/hr", label: "Karyawan & Gaji", icon: UserCog, perm: "hr", feature: "hr" },
   { to: "/hr/attendance", label: "Absensi", icon: ClipboardCheck, perm: "hr", feature: "hr" },
   { to: "/hr/contracts", label: "Kontrak Kerja", icon: FileSignature, perm: "hr", feature: "hr" },
+  { to: "/hr/kasbon", label: "Kasbon Karyawan", icon: Wallet, perm: "hr", feature: "hr" },
 
   { type: "section", label: "Perpajakan", feature: "tax" },
   { to: "/tax", label: "PPN & PPh", icon: Percent, perm: "tax", feature: "tax" },
