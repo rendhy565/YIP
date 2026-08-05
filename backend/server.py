@@ -3,6 +3,7 @@ load_dotenv()
 
 import os
 import re
+import json
 import jwt
 import bcrypt
 from datetime import datetime, timezone, timedelta
@@ -1126,61 +1127,259 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Activity Log middleware — auto-log all successful mutating requests
-@app.middleware("http")
-async def activity_log_middleware(request, call_next):
-    response = await call_next(request)
+# ---------------------------------------------------------------------------
+# Activity Log — friendly labels & human-readable enrichment
+# ---------------------------------------------------------------------------
+ACTIVITY_MODULE_LABELS = {
+    "orders": "Order", "invoices": "Invoice", "costs": "Plotting Biaya",
+    "cost-groups": "Grup Biaya", "fixed-costs": "Expense", "expense": "Expense (Import BKK)",
+    "recurring-expenses": "Expense Rutin", "purchase-orders": "Purchase Order",
+    "vendors": "Vendor", "customers": "Customer", "payments": "Pembayaran",
+    "payment-receipts": "Kwitansi Pembayaran", "payment-senders": "Pengirim Pembayaran",
+    "payment-recipients": "Penerima Pembayaran", "cash-advances": "Panjar Kerja",
+    "petty-cash": "Kas Kecil", "assets": "Aset", "amortizations": "Amortisasi Beban",
+    "bank-recon": "Rekonsiliasi Bank", "journal": "Jurnal Manual", "accounts": "Akun (COA)",
+    "tax": "Pajak", "hr": "HR & Payroll", "contracts": "Kontrak Kerja", "users": "User",
+    "expense-categories": "Kategori Expense", "approvals": "Approval",
+    "approval-configs": "Konfigurasi Approval", "period-closing": "Tutup Periode",
+    "opening-balance": "Saldo Awal", "settings": "Pengaturan", "feature-flags": "Feature Flag",
+    "analytics": "Analytics", "admin": "Admin", "import": "Import Data", "exports": "Export Data",
+    "sender-suggestions": "Saran Pengirim",
+}
+ACTIVITY_SUBACTION_LABELS = {
+    "extended": "Ubah Info Tambahan", "status": "Ubah Status", "mark-paid": "Tandai Lunas",
+    "payments": "Tambah Pembayaran", "receive": "Terima Barang", "receive-pod": "Terima POD",
+    "revert-to-open": "Kembalikan ke Open", "bulk-revert-to-open": "Bulk Kembalikan ke Open",
+    "tracking": "Update Tracking", "reconcile": "Rekonsiliasi", "settle": "Settle",
+    "reclass-to-accrue": "Reklas ke Accrue", "cancel": "Batalkan", "mark-printed": "Tandai Dicetak",
+    "po-number": "Ubah No. PO", "stop": "Hentikan", "match": "Cocokkan", "unmatch": "Batal Cocok",
+    "depreciate": "Susutkan Aset", "password": "Ubah Password", "copy": "Salin", "run": "Jalankan",
+    "run-due": "Jalankan Jatuh Tempo", "execute-once": "Eksekusi Sekali", "simulate": "Simulasi",
+    "approve": "Setujui", "reject": "Tolak", "bulk-mark-paid": "Bulk Tandai Lunas",
+    "kasbon": "Kasbon", "auto-fill-alfa": "Auto-isi Alfa", "bulk-delete": "Hapus Massal",
+    "preset": "Preset", "refresh": "Refresh", "import-numbers": "Import Nomor",
+    "import-po-numbers": "Import No. PO", "export-fpk": "Export FPK", "import-bkk": "Import BKK",
+    "invoice-logo": "Ubah Logo Invoice", "depreciate ": "Susutkan",
+}
+ACTIVITY_SENSITIVE = ("password", "token", "secret", "otp", "pin")
+
+def _is_oid_str(s):
+    return isinstance(s, str) and len(s) == 24 and all(c in "0123456789abcdef" for c in s.lower())
+
+def _activity_fmt_val(v):
+    if isinstance(v, (dict, list)):
+        try:
+            s = json.dumps(v, ensure_ascii=False, default=str)
+        except Exception:
+            s = str(v)
+    else:
+        s = str(v)
+    return (s[:80] + "…") if len(s) > 80 else s
+
+def _activity_changes_from_body(body):
+    """Return (changes_str, details_dict) from a request JSON body."""
+    if not isinstance(body, dict):
+        return "", {}
+    details, parts = {}, []
+    for k, v in body.items():
+        if any(sk in k.lower() for sk in ACTIVITY_SENSITIVE):
+            details[k] = "***"; parts.append(f"{k}=***"); continue
+        if isinstance(v, str) and len(v) > 500:
+            details[k] = f"<{len(v)} karakter>"; parts.append(f"{k}=<data besar>"); continue
+        details[k] = v if not isinstance(v, (dict, list)) else _activity_fmt_val(v)
+        parts.append(f"{k}={_activity_fmt_val(v)}")
+    return ", ".join(parts[:12]), details
+
+async def _activity_entity_label(module, oid, parts, body):
+    """Human-readable identity of the affected record (No AWB, No Invoice, dll)."""
     try:
-        method = request.method
-        if method in ("POST", "PUT", "PATCH", "DELETE") and 200 <= response.status_code < 300:
-            path = request.url.path
-            # Skip noisy/internal endpoints
-            skip_prefixes = ("/api/auth/", "/api/notifications/", "/api/activity-logs")
-            if not any(path.startswith(p) for p in skip_prefixes):
-                # Extract user from auth header
-                auth = request.headers.get("authorization", "")
-                user_info = {"id": None, "username": "anonymous", "role": ""}
-                if auth.startswith("Bearer "):
-                    try:
-                        from jose import jwt as _jwt
-                        payload = _jwt.decode(auth[7:], JWT_SECRET, algorithms=[JWT_ALG])
-                        uid = payload.get("sub")
-                        if uid:
-                            u = await db.users.find_one({"_id": _oid(uid)})
-                            if u:
-                                user_info = {"id": str(u["_id"]), "username": u.get("username"), "role": u.get("role")}
-                    except Exception:
-                        pass
-                # Derive target_type from path segments (after /api/)
-                parts = [p for p in path.split("/") if p and p != "api"]
-                target_type = parts[0] if parts else "unknown"
-                # Derive target_id when present (e.g. /api/orders/<id>/... → id)
-                target_id = None
-                if len(parts) >= 2 and len(parts[1]) == 24:
-                    target_id = parts[1]
-                action_map = {"POST": "create", "PUT": "update", "PATCH": "update", "DELETE": "delete"}
-                action = action_map.get(method, method.lower())
-                # Refine for known sub-paths
-                if "import" in path:
-                    action = "import"
-                elif "export" in path:
-                    action = "export"
-                await db.activity_logs.insert_one({
-                    "user_id": user_info["id"],
-                    "user_name": user_info["username"],
-                    "user_role": user_info["role"],
-                    "action": action,
-                    "target_type": target_type,
-                    "target_id": target_id,
-                    "summary": f"{method} {path}",
-                    "method": method,
-                    "path": path,
-                    "status_code": response.status_code,
-                    "timestamp": datetime.now(timezone.utc),
-                })
+        if module == "orders":
+            if oid:
+                o = await db.awb_orders.find_one({"_id": _oid(oid)}, {"awb_number": 1})
+                if o:
+                    return f"AWB {o.get('awb_number')}"
+            if isinstance(body, dict) and body.get("awb_number"):
+                return f"AWB {body['awb_number']}"
+        elif module == "invoices" and oid:
+            i = await db.invoices.find_one({"_id": _oid(oid)}, {"invoice_number": 1})
+            if i:
+                return f"Invoice {i.get('invoice_number')}"
+        elif module == "costs" and oid:
+            c = await db.awb_costs.find_one({"_id": _oid(oid)}, {"awb_id": 1, "vendor_name": 1, "cost_category": 1})
+            if c:
+                awbn = None
+                if c.get("awb_id"):
+                    o = await db.awb_orders.find_one({"_id": c["awb_id"]}, {"awb_number": 1})
+                    awbn = o.get("awb_number") if o else None
+                lbl = c.get("vendor_name") or c.get("cost_category") or "Biaya"
+                return f"{lbl}" + (f" — AWB {awbn}" if awbn else "")
+        elif module == "fixed-costs" and oid:
+            f = await db.fixed_costs.find_one({"_id": _oid(oid)}, {"category": 1, "description": 1, "amount": 1})
+            if f:
+                return f"{f.get('category')} — {f.get('description') or ''} (Rp {int(f.get('amount') or 0):,})".replace(",", ".")
+        elif module == "purchase-orders" and oid:
+            p = await db.purchase_orders.find_one({"_id": _oid(oid)}, {"number": 1})
+            if p:
+                return f"PO {p.get('number')}"
+        elif module == "vendors" and oid:
+            v = await db.vendors.find_one({"_id": _oid(oid)}, {"name": 1})
+            if v:
+                return v.get("name")
+        elif module == "customers" and oid:
+            c = await db.customers.find_one({"_id": _oid(oid)}, {"name": 1})
+            if c:
+                return c.get("name")
+        elif module == "amortizations" and oid:
+            a = await db.amortizations.find_one({"_id": _oid(oid)}, {"name": 1})
+            if a:
+                return a.get("name")
+        elif module == "assets" and oid:
+            a = await db.assets.find_one({"_id": _oid(oid)}, {"name": 1})
+            if a:
+                return a.get("name")
+        elif module == "cash-advances" and oid:
+            c = await db.cash_advances.find_one({"_id": _oid(oid)}, {"number": 1, "employee_name": 1})
+            if c:
+                return f"Panjar {c.get('number') or c.get('employee_name') or ''}".strip()
+        elif module == "petty-cash" and oid:
+            p = await db.petty_cash.find_one({"_id": _oid(oid)}, {"number": 1})
+            if p:
+                return p.get("number")
+        elif module == "users" and oid:
+            u = await db.users.find_one({"_id": _oid(oid)}, {"username": 1})
+            if u:
+                return u.get("username")
+        elif module == "hr":
+            sub = parts[1] if len(parts) > 1 else ""
+            if sub == "employees" and oid:
+                e = await db.employees.find_one({"_id": _oid(oid)}, {"name": 1})
+                if e:
+                    return e.get("name")
+            if isinstance(body, dict) and body.get("name"):
+                return body["name"]
+        elif module in ("accounts", "settings", "period-closing", "feature-flags", "approval-configs"):
+            # id-nya bukan ObjectId; ambil dari path param terakhir
+            tail = parts[-1] if parts else None
+            if tail and not _is_oid_str(tail):
+                return tail
+        # Fallback: nama dari body kalau ada
+        if isinstance(body, dict):
+            for key in ("name", "number", "invoice_number", "awb_number", "description", "title"):
+                if body.get(key):
+                    return str(body[key])
     except Exception:
         pass
-    return response
+    return None
+
+# Activity Log — pure ASGI middleware (tees request body safely, no re-injection issues)
+async def _write_activity_log(scope, body_bytes, status_code, pre_entity_label=None):
+    method = scope.get("method", "")
+    if method not in ("POST", "PUT", "PATCH", "DELETE") or not (200 <= status_code < 300):
+        return
+    path = scope.get("path", "")
+    skip_prefixes = ("/api/auth/", "/api/notifications/", "/api/activity-logs")
+    if any(path.startswith(p) for p in skip_prefixes):
+        return
+    headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+    user_info = {"id": None, "username": "anonymous", "role": ""}
+    auth = headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        try:
+            from jose import jwt as _jwt
+            payload = _jwt.decode(auth[7:], JWT_SECRET, algorithms=[JWT_ALG])
+            uid = payload.get("sub")
+            if uid:
+                u = await db.users.find_one({"_id": _oid(uid)})
+                if u:
+                    user_info = {"id": str(u["_id"]), "username": u.get("username"), "role": u.get("role")}
+        except Exception:
+            pass
+    parts = [p for p in path.split("/") if p and p != "api"]
+    target_type = parts[0] if parts else "unknown"
+    oid = next((p for p in parts[1:] if _is_oid_str(p)), None)
+    action_map = {"POST": "create", "PUT": "update", "PATCH": "update", "DELETE": "delete"}
+    action = action_map.get(method, method.lower())
+    if "import" in path:
+        action = "import"
+    elif "export" in path:
+        action = "export"
+    sub_segments = [p for p in parts[1:] if not _is_oid_str(p)]
+    sub_label = None
+    for seg in reversed(sub_segments):
+        if seg in ACTIVITY_SUBACTION_LABELS:
+            sub_label = ACTIVITY_SUBACTION_LABELS[seg]; break
+    base_label = {"create": "Buat", "update": "Ubah", "delete": "Hapus",
+                  "import": "Import", "export": "Export"}.get(action, action.title())
+    action_label = sub_label or base_label
+    module_label = ACTIVITY_MODULE_LABELS.get(target_type, target_type)
+    # parse body (JSON only, capped)
+    body = None
+    ctype = headers.get("content-type", "")
+    if body_bytes and ctype.startswith("application/json") and len(body_bytes) <= 200000:
+        try:
+            body = json.loads(body_bytes.decode("utf-8"))
+        except Exception:
+            body = None
+    entity_label = await _activity_entity_label(target_type, oid, parts, body)
+    if not entity_label and pre_entity_label:
+        entity_label = pre_entity_label
+    changes, details = _activity_changes_from_body(body)
+    summary = f"{action_label} {module_label}"
+    if entity_label:
+        summary += f": {entity_label}"
+    if changes and action in ("create", "update"):
+        summary += f" — {changes}"
+    await db.activity_logs.insert_one({
+        "user_id": user_info["id"], "user_name": user_info["username"], "user_role": user_info["role"],
+        "action": action, "action_label": action_label,
+        "target_type": target_type, "module_label": module_label,
+        "target_id": oid, "entity_label": entity_label,
+        "changes": changes, "details": details, "summary": summary,
+        "method": method, "path": path, "status_code": status_code,
+        "timestamp": datetime.now(timezone.utc),
+    })
+
+class ActivityLogMiddleware:
+    """Pure ASGI middleware: tees the request body without consuming it, logs after response."""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") not in ("POST", "PUT", "PATCH", "DELETE"):
+            return await self.app(scope, receive, send)
+        # Pre-resolve entity name for DELETE (record gone after handler runs)
+        pre_label = None
+        if scope.get("method") == "DELETE":
+            try:
+                path = scope.get("path", "")
+                parts = [p for p in path.split("/") if p and p != "api"]
+                if parts:
+                    _oid_seg = next((p for p in parts[1:] if _is_oid_str(p)), None)
+                    pre_label = await _activity_entity_label(parts[0], _oid_seg, parts, None)
+            except Exception:
+                pre_label = None
+        chunks = []
+        captured = {"len": 0}
+        async def receive_wrapper():
+            msg = await receive()
+            if msg.get("type") == "http.request":
+                b = msg.get("body", b"")
+                if b and captured["len"] <= 200000:
+                    chunks.append(b); captured["len"] += len(b)
+            return msg
+        status_holder = {"code": 500}
+        async def send_wrapper(msg):
+            if msg.get("type") == "http.response.start":
+                status_holder["code"] = msg.get("status", 500)
+            await send(msg)
+        await self.app(scope, receive_wrapper, send_wrapper)
+        try:
+            await _write_activity_log(scope, b"".join(chunks), status_holder["code"], pre_label)
+        except Exception:
+            pass
+
+app.add_middleware(ActivityLogMiddleware)
+
 
 # ---------------------------------------------------------------------------
 # Auth
