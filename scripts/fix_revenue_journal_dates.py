@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Koreksi tanggal jurnal pengakuan revenue agar mengikuti TANGGAL ORDER (jasa),
-bukan tanggal input. Menyentuh reference_type:
-  - awb_revenue_recognition  (DR 2390 / CR 4101)
-  - awb_revenue_reversal
+Koreksi tanggal jurnal terkait AWB agar mengikuti TANGGAL ORDER (bulan jasa),
+bukan tanggal input. Ini menjaga MATCHING PRINCIPLE: revenue & COGS suatu AWB
+diakui di bulan yang sama.
+
+Menyentuh:
+  - awb_revenue_recognition / awb_revenue_reversal  (DR 2390 / CR 4101)  -> ref = order._id
+  - cost                                            (DR 5xxx / CR 2101)  -> ref = awb_costs._id -> awb_id
 Set: journal.date = order.created_at ; period_month = YYYY-MM(order.created_at)
 
 Pakai:
@@ -11,7 +14,6 @@ Pakai:
   python3 fix_revenue_journal_dates.py --apply    # eksekusi update
 """
 import os, sys
-from datetime import timezone
 from pymongo import MongoClient
 
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
@@ -20,59 +22,75 @@ APPLY = "--apply" in sys.argv
 
 db = MongoClient(MONGO_URL)[DB_NAME]
 
-REF_TYPES = ["awb_revenue_recognition", "awb_revenue_reversal"]
+REV_TYPES = ["awb_revenue_recognition", "awb_revenue_reversal"]
 
-def month_totals_4101():
+def month_totals():
+    """Net per bulan untuk revenue (4101) & COGS (account_type cogs)."""
     pipe = [
         {"$unwind": "$lines"},
-        {"$match": {"lines.account_code": "4101"}},
-        {"$group": {"_id": {"$dateToString": {"format": "%Y-%m", "date": "$date"}},
-                    "net": {"$sum": {"$subtract": ["$lines.credit", "$lines.debit"]}}}},
-        {"$sort": {"_id": 1}},
+        {"$group": {"_id": {"m": {"$dateToString": {"format": "%Y-%m", "date": "$date"}}},
+                    "rev": {"$sum": {"$cond": [{"$eq": ["$lines.account_code", "4101"]},
+                                               {"$subtract": ["$lines.credit", "$lines.debit"]}, 0]}},
+                    "cogs": {"$sum": {"$cond": [{"$eq": ["$lines.account_type", "cogs"]},
+                                                {"$subtract": ["$lines.debit", "$lines.credit"]}, 0]}}}},
+        {"$sort": {"_id.m": 1}},
     ]
-    return {r["_id"]: r["net"] for r in db.journal_entries.aggregate(pipe)}
+    out = {}
+    for r in db.journal_entries.aggregate(pipe):
+        out[r["_id"]["m"]] = {"rev": r["rev"], "cogs": r["cogs"]}
+    return out
 
-# cache order created_at
-orders = {str(o["_id"]): o.get("created_at") for o in
-          db.awb_orders.find({}, {"created_at": 1})}
+# cache: order_id(str) -> created_at
+orders = {str(o["_id"]): o.get("created_at") for o in db.awb_orders.find({}, {"created_at": 1})}
+# cache: cost_id(str) -> awb_id(str)
+costs = {str(c["_id"]): str(c.get("awb_id")) for c in db.awb_costs.find({}, {"awb_id": 1})}
 
-before = month_totals_4101()
+def resolve_order_date(j):
+    rt = j.get("reference_type")
+    rid = j.get("reference_id")
+    if rt in REV_TYPES:
+        return orders.get(rid)
+    if rt == "cost":
+        awb_id = costs.get(rid)
+        return orders.get(awb_id) if awb_id else None
+    return None
 
-changed = 0
-skipped_no_order = 0
-unchanged_same_month = 0
-updates = []
-for j in db.journal_entries.find({"reference_type": {"$in": REF_TYPES}}):
-    oid = j.get("reference_id")
-    created = orders.get(oid)
+before = month_totals()
+
+target_q = {"reference_type": {"$in": REV_TYPES + ["cost"]}}
+total = db.journal_entries.count_documents(target_q)
+updates, unchanged, skipped = [], 0, 0
+by_type = {"revenue": 0, "cost": 0}
+for j in db.journal_entries.find(target_q):
+    created = resolve_order_date(j)
     if not created:
-        skipped_no_order += 1
+        skipped += 1
         continue
     new_month = created.strftime("%Y-%m")
     old_month = j["date"].strftime("%Y-%m") if j.get("date") else None
     if old_month == new_month:
-        unchanged_same_month += 1
+        unchanged += 1
         continue
-    changed += 1
-    updates.append((j["_id"], created, new_month, old_month))
+    updates.append((j["_id"], created, new_month))
+    by_type["cost" if j.get("reference_type") == "cost" else "revenue"] += 1
 
-print(f"Total jurnal target       : {db.journal_entries.count_documents({'reference_type': {'$in': REF_TYPES}})}")
-print(f"Akan dipindah bulannya     : {changed}")
-print(f"Sudah benar (tak berubah)  : {unchanged_same_month}")
-print(f"Order tak ditemukan (skip) : {skipped_no_order}")
+print(f"Total jurnal target        : {total}")
+print(f"Akan dipindah bulannya      : {len(updates)}  (revenue: {by_type['revenue']}, cost/COGS: {by_type['cost']})")
+print(f"Sudah benar (tak berubah)   : {unchanged}")
+print(f"Order tak ditemukan (skip)  : {skipped}")
 
 if APPLY and updates:
-    for _id, created, new_month, _ in updates:
+    for _id, created, new_month in updates:
         db.journal_entries.update_one({"_id": _id},
             {"$set": {"date": created, "period_month": new_month}})
     print(f"\n✅ APPLIED: {len(updates)} jurnal di-update.")
 elif not APPLY:
     print("\n(DRY-RUN — belum ada yang diubah. Tambahkan --apply untuk eksekusi.)")
 
-after = month_totals_4101()
-print("\n=== Net Revenue (4101) per bulan — SEBELUM vs SESUDAH ===")
-months = sorted(set(before) | set(after))
-for m in months:
-    b = before.get(m, 0); a = after.get(m, 0)
-    flag = "  <-- berubah" if round(b) != round(a) else ""
-    print(f"  {m}: {b:>18,.0f}  ->  {a:>18,.0f}{flag}")
+after = month_totals()
+print("\n=== Per bulan: Revenue(4101) | COGS | Laba Kotor — SEBELUM -> SESUDAH ===")
+for m in sorted(set(before) | set(after)):
+    b = before.get(m, {"rev": 0, "cogs": 0}); a = after.get(m, {"rev": 0, "cogs": 0})
+    bg = b["rev"] - b["cogs"]; ag = a["rev"] - a["cogs"]
+    flag = "  <-- berubah" if (round(b["rev"]) != round(a["rev"]) or round(b["cogs"]) != round(a["cogs"])) else ""
+    print(f"  {m}:  Rev {b['rev']:>15,.0f}->{a['rev']:>15,.0f} | COGS {b['cogs']:>14,.0f}->{a['cogs']:>14,.0f} | GP {bg:>15,.0f}->{ag:>15,.0f}{flag}")
