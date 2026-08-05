@@ -21,3 +21,6 @@ frontend/build/
 # Runtime
 logs/
 *.pid
+
+arc_db.gz
+*.gz
