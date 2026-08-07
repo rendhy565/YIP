@@ -4933,7 +4933,13 @@ class EmployeeIn(BaseModel):
 @app.get("/api/hr/employees")
 async def list_employees(user: dict = Depends(require_feature("hr"))):
     docs = await db.employees.find().sort("created_at", -1).to_list(2000)
-    return [serialize(d) for d in docs]
+    out = []
+    for d in docs:
+        s = serialize(d)
+        s.setdefault("pph21_active", False)
+        s.setdefault("ptkp_status", "TK/0")
+        out.append(s)
+    return out
 
 @app.post("/api/hr/employees")
 async def create_employee(data: EmployeeIn, user: dict = Depends(require_feature("hr"))):
