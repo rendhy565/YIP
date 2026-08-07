@@ -1025,6 +1025,69 @@ async def seed_data():
     # Retroactive journal backfill for existing transactions
     await backfill_journals()
 
+async def backfill_settle_round_ids():
+    """Assign a round_id to legacy cash-advance settle_history events (created before
+    round_id tagging) and tag their derived journals / awb_costs / fixed_costs so each
+    round can be individually deleted/undone. Idempotent — only touches events missing
+    round_id."""
+    cursor = db.cash_advances.find({"settle_history.0": {"$exists": True}})
+    async for ca in cursor:
+        cid = str(ca["_id"])
+        history = ca.get("settle_history") or []
+        if not any(not h.get("round_id") for h in history):
+            continue  # already fully tagged
+        # Pools of currently untagged derived records
+        journals = await db.journal_entries.find({
+            "reference_type": "cash_advance_settle", "reference_id": cid,
+            "round_id": {"$exists": False},
+        }).to_list(1000)
+        fcosts = await db.fixed_costs.find({
+            "source_ref": cid, "round_id": {"$exists": False},
+        }).to_list(1000)
+        acosts = await db.awb_costs.find({
+            "source_ref": cid, "round_id": {"$exists": False},
+        }).to_list(1000)
+
+        def _pop_by_amount(pool, amount, key, date_val=None):
+            cands = [x for x in pool if abs(round(float(x.get(key, 0) or 0), 2) - round(float(amount), 2)) < 0.01]
+            if not cands:
+                return None
+            if date_val is not None:
+                same_date = [x for x in cands if x.get("date") == date_val or x.get("created_at") == date_val]
+                if same_date:
+                    cands = same_date
+            chosen = cands[0]
+            pool.remove(chosen)
+            return chosen
+
+        for evt in history:
+            if evt.get("round_id"):
+                continue
+            rid = str(uuid.uuid4())
+            evt["round_id"] = rid
+            actual = float(evt.get("actual_amount", 0) or 0)
+            refund = float(evt.get("refund_amount", 0) or 0)
+            sd = evt.get("settle_date")
+            # Journal: credit total == actual + refund
+            target_cr = round(actual + refund, 2)
+            if target_cr > 0.01:
+                j = _pop_by_amount(journals, target_cr, "total_credit", sd)
+                if j:
+                    await db.journal_entries.update_one({"_id": j["_id"]}, {"$set": {"round_id": rid}})
+            # Derived cost docs per breakdown item
+            for b in (evt.get("breakdown") or []):
+                amt = float(b.get("amount", 0) or 0)
+                tgt = (b.get("target") or "").lower()
+                if tgt == "finance":
+                    doc = _pop_by_amount(fcosts, amt, "amount", sd)
+                    if doc:
+                        await db.fixed_costs.update_one({"_id": doc["_id"]}, {"$set": {"round_id": rid}})
+                elif tgt in ("awb", "operation", ""):
+                    doc = _pop_by_amount(acosts, amt, "amount", sd)
+                    if doc:
+                        await db.awb_costs.update_one({"_id": doc["_id"]}, {"$set": {"round_id": rid}})
+        await db.cash_advances.update_one({"_id": ca["_id"]}, {"$set": {"settle_history": history}})
+
 async def backfill_journals():
     """Generate journal entries for existing AWB orders, costs, and fixed costs that
     do not yet have one. Idempotent — safe to run on every startup."""
@@ -1116,6 +1179,11 @@ async def backfill_journals():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await seed_data()
+    # Self-heal: tag legacy settle rounds so they can be edited/undone when Open
+    try:
+        await backfill_settle_round_ids()
+    except Exception as e:
+        print(f"[backfill_settle_round_ids] skipped: {e}")
     yield
     client.close()
 
@@ -8682,7 +8750,7 @@ async def delete_settle_round(cid: str, round_id: str,
     await db.fixed_costs.delete_many({"source_ref": cid, "round_id": round_id})
     # 2) Un-consume carry-over yang dipakai ronde ini (kembalikan ke panjar sumbernya)
     for co in (target.get("carry_over_applied") or []):
-        src_id = co.get("source_id") or co.get("cash_advance_id")
+        src_id = co.get("panjar_id") or co.get("source_id") or co.get("cash_advance_id")
         if src_id:
             try:
                 await db.cash_advances.update_one(
