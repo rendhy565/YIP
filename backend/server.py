@@ -4922,6 +4922,7 @@ class EmployeeIn(BaseModel):
     position: Optional[str] = None
     bpjs_no: Optional[str] = None
     ptkp_status: Optional[str] = None   # PTKP: TK/0, TK/1, TK/2, TK/3, K/0, K/1, K/2, K/3
+    pph21_active: bool = False          # True = PPh21 dihitung; False = di-0-kan & di-exclude dari list
     base_salary: float = 0
     allowance: float = 0
     meal_allowance: float = 0  # Uang makan harian (dibayar hanya kalau HADIR)
@@ -5327,8 +5328,14 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
 
         # ===== PPh21 (nett — ditanggung perusahaan, TIDAK memotong net karyawan) =====
         ptkp = e.get("ptkp_status") or "TK/0"
+        is_pph21_active = bool(e.get("pph21_active", False))
         bruto_pph = round(gross, 2)  # basis bruto bulanan = gaji pokok net + uang makan + lembur
-        if is_december:
+        if not is_pph21_active:
+            # PPh21 tidak aktif untuk karyawan ini → di-0-kan
+            pph21_amt = 0.0
+            _t, ter_cat = _ter_table_for(ptkp)
+            ter_rate = 0.0
+        elif is_december:
             ytd = pph21_ytd.get(emp_id, {"bruto": 0.0, "pph21": 0.0})
             annual_bruto = round(ytd["bruto"] + bruto_pph, 2)
             annual_pph = pph21_annual_progressive(annual_bruto, ptkp)
@@ -5367,6 +5374,7 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
             "net": net,
             # PPh21 (nett)
             "ptkp_status": ptkp,
+            "pph21_active": is_pph21_active,
             "ter_category": ter_cat,
             "ter_rate": ter_rate,
             "pph21_bruto": bruto_pph,
@@ -5453,6 +5461,14 @@ async def _enrich_pph21_slips(pdoc: dict, emp_ptkp: dict) -> dict:
     total = 0.0
     for sl in (pdoc.get("slips") or []):
         eid = str(sl.get("employee_id"))
+        # Skip karyawan yang PPh21-nya tidak aktif (exclude dari list).
+        # Untuk payroll baru pakai flag di slip; payroll lama fallback ke master karyawan.
+        if "pph21_active" in sl:
+            active = bool(sl.get("pph21_active"))
+        else:
+            active = bool(emp_ptkp.get(eid + "_active"))
+        if not active:
+            continue
         pph = sl.get("pph21")
         ptkp = sl.get("ptkp_status") or emp_ptkp.get(eid) or "TK/0"
         ter_cat = sl.get("ter_category")
@@ -5484,6 +5500,7 @@ async def list_pph21(user: dict = Depends(require_feature("hr"))):
     for e in emps:
         emp_ptkp[str(e["_id"])] = e.get("ptkp_status") or "TK/0"
         emp_ptkp[str(e["_id"]) + "_npwp"] = e.get("npwp")
+        emp_ptkp[str(e["_id"]) + "_active"] = bool(e.get("pph21_active", False))
     docs = await db.payroll.find({}).sort("period_month", -1).to_list(2000)
     out = []
     for d in docs:
@@ -5510,7 +5527,10 @@ async def pay_pph21(pid: str, data: Pph21PayIn, user: dict = Depends(require_fea
     if pdoc.get("pph21_status") == "paid":
         raise HTTPException(400, "PPh21 periode ini sudah dibayar")
     emps = await db.employees.find({}).to_list(2000)
-    emp_ptkp = {str(e["_id"]): (e.get("ptkp_status") or "TK/0") for e in emps}
+    emp_ptkp = {}
+    for e in emps:
+        emp_ptkp[str(e["_id"])] = e.get("ptkp_status") or "TK/0"
+        emp_ptkp[str(e["_id"]) + "_active"] = bool(e.get("pph21_active", False))
     enr = await _enrich_pph21_slips(pdoc, emp_ptkp)
     total = enr["total_pph21"]
     if total <= 0:

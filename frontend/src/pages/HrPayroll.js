@@ -20,7 +20,7 @@ const EMPTY_EMP = {
   emergency1_name: "", emergency1_phone: "", emergency1_relation: "", emergency1_address: "",
   emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
-  position: "", bpjs_no: "", ptkp_status: "TK/0", base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
+  position: "", bpjs_no: "", ptkp_status: "TK/0", pph21_active: false, base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
 };
 
 // Kolom yang bisa toggle di table karyawan (fixed cols not in this list)
@@ -606,6 +606,13 @@ export default function HrPayroll() {
                     <Select data-testid="emp-ptkp-status" value={form.ptkp_status || "TK/0"} onChange={(e) => setForm({ ...form, ptkp_status: e.target.value })}>
                       {["TK/0","TK/1","TK/2","TK/3","K/0","K/1","K/2","K/3"].map((p) => <option key={p} value={p}>{p}</option>)}
                     </Select>
+                  </div>
+                  <div>
+                    <Label>Hitung PPh21?</Label>
+                    <label className="flex items-center gap-2 h-10 px-3 rounded border border-slate-200 cursor-pointer bg-white">
+                      <input type="checkbox" data-testid="emp-pph21-active" checked={!!form.pph21_active} onChange={(e) => setForm({ ...form, pph21_active: e.target.checked })}/>
+                      <span className="text-sm">{form.pph21_active ? "Aktif — PPh21 dihitung" : "Nonaktif — PPh21 = 0"}</span>
+                    </label>
                   </div>
                   <div><Label>Tanggal Bergabung</Label><Input type="date" value={form.join_date} onChange={(e) => setForm({ ...form, join_date: e.target.value })}/></div>
                   <div><Label>Gaji Pokok (IDR)</Label><Input type="number" value={form.base_salary} onChange={(e) => setForm({ ...form, base_salary: e.target.value })}/></div>
