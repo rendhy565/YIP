@@ -5768,6 +5768,8 @@ async def import_holiday_preset(data: HolidayPresetIn, user: dict = Depends(requ
 @app.post("/api/hr/attendance/import")
 async def import_attendance(
     file: UploadFile = File(...),
+    mode: str = "merge",       # "merge" (pertahankan data lama) | "overwrite" (timpa total)
+    dry_run: bool = False,     # True = hanya cek konflik, tidak menulis
     user: dict = Depends(require_feature("hr")),
 ):
     """
@@ -5832,6 +5834,8 @@ async def import_attendance(
     auto_detected_weekend = 0
     auto_detected_holiday = 0
     skipped = []
+    conflicts = []
+    merge_mode = (mode or "merge").lower() != "overwrite"
     for idx, r in enumerate(rows):
         # Find employee
         emp_key = _get(r, "employee_id", "id_karyawan", "id")
@@ -5869,10 +5873,26 @@ async def import_attendance(
             skipped.append({"row": idx + 2, "reason": f"Format tanggal invalid: {date_raw}"})
             continue
 
-        # Get status or derive from check_in/out
+        # Raw values dari file (bedakan "kolom tidak ada/kosong" vs "ada isinya")
         status_raw = _get(r, "status", "keterangan", "kondisi")
         check_in = _get(r, "check_in", "jam_masuk", "in", "clock_in")
         check_out = _get(r, "check_out", "jam_keluar", "out", "clock_out")
+        ot_raw = _get(r, "overtime_hours", "lembur_jam", "jam_lembur", "overtime")
+        rate_raw = _get(r, "overtime_rate", "tarif_lembur", "rate_lembur")
+        note_raw = _get(r, "note", "catatan", "keterangan_detail")
+        has_ci = bool(check_in)
+        has_co = bool(check_out)
+        has_ot = ot_raw not in (None, "")
+        has_rate = rate_raw not in (None, "")
+        has_note = bool(note_raw)
+
+        def _num(v):
+            try:
+                return float(str(v).replace(",", ".").strip() or 0)
+            except Exception:
+                return 0.0
+        in_ot = _num(ot_raw)
+        in_rate = _num(rate_raw)
 
         # ----- AUTO DETECT weekend & holiday (kalau status di file kosong) -----
         auto_note = None
@@ -5888,73 +5908,116 @@ async def import_attendance(
             holiday_name = holidays_map[date_str].get("name")
         is_non_workday = (dow_key is not None) and (dow_key not in work_days_set)
 
+        # Map status eksplisit dari file (kalau ada)
+        explicit_status = None
         if status_raw:
-            # User explicit → respect
             s = status_raw.strip().title()
             if s.lower() in ("h", "hadir", "present", "masuk"):
-                status = "Hadir"
+                explicit_status = "Hadir"
             elif s.lower() in ("s", "sakit", "sick"):
-                status = "Sakit"
+                explicit_status = "Sakit"
             elif s.lower() in ("i", "izin", "cuti", "leave"):
-                status = "Izin"
+                explicit_status = "Izin"
             elif s.lower() in ("a", "alfa", "absent", "tanpa keterangan"):
-                status = "Alfa"
+                explicit_status = "Alfa"
             elif s.lower() in ("l", "libur", "holiday", "off", "weekend"):
-                status = "Libur"
+                explicit_status = "Libur"
             else:
-                status = s  # keep as-is (mis. "Cuti", "Half Day")
-        elif auto_detect and is_holiday:
-            status = att_cfg.get("holiday_status") or "Libur"
-            auto_note = f"Auto: {holiday_name}"
-            auto_detected_holiday += 1
-        elif auto_detect and is_non_workday:
-            status = att_cfg.get("weekend_status") or "Off"
-            auto_note = f"Auto: {dow_key.upper()} (non-workday)"
-            auto_detected_weekend += 1
-        else:
-            status = _derive_status_from_times(check_in, check_out)
+                explicit_status = s
 
-        # Upsert
-        # Parse overtime (opsional)
-        def _num(v):
-            try:
-                return float(str(v).replace(",", ".").strip() or 0)
-            except Exception:
-                return 0.0
-        ot_hours = _num(_get(r, "overtime_hours", "lembur_jam", "jam_lembur", "overtime"))
-        ot_rate = _num(_get(r, "overtime_rate", "tarif_lembur", "rate_lembur"))
-        # Compute late / under hours
-        metrics = _compute_late_underhours(att_cfg, date_str, check_in, check_out, status)
-        doc = {
+        existing = await db.attendance.find_one({"employee_id": str(emp["_id"]), "date": date_str})
+
+        # ---- Tentukan nilai FINAL sesuai mode ----
+        if merge_mode and existing:
+            # MERGE: pertahankan data lama untuk field yang TIDAK disediakan file
+            final_ci = check_in if has_ci else existing.get("check_in")
+            final_co = check_out if has_co else existing.get("check_out")
+            final_ot = in_ot if has_ot else float(existing.get("overtime_hours") or 0)
+            final_rate = in_rate if has_rate else float(existing.get("overtime_rate") or 0)
+            final_note = note_raw if has_note else existing.get("note")
+            if explicit_status:
+                final_status = explicit_status
+            else:
+                final_status = existing.get("status") or _derive_status_from_times(final_ci, final_co)
+        else:
+            # OVERWRITE (atau record baru): pakai nilai file apa adanya
+            final_ci = check_in
+            final_co = check_out
+            final_ot = in_ot
+            final_rate = in_rate
+            if explicit_status:
+                final_status = explicit_status
+            elif auto_detect and is_holiday:
+                final_status = att_cfg.get("holiday_status") or "Libur"
+                auto_note = f"Auto: {holiday_name}"
+                auto_detected_holiday += 1
+            elif auto_detect and is_non_workday:
+                final_status = att_cfg.get("weekend_status") or "Off"
+                auto_note = f"Auto: {dow_key.upper()} (non-workday)"
+                auto_detected_weekend += 1
+            else:
+                final_status = _derive_status_from_times(final_ci, final_co)
+            final_note = note_raw if has_note else auto_note
+
+        # ---- Deteksi konflik (data lama yang akan HILANG / BERUBAH) ----
+        if existing:
+            for fld, old_v, new_v, lbl in (
+                ("check_in", existing.get("check_in"), final_ci, "Jam masuk"),
+                ("check_out", existing.get("check_out"), final_co, "Jam pulang"),
+                ("overtime_hours", float(existing.get("overtime_hours") or 0), float(final_ot or 0), "Lembur (jam)"),
+                ("status", existing.get("status"), final_status, "Status"),
+                ("note", existing.get("note"), final_note, "Catatan"),
+            ):
+                old_empty = old_v in (None, "", 0, 0.0)
+                if not old_empty and old_v != new_v:
+                    conflicts.append({
+                        "row": idx + 2,
+                        "employee_name": emp.get("full_name"),
+                        "date": date_str,
+                        "field": lbl,
+                        "old": old_v,
+                        "new": new_v if new_v not in (None, "") else "(kosong)",
+                    })
+
+        if dry_run:
+            imported += 1  # would-import count
+            continue
+
+        # Compute late / under hours dari nilai final
+        metrics = _compute_late_underhours(att_cfg, date_str, final_ci, final_co, final_status)
+        set_doc = {
             "employee_id": str(emp["_id"]),
             "date": date_str,
-            "status": status,
-            "check_in": check_in,
-            "check_out": check_out,
-            "note": _get(r, "note", "catatan", "keterangan_detail") or auto_note,
+            "status": final_status,
+            "check_in": final_ci,
+            "check_out": final_co,
+            "note": final_note,
             "is_holiday": is_holiday,
             "holiday_name": holiday_name,
             "is_weekend": is_non_workday,
             "day_of_week": dow_key,
-            "overtime_hours": ot_hours,
-            "overtime_rate": ot_rate,
+            "overtime_hours": final_ot,
+            "overtime_rate": final_rate,
             "is_late": metrics["is_late"],
             "is_under_hours": metrics["is_under_hours"],
             "late_minutes": metrics["late_minutes"],
             "worked_minutes": metrics["worked_minutes"],
             "required_minutes": metrics["required_minutes"],
-            "created_at": datetime.now(timezone.utc),
-            "created_by": user["id"],
+            "updated_at": datetime.now(timezone.utc),
         }
         await db.attendance.update_one(
-            {"employee_id": doc["employee_id"], "date": doc["date"]},
-            {"$set": doc},
+            {"employee_id": set_doc["employee_id"], "date": set_doc["date"]},
+            {"$set": set_doc, "$setOnInsert": {"created_at": datetime.now(timezone.utc), "created_by": user["id"]}},
             upsert=True,
         )
         imported += 1
 
     return {
         "imported": imported,
+        "mode": "merge" if merge_mode else "overwrite",
+        "dry_run": dry_run,
+        "conflict_count": len(conflicts),
+        "conflicts": conflicts[:200],
         "skipped_count": len(skipped),
         "skipped_details": skipped[:100],  # cap for UI
         "auto_detected_weekend": auto_detected_weekend,

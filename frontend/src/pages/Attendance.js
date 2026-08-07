@@ -63,6 +63,9 @@ export default function Attendance() {
   const [showImport, setShowImport] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [importMode, setImportMode] = useState("merge");   // merge | overwrite
+  const [pendingFile, setPendingFile] = useState(null);
+  const [preview, setPreview] = useState(null);            // dry-run result
   const [form, setForm] = useState({ employee_id: "", date: "", status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 });
   // Selection for bulk delete
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -272,23 +275,46 @@ export default function Attendance() {
     finally { setAutoFilling(false); }
   };
 
-  const handleImport = async (e) => {
+  const resetImport = () => { setImportResult(null); setPreview(null); setPendingFile(null); };
+
+  // Step 1: pilih file → dry-run untuk preview konflik
+  const handleFilePick = async (e) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
+    setPendingFile(file);
     setImporting(true);
-    setImportResult(null);
+    setPreview(null);
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const { data } = await api.post("/hr/attendance/import", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      const { data } = await api.post(`/hr/attendance/import?mode=${importMode}&dry_run=true`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setPreview(data);
+    } catch (err) {
+      toast.error(errMsg(err));
+      setPendingFile(null);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  // Step 2: konfirmasi → import beneran
+  const doImport = async () => {
+    if (!pendingFile) return;
+    setImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", pendingFile);
+      const { data } = await api.post(`/hr/attendance/import?mode=${importMode}`, fd, { headers: { "Content-Type": "multipart/form-data" } });
       setImportResult(data);
-      toast.success(`${data.imported} baris ter-import`);
+      setPreview(null);
+      setPendingFile(null);
+      toast.success(`${data.imported} baris ter-import (${data.mode === "merge" ? "Merge" : "Timpa Total"})`);
       load();
     } catch (err) {
       toast.error(errMsg(err));
     } finally {
       setImporting(false);
-      e.target.value = "";
     }
   };
 
@@ -563,10 +589,10 @@ export default function Attendance() {
           <Card className="w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-heading font-bold text-lg">Import Absensi</h3>
-              <button onClick={() => { setShowImport(false); setImportResult(null); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+              <button onClick={() => { setShowImport(false); resetImport(); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
 
-            {!importResult && (
+            {!importResult && !preview && (
               <>
                 <div className="text-sm text-slate-700 space-y-2 mb-4">
                   <p>Upload file <b>Excel (.xlsx)</b> atau <b>CSV</b> dengan format kolom:</p>
@@ -575,30 +601,73 @@ export default function Attendance() {
                     <div className="mt-1"><b>Format B:</b> employee_id / nik / nama, tanggal, check_in, check_out</div>
                     <div className="mt-1 text-slate-500">(status akan di-derive dari check_in kalau format B)</div>
                   </div>
-                  <p className="text-xs">Status yang dikenali: <b>Hadir / Sakit / Izin / Alfa</b> (bisa H/S/I/A juga).</p>
-                  <p className="text-xs">Karyawan dicocokkan by <b>employee_id → NIK → Nama</b>. Baris duplikat (employee+date) akan di-overwrite.</p>
+                  <p className="text-xs">Karyawan dicocokkan by <b>employee_id → NIK → Nama</b>.</p>
                 </div>
+
+                {/* Mode toggle */}
+                <div className="mb-4" data-testid="import-mode">
+                  <div className="text-xs font-bold text-slate-600 mb-2 uppercase tracking-wide">Mode Import</div>
+                  <label className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer mb-2 ${importMode === "merge" ? "border-blue-400 bg-blue-50" : "border-slate-200"}`}>
+                    <input type="radio" name="impmode" className="mt-1" checked={importMode === "merge"} onChange={() => setImportMode("merge")} data-testid="mode-merge"/>
+                    <div>
+                      <div className="text-sm font-bold text-slate-800">Merge (aman) — pertahankan data lama <span className="text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded ml-1">Direkomendasikan</span></div>
+                      <div className="text-xs text-slate-600">Field yang tidak ada di file (mis. jam pulang / lembur yang sudah Anda input) <b>tidak akan hilang</b>.</div>
+                    </div>
+                  </label>
+                  <label className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${importMode === "overwrite" ? "border-rose-400 bg-rose-50" : "border-slate-200"}`}>
+                    <input type="radio" name="impmode" className="mt-1" checked={importMode === "overwrite"} onChange={() => setImportMode("overwrite")} data-testid="mode-overwrite"/>
+                    <div>
+                      <div className="text-sm font-bold text-slate-800">Timpa Total</div>
+                      <div className="text-xs text-slate-600">Ganti seluruh data pada tanggal itu sesuai file. Field yang kosong di file <b>akan menghapus</b> data lama.</div>
+                    </div>
+                  </label>
+                </div>
+
                 <label className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 rounded-lg p-6 hover:bg-slate-50 cursor-pointer">
                   <FileSpreadsheet size={32} className="text-slate-400 mb-2"/>
                   <span className="text-sm font-semibold">Pilih File</span>
                   <span className="text-xs text-slate-500 mt-1">.xlsx atau .csv</span>
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleImport}
-                    disabled={importing}
-                    data-testid="import-file"
-                  />
+                  <input type="file" className="hidden" accept=".xlsx,.xls,.csv" onChange={handleFilePick} disabled={importing} data-testid="import-file"/>
                 </label>
-                {importing && <div className="mt-3 text-center text-slate-500 text-sm">Mengimport...</div>}
+                {importing && <div className="mt-3 text-center text-slate-500 text-sm">Menganalisa file...</div>}
               </>
+            )}
+
+            {/* PREVIEW / KONFIRMASI (hasil dry-run) */}
+            {preview && !importResult && (
+              <div className="space-y-3" data-testid="import-preview">
+                <div className="p-3 bg-slate-50 border rounded text-sm">
+                  Mode: <b>{preview.mode === "merge" ? "Merge (aman)" : "Timpa Total"}</b> · Akan meng-import <b>{preview.imported}</b> baris
+                  {preview.skipped_count > 0 && <> · <span className="text-amber-700">{preview.skipped_count} di-skip</span></>}
+                </div>
+                {preview.conflict_count > 0 ? (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded" data-testid="import-conflicts">
+                    <div className="font-bold text-rose-800 mb-2">⚠️ {preview.conflict_count} data yang sudah ada akan {preview.mode === "merge" ? "berubah" : "hilang/berubah"}:</div>
+                    <ul className="text-xs space-y-1 max-h-52 overflow-y-auto">
+                      {preview.conflicts.map((c, i) => (
+                        <li key={i} className="text-rose-700 border-b border-rose-100 pb-1">
+                          <b>{c.employee_name}</b> · {c.date} · {c.field}: <span className="font-mono">{String(c.old)}</span> → <span className="font-mono">{String(c.new)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {preview.mode === "overwrite" && <p className="text-[11px] text-rose-600 mt-2 font-semibold">Gunakan mode <b>Merge</b> kalau Anda tidak ingin data lama hilang.</p>}
+                  </div>
+                ) : (
+                  <div className="p-3 bg-emerald-50 border border-emerald-200 rounded text-sm text-emerald-800 font-semibold">✅ Aman — tidak ada data lama yang hilang/berubah.</div>
+                )}
+                <div className="flex justify-between gap-2 pt-3 border-t">
+                  <Button variant="secondary" onClick={resetImport} disabled={importing}>Kembali</Button>
+                  <Button onClick={doImport} disabled={importing} data-testid="import-confirm">
+                    {importing ? "Mengimport..." : (preview.conflict_count > 0 ? "Tetap Lanjutkan Import" : "Konfirmasi Import")}
+                  </Button>
+                </div>
+              </div>
             )}
 
             {importResult && (
               <div className="space-y-3">
                 <div className="p-3 bg-emerald-50 border border-emerald-200 rounded">
-                  <div className="font-bold text-emerald-800">✅ {importResult.imported} baris berhasil di-import</div>
+                  <div className="font-bold text-emerald-800">✅ {importResult.imported} baris ter-import ({importResult.mode === "merge" ? "Merge" : "Timpa Total"})</div>
                 </div>
                 {(importResult.auto_detected_weekend > 0 || importResult.auto_detected_holiday > 0) && (
                   <div className="p-3 bg-purple-50 border border-purple-200 rounded">
@@ -627,7 +696,7 @@ export default function Attendance() {
                   </div>
                 )}
                 <div className="flex justify-end gap-2 pt-3 border-t">
-                  <Button onClick={() => { setShowImport(false); setImportResult(null); }}>Selesai</Button>
+                  <Button onClick={() => { setShowImport(false); resetImport(); }}>Selesai</Button>
                 </div>
               </div>
             )}
