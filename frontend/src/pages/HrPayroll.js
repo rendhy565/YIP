@@ -20,7 +20,7 @@ const EMPTY_EMP = {
   emergency1_name: "", emergency1_phone: "", emergency1_relation: "", emergency1_address: "",
   emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
-  position: "", bpjs_no: "", base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
+  position: "", bpjs_no: "", ptkp_status: "TK/0", base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
 };
 
 // Kolom yang bisa toggle di table karyawan (fixed cols not in this list)
@@ -602,6 +602,11 @@ export default function HrPayroll() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div><Label>Posisi / Jabatan</Label><Input value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}/></div>
                   <div><Label>No. BPJS</Label><Input value={form.bpjs_no} onChange={(e) => setForm({ ...form, bpjs_no: e.target.value })}/></div>
+                  <div><Label>Status PTKP</Label>
+                    <Select data-testid="emp-ptkp-status" value={form.ptkp_status || "TK/0"} onChange={(e) => setForm({ ...form, ptkp_status: e.target.value })}>
+                      {["TK/0","TK/1","TK/2","TK/3","K/0","K/1","K/2","K/3"].map((p) => <option key={p} value={p}>{p}</option>)}
+                    </Select>
+                  </div>
                   <div><Label>Tanggal Bergabung</Label><Input type="date" value={form.join_date} onChange={(e) => setForm({ ...form, join_date: e.target.value })}/></div>
                   <div><Label>Gaji Pokok (IDR)</Label><Input type="number" value={form.base_salary} onChange={(e) => setForm({ ...form, base_salary: e.target.value })}/></div>
                   <div><Label>Uang Makan / Hari (IDR)</Label><Input type="number" value={form.meal_allowance} onChange={(e) => setForm({ ...form, meal_allowance: e.target.value })} placeholder="Mis. 25000"/></div>

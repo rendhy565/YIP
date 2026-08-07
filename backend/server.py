@@ -100,6 +100,103 @@ def pph_info_for_vendor(vendor_doc: Optional[dict]):
         return (0.0, "2223", "")
     return PPH_RATES[pt]
 
+# ----- PPh 21 Karyawan (TER — PMK 168/2023, PP 58/2023) --------------------
+# Setiap tuple = (batas_atas_bruto_bulanan, tarif). Baris terakhir = tak terbatas.
+# Sumber resmi: Lampiran PMK 168 Tahun 2023.
+TER_A = [
+    (5400000, 0.0), (5650000, 0.0025), (5950000, 0.005), (6300000, 0.0075),
+    (6750000, 0.01), (7500000, 0.0125), (8550000, 0.015), (9650000, 0.0175),
+    (10050000, 0.02), (10350000, 0.0225), (10700000, 0.025), (11050000, 0.03),
+    (11600000, 0.035), (12500000, 0.04), (13750000, 0.05), (15100000, 0.06),
+    (16950000, 0.07), (19750000, 0.08), (24150000, 0.09), (26450000, 0.10),
+    (28000000, 0.11), (30050000, 0.12), (32400000, 0.13), (35400000, 0.14),
+    (39100000, 0.15), (43850000, 0.16), (47800000, 0.17), (51400000, 0.18),
+    (56300000, 0.19), (62200000, 0.20), (68600000, 0.21), (77500000, 0.22),
+    (89000000, 0.23), (103000000, 0.24), (125000000, 0.25), (157000000, 0.26),
+    (206000000, 0.27), (337000000, 0.28), (454000000, 0.29), (550000000, 0.30),
+    (695000000, 0.31), (910000000, 0.32), (1400000000, 0.33), (float("inf"), 0.34),
+]
+TER_B = [
+    (6200000, 0.0), (6500000, 0.0025), (6850000, 0.005), (7300000, 0.0075),
+    (9200000, 0.01), (10750000, 0.015), (11250000, 0.02), (11600000, 0.025),
+    (12600000, 0.03), (13600000, 0.04), (14950000, 0.05), (16400000, 0.06),
+    (18450000, 0.07), (21850000, 0.08), (26000000, 0.09), (27700000, 0.10),
+    (29350000, 0.11), (31450000, 0.12), (33950000, 0.13), (37100000, 0.14),
+    (41100000, 0.15), (45800000, 0.16), (49500000, 0.17), (53800000, 0.18),
+    (58500000, 0.19), (64000000, 0.20), (71000000, 0.21), (80000000, 0.22),
+    (93000000, 0.23), (109000000, 0.24), (129000000, 0.25), (163000000, 0.26),
+    (211000000, 0.27), (374000000, 0.28), (459000000, 0.29), (555000000, 0.30),
+    (704000000, 0.31), (957000000, 0.32), (1405000000, 0.33), (float("inf"), 0.34),
+]
+TER_C = [
+    (6600000, 0.0), (6950000, 0.0025), (7350000, 0.005), (7800000, 0.0075),
+    (8850000, 0.01), (9800000, 0.0125), (10950000, 0.015), (11200000, 0.0175),
+    (12050000, 0.02), (12950000, 0.03), (14150000, 0.04), (15550000, 0.05),
+    (17050000, 0.06), (19500000, 0.07), (22700000, 0.08), (26600000, 0.09),
+    (28100000, 0.10), (30100000, 0.11), (32600000, 0.12), (35400000, 0.13),
+    (38900000, 0.14), (43000000, 0.15), (47400000, 0.16), (51200000, 0.17),
+    (55800000, 0.18), (60400000, 0.19), (66700000, 0.20), (74500000, 0.21),
+    (83200000, 0.22), (95600000, 0.23), (110000000, 0.24), (134000000, 0.25),
+    (169000000, 0.26), (221000000, 0.27), (390000000, 0.28), (463000000, 0.29),
+    (561000000, 0.30), (709000000, 0.31), (965000000, 0.32), (1419000000, 0.33),
+    (float("inf"), 0.34),
+]
+
+# PTKP → kategori TER
+PTKP_TO_TER_CAT = {
+    "TK/0": "A", "TK/1": "A", "K/0": "A",
+    "TK/2": "B", "TK/3": "B", "K/1": "B", "K/2": "B",
+    "K/3": "C",
+}
+# PTKP setahun (Rp) — untuk perhitungan progresif Desember (Pasal 17)
+PTKP_ANNUAL = {
+    "TK/0": 54000000, "TK/1": 58500000, "TK/2": 63000000, "TK/3": 67500000,
+    "K/0": 58500000, "K/1": 63000000, "K/2": 67500000, "K/3": 72000000,
+}
+PTKP_OPTIONS = ["TK/0", "TK/1", "TK/2", "TK/3", "K/0", "K/1", "K/2", "K/3"]
+
+def _ter_table_for(ptkp: Optional[str]):
+    cat = PTKP_TO_TER_CAT.get((ptkp or "TK/0").upper(), "A")
+    return {"A": TER_A, "B": TER_B, "C": TER_C}[cat], cat
+
+def ter_rate_for(bruto_bulanan: float, ptkp: Optional[str]):
+    """Return (rate, kategori) tarif efektif bulanan untuk bruto & PTKP tertentu."""
+    table, cat = _ter_table_for(ptkp)
+    for upper, rate in table:
+        if bruto_bulanan <= upper:
+            return rate, cat
+    return 0.34, cat
+
+def pph21_ter_monthly(bruto_bulanan: float, ptkp: Optional[str]) -> dict:
+    """PPh21 bulanan metode TER (nett/gross sama saja basisnya)."""
+    rate, cat = ter_rate_for(bruto_bulanan, ptkp)
+    pph = round(bruto_bulanan * rate, 0)
+    return {"bruto": round(bruto_bulanan, 2), "ter_category": cat, "ter_rate": rate, "pph21": pph}
+
+def pph21_annual_progressive(bruto_setahun: float, ptkp: Optional[str]) -> float:
+    """PPh21 setahun metode Pasal 17 (UU HPP) — dipakai untuk hitung ulang Desember.
+    Neto = bruto − biaya jabatan (5%, maks 6jt/thn). PKP = Neto − PTKP.
+    """
+    biaya_jabatan = min(round(bruto_setahun * 0.05, 0), 6000000)
+    neto = max(0.0, bruto_setahun - biaya_jabatan)
+    ptkp_amt = PTKP_ANNUAL.get((ptkp or "TK/0").upper(), 54000000)
+    pkp = max(0.0, neto - ptkp_amt)
+    # Bulatkan PKP ke bawah kelipatan 1000 (aturan pembulatan PKP)
+    pkp = float(int(pkp // 1000) * 1000)
+    brackets = [(60000000, 0.05), (250000000, 0.15), (500000000, 0.25),
+                (5000000000, 0.30), (float("inf"), 0.35)]
+    tax = 0.0
+    lower = 0.0
+    for upper, rate in brackets:
+        if pkp > lower:
+            taxable = min(pkp, upper) - lower
+            tax += taxable * rate
+            lower = upper
+        else:
+            break
+    return round(tax, 0)
+
+
 def fmt_idr(n: float) -> str:
     """Minimal IDR formatter used inside journal memo strings."""
     try:
@@ -545,6 +642,7 @@ DEFAULT_COA = [
     {"code": "6103", "name": "Beban Utilities", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
     {"code": "6104", "name": "Beban Marketing", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
     {"code": "6105", "name": "Beban Administrasi", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
+    {"code": "6106", "name": "Beban PPh 21 Karyawan (Ditanggung Perusahaan)", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
     {"code": "6199", "name": "Beban Lainnya", "type": "expense", "subtype": "operating_expense", "normal": "debit", "is_system": True},
 ]
 FIXED_COST_TO_COA = {
@@ -563,6 +661,7 @@ DEFAULT_EXPENSE_CATEGORIES = [
     {"name": "Sewa",          "posting_type": "expense", "account_code": "6102", "is_system": True},
     {"name": "Utilities",     "posting_type": "expense", "account_code": "6103", "is_system": True},
     {"name": "Administrasi",  "posting_type": "expense", "account_code": "6105", "is_system": True},
+    {"name": "PPh21 Karyawan","posting_type": "expense", "account_code": "6106", "is_system": True},
     {"name": "Lainnya",       "posting_type": "expense", "account_code": "6199", "is_system": True},
 ]
 
@@ -3750,6 +3849,11 @@ async def profit_loss(
             return d[:7] == month
         return True
 
+    # Penanda amortisasi: lacak porsi SLICE amortisasi per kategori dalam periode
+    # (untuk ditampilkan label "(Amortisasi)" + tooltip nominal di frontend).
+    amort_slice_fixed = {}   # cat -> total slice amortisasi (bucket Expense)
+    amort_slice_cogs = {}    # cat -> total slice amortisasi (bucket COGS)
+
     def _apply_amort_delta(cat, ptype, delta):
         nonlocal total_fixed, total_cogs_expense
         if ptype == "cogs":
@@ -3771,11 +3875,18 @@ async def profit_loss(
             if s.get("status") == "cancelled":
                 continue
             if _period_in_range(s.get("period", "")):
-                _apply_amort_delta(cat, ptype, float(s.get("amount", 0) or 0))
+                slice_amt = float(s.get("amount", 0) or 0)
+                _apply_amort_delta(cat, ptype, slice_amt)
+                if ptype == "cogs":
+                    amort_slice_cogs[cat] = round(amort_slice_cogs.get(cat, 0) + slice_amt, 2)
+                else:
+                    amort_slice_fixed[cat] = round(amort_slice_fixed.get(cat, 0) + slice_amt, 2)
 
     # Bersihkan kategori yang jadi 0 (mis. bulan asal ternetralkan penuh)
     fixed_breakdown = {k: v for k, v in fixed_breakdown.items() if round(v) != 0}
     cogs_expense_breakdown = {k: v for k, v in cogs_expense_breakdown.items() if round(v) != 0}
+    amort_slice_fixed = {k: v for k, v in amort_slice_fixed.items() if round(v) != 0 and k in fixed_breakdown}
+    amort_slice_cogs = {k: v for k, v in amort_slice_cogs.items() if round(v) != 0 and k in cogs_expense_breakdown}
 
     # Add COGS-typed expenses into total_cogs so Gross Margin reflects them
     total_cogs += total_cogs_expense
@@ -3788,6 +3899,8 @@ async def profit_loss(
         "fixed_costs": [serialize(f) for f in fixed_rows],
         "fixed_breakdown": fixed_breakdown,
         "cogs_expense_breakdown": cogs_expense_breakdown,
+        "amort_breakdown": amort_slice_fixed,
+        "amort_cogs_breakdown": amort_slice_cogs,
         "summary": {
             "total_revenue": total_revenue,
             "total_cogs": total_cogs,
@@ -3806,6 +3919,106 @@ async def profit_loss(
             "total_cost": total_cogs,
         },
     }
+
+@app.get("/api/reports/receivable-pipeline")
+async def receivable_pipeline(
+    month: Optional[str] = None,
+    user: dict = Depends(require_role("finance", "operation")),
+):
+    """Laporan pipeline penerimaan kas:
+    - NY-PO (Not Yet PO): order sudah selesai/Reconciled tapi BELUM di-invoice
+      (menunggu Nomor PO dari customer). Bahan eskalasi ke customer.
+    - PYMHD: order sudah di-invoice tapi BELUM dibayar (piutang berjalan).
+    Filter bulan opsional (berdasarkan tanggal reconcile utk NY-PO, tanggal invoice utk PYMHD).
+    """
+    now = datetime.now(timezone.utc)
+
+    def _in_month(dt):
+        if not month or not dt:
+            return True
+        try:
+            return dt.strftime("%Y-%m") == month
+        except Exception:
+            return False
+
+    def _age_days(dt):
+        if not dt:
+            return None
+        try:
+            return max(0, (now - dt).days)
+        except Exception:
+            return None
+
+    # Kumpulkan customer names
+    cust_ids = set()
+
+    # NY-PO: status Reconciled
+    ny_orders = await db.awb_orders.find({"status": "Reconciled"}).sort("reconciled_at", 1).to_list(20000)
+    # PYMHD: status Invoiced
+    pymhd_orders = await db.awb_orders.find({"status": "Invoiced"}).sort("invoiced_at", 1).to_list(20000)
+    for o in ny_orders + pymhd_orders:
+        if o.get("customer_id"):
+            cust_ids.add(o["customer_id"])
+    cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": list(cust_ids)}}).to_list(2000)}
+    # Invoice numbers lookup
+    inv_ids = [o["_id"] for o in pymhd_orders]
+    inv_map = {}
+    for inv in await db.invoices.find({"awb_id": {"$in": inv_ids}}).to_list(20000):
+        inv_map[inv["awb_id"]] = inv
+
+    ny_rows = []
+    ny_total = 0.0
+    for o in ny_orders:
+        recd = o.get("reconciled_at")
+        if not _in_month(recd):
+            continue
+        c = cmap.get(o.get("customer_id"))
+        val = float(o.get("grand_total") or o.get("total_tariff") or 0)
+        ny_total += val
+        ny_rows.append({
+            "awb_id": str(o["_id"]),
+            "awb_number": o.get("awb_number"),
+            "customer_name": c["name"] if c else None,
+            "origin": o.get("origin"),
+            "destination": o.get("destination"),
+            "reconciled_at": recd.isoformat() if recd else None,
+            "value": val,
+            "age_days": _age_days(recd),
+        })
+
+    pymhd_rows = []
+    pymhd_total = 0.0
+    for o in pymhd_orders:
+        invd = o.get("invoiced_at")
+        if not _in_month(invd):
+            continue
+        c = cmap.get(o.get("customer_id"))
+        inv = inv_map.get(o["_id"])
+        val = float(o.get("grand_total") or o.get("total_tariff") or 0)
+        pymhd_total += val
+        pymhd_rows.append({
+            "awb_id": str(o["_id"]),
+            "awb_number": o.get("awb_number"),
+            "customer_name": c["name"] if c else None,
+            "invoice_number": (inv or {}).get("invoice_number") or o.get("invoice_number"),
+            "invoiced_at": invd.isoformat() if invd else None,
+            "value": val,
+            "age_days": _age_days(invd),
+        })
+
+    return {
+        "ny_po": ny_rows,
+        "pymhd": pymhd_rows,
+        "summary": {
+            "ny_po_count": len(ny_rows),
+            "ny_po_total": round(ny_total, 2),
+            "pymhd_count": len(pymhd_rows),
+            "pymhd_total": round(pymhd_total, 2),
+            "grand_total": round(ny_total + pymhd_total, 2),
+        },
+        "month": month,
+    }
+
 
 # ---------------------------------------------------------------------------
 # Dashboard KPIs
@@ -4708,6 +4921,7 @@ class EmployeeIn(BaseModel):
     # --- Kepegawaian (existing) ---
     position: Optional[str] = None
     bpjs_no: Optional[str] = None
+    ptkp_status: Optional[str] = None   # PTKP: TK/0, TK/1, TK/2, TK/3, K/0, K/1, K/2, K/3
     base_salary: float = 0
     allowance: float = 0
     meal_allowance: float = 0  # Uang makan harian (dibayar hanya kalau HADIR)
@@ -4900,6 +5114,7 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
     total_gross = calc["total_gross"]
     total_kasbon = calc["total_kasbon"]
     total_net = calc["total_net"]
+    total_pph21 = calc.get("total_pph21", 0.0)
     working_days = calc["working_days"]
     period_start = calc["period_start"]
     period_end = calc["period_end"]
@@ -4915,6 +5130,8 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         "total_gross": round(total_gross, 2),
         "total_kasbon": round(total_kasbon, 2),
         "total_net": round(total_net, 2),
+        "total_pph21": round(total_pph21, 2),
+        "pph21_status": "unpaid" if total_pph21 > 0 else "none",
         "cash_account_code": cash_acc,
         "created_by": user["id"],
         "created_at": datetime.now(timezone.utc),
@@ -5030,6 +5247,21 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
 
     slips = []
     total_gross = 0.0
+    # PPh21 (TER). Untuk Desember: hitung ulang progresif Pasal 17 & kurangi
+    # PPh21 yang sudah dipotong Jan–Nov (metode resmi PMK 168/2023).
+    tax_year = period_month.split("-")[0]
+    is_december = period_month.endswith("-12")
+    pph21_ytd = {}  # emp_id -> {"bruto": x, "pph21": y} akumulasi Jan..(bulan ini -1) tahun ini
+    if is_december:
+        prior = await db.payroll.find({
+            "period_month": {"$gte": f"{tax_year}-01", "$lt": period_month}
+        }).to_list(2000)
+        for pr in prior:
+            for sl in (pr.get("slips") or []):
+                eid = str(sl.get("employee_id"))
+                acc = pph21_ytd.setdefault(eid, {"bruto": 0.0, "pph21": 0.0})
+                acc["bruto"] += float(sl.get("pph21_bruto", 0) or 0)
+                acc["pph21"] += float(sl.get("pph21", 0) or 0)
     for e in employees:
         emp_id = str(e["_id"])
         base = float(e.get("base_salary", 0))
@@ -5093,6 +5325,22 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         potongan_kasbon = round(sum(k["amount"] for k in kasbon_items), 2)
         net = round(gross - potongan_kasbon, 2)
 
+        # ===== PPh21 (nett — ditanggung perusahaan, TIDAK memotong net karyawan) =====
+        ptkp = e.get("ptkp_status") or "TK/0"
+        bruto_pph = round(gross, 2)  # basis bruto bulanan = gaji pokok net + uang makan + lembur
+        if is_december:
+            ytd = pph21_ytd.get(emp_id, {"bruto": 0.0, "pph21": 0.0})
+            annual_bruto = round(ytd["bruto"] + bruto_pph, 2)
+            annual_pph = pph21_annual_progressive(annual_bruto, ptkp)
+            pph21_amt = round(max(0.0, annual_pph - ytd["pph21"]), 0)
+            _t, ter_cat = _ter_table_for(ptkp)
+            ter_rate = None
+        else:
+            r = pph21_ter_monthly(bruto_pph, ptkp)
+            pph21_amt = r["pph21"]
+            ter_cat = r["ter_category"]
+            ter_rate = r["ter_rate"]
+
         slips.append({
             "employee_id": emp_id,
             "employee_no": e.get("employee_no"),
@@ -5117,6 +5365,13 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
             "potongan_kasbon": potongan_kasbon,
             "kasbon_items": kasbon_items,
             "net": net,
+            # PPh21 (nett)
+            "ptkp_status": ptkp,
+            "ter_category": ter_cat,
+            "ter_rate": ter_rate,
+            "pph21_bruto": bruto_pph,
+            "pph21": pph21_amt,
+            "pph21_is_december_recalc": is_december,
             # Info tambahan dari master karyawan (untuk Excel export ala PT)
             "nik_id_no": e.get("employee_no") or e.get("nik"),
             "join_date": e.get("join_date"),
@@ -5130,6 +5385,7 @@ async def _calculate_payroll_slips(period_month: str) -> dict:
         "total_gross": round(sum(s["gross"] for s in slips), 2),
         "total_kasbon": round(sum(s["potongan_kasbon"] for s in slips), 2),
         "total_net": round(sum(s["net"] for s in slips), 2),
+        "total_pph21": round(sum(s["pph21"] for s in slips), 2),
         "working_days": working_days,
         "period_start": period_start,
         "period_end": period_end,
@@ -5173,8 +5429,146 @@ async def delete_payroll(pid: str, user: dict = Depends(require_feature("hr"))):
             {"$set": {"payments": remaining, "outstanding": new_out, "status": "active"}, "$unset": {"settled_at": ""}},
         )
     await db.journal_entries.delete_many({"reference_type": "payroll", "reference_id": pid})
+    # Reverse pembayaran PPh21 (jika sudah dibayar) — hapus fixed_cost + jurnalnya
+    for fc in await db.fixed_costs.find({"source": "pph21_payment", "source_ref": pid}).to_list(100):
+        await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": str(fc["_id"])})
+        await db.fixed_costs.delete_one({"_id": fc["_id"]})
     await db.payroll.delete_one({"_id": _oid(pid)})
     return {"ok": True}
+
+
+# ===========================================================================
+# PPh21 KARYAWAN — nett (ditanggung perusahaan). Metode TER (PMK 168/2023).
+# Dihitung otomatis saat run payroll; dibayar via menu HR → jadi expense.
+# ===========================================================================
+class Pph21PayIn(BaseModel):
+    cash_account_code: str = "1101"      # rekening kas/bank sumber pembayaran
+    expense_date: Optional[str] = None   # YYYY-MM-DD (default: hari ini)
+
+async def _enrich_pph21_slips(pdoc: dict, emp_ptkp: dict) -> dict:
+    """Kembalikan {total_pph21, slips:[...]} — hitung PPh21 dari slip.
+    Untuk payroll lama (tanpa field pph21), hitung on-the-fly metode TER bulanan.
+    """
+    slips_out = []
+    total = 0.0
+    for sl in (pdoc.get("slips") or []):
+        eid = str(sl.get("employee_id"))
+        pph = sl.get("pph21")
+        ptkp = sl.get("ptkp_status") or emp_ptkp.get(eid) or "TK/0"
+        ter_cat = sl.get("ter_category")
+        ter_rate = sl.get("ter_rate")
+        bruto = sl.get("pph21_bruto")
+        if pph is None:  # legacy → compute TER monthly
+            bruto = round(float(sl.get("gross", 0) or 0), 2)
+            r = pph21_ter_monthly(bruto, ptkp)
+            pph = r["pph21"]; ter_cat = r["ter_category"]; ter_rate = r["ter_rate"]
+        pph = round(float(pph or 0), 2)
+        total += pph
+        slips_out.append({
+            "employee_id": eid,
+            "employee_name": sl.get("employee_name"),
+            "employee_no": sl.get("employee_no"),
+            "ptkp_status": ptkp,
+            "ter_category": ter_cat,
+            "ter_rate": ter_rate,
+            "pph21_bruto": bruto,
+            "pph21": pph,
+            "npwp": emp_ptkp.get(eid + "_npwp"),
+        })
+    return {"total_pph21": round(total, 2), "slips": slips_out}
+
+@app.get("/api/hr/pph21")
+async def list_pph21(user: dict = Depends(require_feature("hr"))):
+    emps = await db.employees.find({}).to_list(2000)
+    emp_ptkp = {}
+    for e in emps:
+        emp_ptkp[str(e["_id"])] = e.get("ptkp_status") or "TK/0"
+        emp_ptkp[str(e["_id"]) + "_npwp"] = e.get("npwp")
+    docs = await db.payroll.find({}).sort("period_month", -1).to_list(2000)
+    out = []
+    for d in docs:
+        enr = await _enrich_pph21_slips(d, emp_ptkp)
+        out.append({
+            "payroll_id": str(d["_id"]),
+            "period_month": d.get("period_month"),
+            "total_pph21": enr["total_pph21"],
+            "status": d.get("pph21_status") or ("unpaid" if enr["total_pph21"] > 0 else "none"),
+            "paid_at": d.get("pph21_paid_at"),
+            "cash_account_code": d.get("pph21_cash_account_code"),
+            "fixed_cost_ref": d.get("pph21_fixed_cost_id"),
+            "slips": enr["slips"],
+        })
+    return out
+
+@app.post("/api/hr/pph21/{pid}/pay")
+async def pay_pph21(pid: str, data: Pph21PayIn, user: dict = Depends(require_feature("hr"))):
+    if user.get("role") not in ("administrator", "finance"):
+        raise HTTPException(403, "Hanya finance/admin yang dapat membayar PPh21")
+    pdoc = await db.payroll.find_one({"_id": _oid(pid)})
+    if not pdoc:
+        raise HTTPException(404, "Payroll tidak ditemukan")
+    if pdoc.get("pph21_status") == "paid":
+        raise HTTPException(400, "PPh21 periode ini sudah dibayar")
+    emps = await db.employees.find({}).to_list(2000)
+    emp_ptkp = {str(e["_id"]): (e.get("ptkp_status") or "TK/0") for e in emps}
+    enr = await _enrich_pph21_slips(pdoc, emp_ptkp)
+    total = enr["total_pph21"]
+    if total <= 0:
+        raise HTTPException(400, "Tidak ada PPh21 yang harus dibayar untuk periode ini")
+
+    if data.expense_date:
+        try:
+            y, m, dd = [int(x) for x in data.expense_date.split("-")]
+            exp_dt = datetime(y, m, dd, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "expense_date harus YYYY-MM-DD")
+    else:
+        exp_dt = datetime.now(timezone.utc)
+    cash_acc = data.cash_account_code or "1101"
+    period_m = exp_dt.strftime("%Y-%m")
+    cat = await get_expense_category("PPh21 Karyawan")
+    acc_code = (cat or {}).get("account_code") or "6106"
+
+    fc_doc = {
+        "category": "PPh21 Karyawan",
+        "posting_type": "expense",
+        "account_code": acc_code,
+        "description": f"Pembayaran PPh21 Karyawan (nett) — Payroll {pdoc.get('period_month')}",
+        "amount": round(total, 2),
+        "expense_date": exp_dt.strftime("%Y-%m-%d"),
+        "period_month": period_m,
+        "cash_account_code": cash_acc,
+        "source": "pph21_payment",
+        "source_ref": pid,
+        "created_by": user["id"],
+        "created_at": exp_dt,
+    }
+    fc_res = await db.fixed_costs.insert_one(fc_doc)
+    fc_id = str(fc_res.inserted_id)
+    # Jurnal: Dr 6106 Beban PPh21 / Cr Kas. Reference fixed_cost supaya backfill tidak dobel.
+    try:
+        await post_journal(
+            date=exp_dt,
+            description=f"Pembayaran PPh21 Karyawan — Payroll {pdoc.get('period_month')}",
+            lines=[
+                {"account_code": acc_code, "debit": round(total, 2), "credit": 0, "memo": f"PPh21 {pdoc.get('period_month')}"},
+                {"account_code": cash_acc, "debit": 0, "credit": round(total, 2), "memo": "Setor PPh21"},
+            ],
+            reference_type="fixed_cost", reference_id=fc_id, posted_by=user["id"],
+        )
+    except HTTPException as e:
+        # rollback fixed_cost jika jurnal gagal (mis. periode terkunci)
+        await db.fixed_costs.delete_one({"_id": fc_res.inserted_id})
+        raise e
+    await db.payroll.update_one({"_id": _oid(pid)}, {"$set": {
+        "pph21_status": "paid",
+        "pph21_paid_at": exp_dt.isoformat(),
+        "pph21_cash_account_code": cash_acc,
+        "pph21_fixed_cost_id": fc_id,
+        "total_pph21": round(total, 2),
+    }})
+    return {"ok": True, "total_pph21": round(total, 2), "fixed_cost_id": fc_id}
+
 
 
 # ===========================================================================

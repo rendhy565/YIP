@@ -49,6 +49,8 @@ import InvoicesCreated from "./pages/InvoicesCreated";
 import PurchaseOrders from "./pages/PurchaseOrders";
 import Approvals from "./pages/Approvals";
 import ApprovalConfig from "./pages/ApprovalConfig";
+import ReceivablePipeline from "./pages/ReceivablePipeline";
+import Pph21 from "./pages/Pph21";
 
 function Protected({ children, roles, module }) {
   const { user } = useAuth();
@@ -116,6 +118,7 @@ export default function App() {
             <Route path="/recurring-expenses" element={<Protected module="fixed_costs"><Shell><RecurringExpenses /></Shell></Protected>} />
             <Route path="/activity-log" element={<Protected roles={["administrator"]}><Shell><ActivityLog /></Shell></Protected>} />
             <Route path="/pnl" element={<Protected module="pnl"><Shell><ProfitLoss /></Shell></Protected>} />
+            <Route path="/pipeline" element={<Protected module="pnl"><Shell><ReceivablePipeline /></Shell></Protected>} />
             <Route path="/users" element={<Protected module="user_management"><Shell><Users /></Shell></Protected>} />
             <Route path="/settings" element={<Protected module="settings"><Shell><Settings /></Shell></Protected>} />
 
@@ -135,6 +138,7 @@ export default function App() {
             <Route path="/hr/attendance" element={<Protected module="hr"><FeatureGate feature="hr"><Shell><Attendance /></Shell></FeatureGate></Protected>} />
             <Route path="/hr/contracts" element={<Protected module="hr"><FeatureGate feature="hr"><Shell><KontrakKerja /></Shell></FeatureGate></Protected>} />
             <Route path="/hr/kasbon" element={<Protected module="hr"><FeatureGate feature="hr"><Shell><KasbonKaryawan /></Shell></FeatureGate></Protected>} />
+            <Route path="/hr/pph21" element={<Protected module="hr"><FeatureGate feature="hr"><Shell><Pph21 /></Shell></FeatureGate></Protected>} />
             <Route path="/tax" element={<Protected module="tax"><FeatureGate feature="tax"><Shell><TaxModule /></Shell></FeatureGate></Protected>} />
             <Route path="/assets" element={<Protected module="asset"><FeatureGate feature="asset"><Shell><AssetModule /></Shell></FeatureGate></Protected>} />
             <Route path="/bank-recon" element={<Protected module="bank_recon"><FeatureGate feature="bank_recon"><Shell><BankReconciliation /></Shell></FeatureGate></Protected>} />

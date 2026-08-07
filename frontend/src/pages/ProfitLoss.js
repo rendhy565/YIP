@@ -147,12 +147,18 @@ export default function ProfitLoss() {
                   <Banknote size={11}/> Sub-Expense COGS (Operation) — masuk Gross Margin
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
-                  {Object.entries(data.cogs_expense_breakdown).map(([cat, amt]) => (
-                    <div key={cat} className="p-1.5 rounded bg-emerald-900/30 border border-emerald-700/40">
-                      <div className="text-[9px] uppercase tracking-wider font-bold text-emerald-200 truncate">{cat}</div>
+                  {Object.entries(data.cogs_expense_breakdown).map(([cat, amt]) => {
+                    const amortAmt = (data.amort_cogs_breakdown || {})[cat];
+                    return (
+                    <div key={cat} title={amortAmt ? `Termasuk amortisasi ${fmtIDR(amortAmt)}` : undefined} data-testid={`pnl-cogs-cat-${cat}`} className="p-1.5 rounded bg-emerald-900/30 border border-emerald-700/40">
+                      <div className="text-[9px] uppercase tracking-wider font-bold text-emerald-200 truncate">
+                        {cat}{amortAmt ? <span className="ml-1 text-amber-300 normal-case">(Amortisasi)</span> : null}
+                      </div>
                       <div className="font-heading font-black text-xs sm:text-sm text-white">{fmtIDR(amt)}</div>
+                      {amortAmt ? <div className="text-[8px] text-amber-300/80 truncate">amort: {fmtIDR(amortAmt)}</div> : null}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -162,12 +168,18 @@ export default function ProfitLoss() {
                   <Banknote size={11}/> Sub-Expense Operating — di bawah Gross Margin
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
-                  {Object.entries(data.fixed_breakdown).map(([cat, amt]) => (
-                    <div key={cat} className="p-1.5 rounded bg-red-900/30 border border-red-700/40">
-                      <div className="text-[9px] uppercase tracking-wider font-bold text-red-200 truncate">{cat}</div>
+                  {Object.entries(data.fixed_breakdown).map(([cat, amt]) => {
+                    const amortAmt = (data.amort_breakdown || {})[cat];
+                    return (
+                    <div key={cat} title={amortAmt ? `Termasuk amortisasi ${fmtIDR(amortAmt)}` : undefined} data-testid={`pnl-exp-cat-${cat}`} className="p-1.5 rounded bg-red-900/30 border border-red-700/40">
+                      <div className="text-[9px] uppercase tracking-wider font-bold text-red-200 truncate">
+                        {cat}{amortAmt ? <span className="ml-1 text-amber-300 normal-case">(Amortisasi)</span> : null}
+                      </div>
                       <div className="font-heading font-black text-xs sm:text-sm text-white">{fmtIDR(amt)}</div>
+                      {amortAmt ? <div className="text-[8px] text-amber-300/80 truncate">amort: {fmtIDR(amortAmt)}</div> : null}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}

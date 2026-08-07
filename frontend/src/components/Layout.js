@@ -8,7 +8,7 @@ import {
   LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck,
   BookOpen, BookText, Library, Scale, Building, LineChart, Lock,
   UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity, FileSignature, CalendarClock,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, FileClock, Receipt,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 
@@ -41,6 +41,7 @@ const NAV = [
   { to: "/expense-categories", label: "Master Kategori Expense", icon: Banknote, perm: "expense_categories" },
   { to: "/recurring-expenses", label: "Cost Automatic (Recurring)", icon: Repeat, perm: "fixed_costs" },
   { to: "/pnl", label: "Laba Rugi (Order)", icon: TrendingUp, perm: "pnl" },
+  { to: "/pipeline", label: "Pipeline Penerimaan", icon: FileClock, perm: "pnl" },
 
   { type: "section", label: "Akunting (PSAK)", feature: "accounting" },
   { to: "/accounting/coa", label: "Bagan Akun", icon: BookOpen, perm: "accounting", feature: "accounting" },
@@ -58,6 +59,7 @@ const NAV = [
   { to: "/hr/attendance", label: "Absensi", icon: ClipboardCheck, perm: "hr", feature: "hr" },
   { to: "/hr/contracts", label: "Kontrak Kerja", icon: FileSignature, perm: "hr", feature: "hr" },
   { to: "/hr/kasbon", label: "Kasbon Karyawan", icon: Wallet, perm: "hr", feature: "hr" },
+  { to: "/hr/pph21", label: "PPh21 Karyawan", icon: Receipt, perm: "hr", feature: "hr" },
 
   { type: "section", label: "Perpajakan", feature: "tax" },
   { to: "/tax", label: "PPN & PPh", icon: Percent, perm: "tax", feature: "tax" },
