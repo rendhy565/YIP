@@ -60,31 +60,7 @@
   - Refresh recompute berdasarkan grand_total AWB saat ini (blocked jika ada child settled)
 
 ## Pending / Backlog
-### P1
-- [ ] Blocking modal duplicate AWB (saat submit)
-- [ ] FTL Multidrop mechanics — klarifikasi
-
-### P2
-- [ ] Schedule fields Air (MAWB/HAWB/flight) & Land (truck plate/driver)
-- [ ] Filter bulan di halaman Invoice Tercetak
-- [ ] Fitur Export Word "Form Data Karyawan" (Elvina template)
-- [ ] Refactor `server.py` monolith
-
-### P3 — Integrasi Eksternal (Backlog Diskusi)
-- [ ] **Integrasi Coretax DJP** — auto-generate Faktur Pajak Keluaran ke Coretax API saat invoice dibuat
-  - **Prerequisites dari user (legal/admin)**: sertifikat elektronik DJP aktif, registrasi ASP di portal Coretax, Client ID+Secret sandbox & production, IP whitelist, private key .p12, NPWP+NITKU perusahaan
-  - **Timeline aplikasi ASP di DJP**: 2-4 minggu
-  - **Alternatif quick-win**: Export Coretax-ready Excel/XML untuk manual upload di `coretax.pajak.go.id` (1-2 hari kerja, tidak perlu credentials)
-  - **Phase implementation**:
-    - P0 Foundation: NPWP company + toggle ON/OFF + log table (1 hari)
-    - P1 Sandbox: OAuth flow + sign + POST test faktur (2-3 hari)
-    - P2 Production FPK: auto-post FPK + simpan NSFP + tampilkan QR (2-3 hari)
-    - P3 Reconcile & Retry: manual retry, cancel/replace faktur (2 hari)
-    - P4 Optional Advance: FPM sync + SPT PPN Masa auto-file (5+ hari)
-  - **Endpoint utama Coretax**: `POST /api/v1/tax-invoice` (OAuth2 Bearer + TLS 1.3)
-  - **Response**: NSFP (Nomor Seri Faktur Pajak) + QR code
-  - **Rate limit**: 1000 req/jam default
-  - **Ref**: DJP Developer Portal `developer.djp.pajak.go.id`, sandbox tersedia untuk testing
+_Backlog dikosongkan atas permintaan user (2026-06). Tidak ada item yang direncanakan untuk dieksekusi._
 
 ## Key files of reference
 - Backend: `/app/backend/server.py`
