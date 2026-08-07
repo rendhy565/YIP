@@ -8,6 +8,7 @@ import {
   LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck,
   BookOpen, BookText, Library, Scale, Building, LineChart, Lock,
   UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity, FileSignature, CalendarClock,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 
@@ -105,8 +106,38 @@ export default function Layout({ children }) {
   const loc = useLocation();
   const [open, setOpen] = useState(false);
   const [approvalPending, setApprovalPending] = useState(0);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("sidebar_collapsed") || "[]")); }
+    catch { return new Set(); }
+  });
+
+  const toggleSection = (label) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      try { localStorage.setItem("sidebar_collapsed", JSON.stringify([...next])); } catch (_e) {}
+      return next;
+    });
+  };
 
   useEffect(() => { setOpen(false); }, [loc.pathname]);
+
+  // Auto-expand the section that contains the active route
+  useEffect(() => {
+    let sec = null;
+    for (const item of NAV) {
+      if (item.type === "section") sec = item.label;
+      else if (item.to === loc.pathname) break;
+    }
+    if (sec && collapsed.has(sec)) {
+      setCollapsed((prev) => {
+        const next = new Set(prev); next.delete(sec);
+        try { localStorage.setItem("sidebar_collapsed", JSON.stringify([...next])); } catch (_e) {}
+        return next;
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loc.pathname]);
 
   // Poll approval pending count for badge
   useEffect(() => {
@@ -167,30 +198,43 @@ export default function Layout({ children }) {
             }
             pruned.push(it);
           }
-          return pruned.map((item, i) => {
-            if (item.type === "section") {
-              return (
-                <div key={`s-${i}`} className="mt-4 mb-1 px-3 text-[10px] uppercase tracking-[0.18em] text-slate-500 font-bold">
-                  {item.label}
-                </div>
+          return (() => {
+            const nodes = [];
+            let curSection = null;
+            for (let i = 0; i < pruned.length; i++) {
+              const item = pruned[i];
+              if (item.type === "section") {
+                curSection = item.label;
+                const isCol = collapsed.has(item.label);
+                nodes.push(
+                  <button key={`s-${i}`} data-testid={`nav-section-${item.label.replace(/[^a-zA-Z0-9]+/g, "-")}`}
+                    onClick={() => toggleSection(item.label)}
+                    className="w-full mt-4 mb-1 px-3 py-1 flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-slate-500 font-bold hover:text-slate-300 transition-colors">
+                    <span>{item.label}</span>
+                    {isCol ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  </button>
+                );
+                continue;
+              }
+              if (curSection && collapsed.has(curSection)) continue;
+              const Icon = item.icon;
+              const active = loc.pathname === item.to;
+              const badgeCount = item.badge === "approval_pending" ? approvalPending : 0;
+              nodes.push(
+                <Link key={item.to} to={item.to} data-testid={`nav-${item.to.replace(/\//g, "-")}`}
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors ${active ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
+                  <Icon size={16} />
+                  <span className="flex-1">{item.label}</span>
+                  {badgeCount > 0 && (
+                    <span data-testid={`badge-${item.to.replace(/\//g, "-")}`} className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold">
+                      {badgeCount > 99 ? "99+" : badgeCount}
+                    </span>
+                  )}
+                </Link>
               );
             }
-            const Icon = item.icon;
-            const active = loc.pathname === item.to;
-            const badgeCount = item.badge === "approval_pending" ? approvalPending : 0;
-            return (
-              <Link key={item.to} to={item.to} data-testid={`nav-${item.to.replace(/\//g, "-")}`}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors ${active ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
-                <Icon size={16} />
-                <span className="flex-1">{item.label}</span>
-                {badgeCount > 0 && (
-                  <span data-testid={`badge-${item.to.replace(/\//g, "-")}`} className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-red-500 text-white text-[10px] font-bold">
-                    {badgeCount > 99 ? "99+" : badgeCount}
-                  </span>
-                )}
-              </Link>
-            );
-          });
+            return nodes;
+          })();
         })()}
       </nav>
 

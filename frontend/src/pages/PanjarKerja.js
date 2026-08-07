@@ -297,6 +297,18 @@ export default function PanjarKerja() {
     finally { setSettling(false); }
   };
 
+  const deleteRound = async (roundId) => {
+    if (!historyFor) return;
+    if (!window.confirm("Hapus ronde settle ini? Jurnal & biaya yang dibuat pada ronde ini akan dibatalkan (reverse). Hanya bisa dilakukan selama panjar masih Open.")) return;
+    try {
+      const { data } = await api.delete(`/cash-advances/${historyFor.id}/settle/${roundId}`);
+      toast.success("Ronde settle dihapus & jurnal di-reverse");
+      setHistoryFor(data);   // refresh modal dengan data terbaru
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+
   const del = async (id) => {
     if (!window.confirm("Hapus panjar ini?")) return;
     try { await api.delete(`/cash-advances/${id}`); toast.success("Dihapus"); load(); }
@@ -963,6 +975,7 @@ export default function PanjarKerja() {
                       <th className="px-2 py-1.5 text-right">Refund</th>
                       <th className="px-2 py-1.5 text-left">Breakdown</th>
                       <th className="px-2 py-1.5 text-left">Notes</th>
+                      {historyFor.status !== "Settled" && <th className="px-2 py-1.5 text-right">Aksi</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -987,10 +1000,20 @@ export default function PanjarKerja() {
                           ) : <span className="text-slate-400">—</span>}
                         </td>
                         <td className="px-2 py-1.5 text-xs text-slate-600">{h.notes || "-"}</td>
+                        {historyFor.status !== "Settled" && (
+                          <td className="px-2 py-1.5 text-right">
+                            {h.round_id ? (
+                              <button onClick={() => deleteRound(h.round_id)} data-testid={`history-del-${i}`}
+                                className="text-rose-600 hover:text-rose-800 p-1 rounded hover:bg-rose-50" title="Hapus ronde settle ini">
+                                <Trash2 size={13} />
+                              </button>
+                            ) : <span className="text-[9px] text-slate-300" title="Data lama tanpa penanda ronde">—</span>}
+                          </td>
+                        )}
                       </tr>
                     ))}
                     {(historyFor.settle_history || []).length === 0 && (
-                      <tr><td colSpan={6} className="px-2 py-4 text-center text-slate-400 text-xs">Belum ada history settle.</td></tr>
+                      <tr><td colSpan={historyFor.status !== "Settled" ? 7 : 6} className="px-2 py-4 text-center text-slate-400 text-xs">Belum ada history settle.</td></tr>
                     )}
                   </tbody>
                 </table>

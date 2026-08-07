@@ -4,6 +4,7 @@ load_dotenv()
 import os
 import re
 import json
+import uuid
 import jwt
 import bcrypt
 from datetime import datetime, timezone, timedelta
@@ -8518,8 +8519,10 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
         sd = datetime.now(timezone.utc)
     cash_acc = data.cash_account_code or ca.get("cash_account_code") or "1101"
 
-    # Append to history (each partial settle event)
+    # Append to history (each partial settle event) — tagged dengan round_id untuk edit/undo
+    rid = str(uuid.uuid4())
     history_evt = {
+        "round_id": rid,
         "settle_date": sd,
         "actual_amount": actual,
         "refund_amount": refund,
@@ -8593,6 +8596,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                 "source": "cash_advance_settle",
                 "source_ref": cid,
                 "source_number": ca["number"],
+                "round_id": rid,
                 "created_by": user["id"],
                 "created_at": sd,
             }
@@ -8614,6 +8618,7 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                 "cash_account_code": cash_acc,
                 "source": "cash_advance_settle",
                 "source_ref": cid,
+                "round_id": rid,
                 "transaction_date": row_date,
                 "created_by": user["id"],
                 "created_at": sd,
@@ -8651,10 +8656,64 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
                 description=f"Settle panjar kerja {ca['number']}" + (" (partial)" if not (is_full or transfer_this_time) else (" (transfer sisa)" if transfer_this_time else " (final)")),
                 lines=lines,
                 reference_type="cash_advance_settle", reference_id=cid, posted_by=user["id"],
+                extra_fields={"round_id": rid},
             )
     except HTTPException:
         pass
     return serialize(await db.cash_advances.find_one({"_id": _oid(cid)}))
+
+@app.delete("/api/cash-advances/{cid}/settle/{round_id}")
+async def delete_settle_round(cid: str, round_id: str,
+                              user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Hapus/undo satu ronde settle panjar. Hanya boleh saat status masih 'Open'
+    (kalau sudah 'Settled', riwayat settle terkunci)."""
+    ca = await db.cash_advances.find_one({"_id": _oid(cid)})
+    if not ca:
+        raise HTTPException(404, "Panjar tidak ditemukan")
+    if ca.get("status") == "Settled":
+        raise HTTPException(400, "Panjar sudah Settled — riwayat settle terkunci dan tidak bisa diedit.")
+    history = ca.get("settle_history", []) or []
+    target = next((h for h in history if h.get("round_id") == round_id), None)
+    if not target:
+        raise HTTPException(404, "Ronde settle tidak ditemukan (mungkin data lama tanpa round_id).")
+    # 1) Reverse jurnal & biaya turunan ronde ini
+    await db.journal_entries.delete_many({"reference_type": "cash_advance_settle", "reference_id": cid, "round_id": round_id})
+    await db.awb_costs.delete_many({"source_ref": cid, "round_id": round_id})
+    await db.fixed_costs.delete_many({"source_ref": cid, "round_id": round_id})
+    # 2) Un-consume carry-over yang dipakai ronde ini (kembalikan ke panjar sumbernya)
+    for co in (target.get("carry_over_applied") or []):
+        src_id = co.get("source_id") or co.get("cash_advance_id")
+        if src_id:
+            try:
+                await db.cash_advances.update_one(
+                    {"_id": _oid(src_id)},
+                    {"$set": {"carry_over_consumed_by": None, "carry_over_consumed_at": None}},
+                )
+            except Exception:
+                pass
+    # 3) Hitung ulang total dari ronde yang tersisa
+    remaining = [h for h in history if h.get("round_id") != round_id]
+    new_settled = round(sum(float(h.get("actual_amount", 0) or 0) for h in remaining), 2)
+    new_refund = round(sum(float(h.get("refund_amount", 0) or 0) for h in remaining), 2)
+    new_co_total = round(sum(sum(float(c.get("amount", 0) or 0) for c in (h.get("carry_over_applied") or [])) for h in remaining), 2)
+    panjar_amt = float(ca.get("amount", 0) or 0)
+    total_budget = round(panjar_amt + new_co_total, 2)
+    new_remaining = round(total_budget - (new_settled + new_refund), 2)
+    upd = {
+        "settle_history": remaining,
+        "settled_amount": new_settled,
+        "refund_amount": new_refund,
+        "carry_over_applied_total": new_co_total,
+        "remaining_amount": new_remaining,
+        "status": "Open",
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if not remaining:
+        upd["settled_at"] = None
+        upd["settled_by"] = None
+    await db.cash_advances.update_one({"_id": _oid(cid)}, {"$set": upd})
+    return serialize(await db.cash_advances.find_one({"_id": _oid(cid)}))
+
 
 @app.delete("/api/cash-advances/{cid}")
 async def delete_cash_advance(cid: str, user: dict = Depends(require_role("administrator"))):
