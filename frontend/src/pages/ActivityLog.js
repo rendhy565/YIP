@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtDate, parseServerDate } from "../lib/utils";
-import { Activity, ChevronDown, ChevronRight } from "lucide-react";
+import { Activity, ChevronRight, X } from "lucide-react";
 
 const ACTION_COLORS = {
   create: "bg-emerald-50 text-emerald-800 border-emerald-200",
@@ -15,7 +15,7 @@ const ACTION_COLORS = {
 
 export default function ActivityLog() {
   const [rows, setRows] = useState([]);
-  const [expanded, setExpanded] = useState(null);
+  const [detailRow, setDetailRow] = useState(null);
   const [filters, setFilters] = useState({
     start_date: new Date(Date.now() - 7*86400000).toISOString().slice(0,10),
     end_date: new Date().toISOString().slice(0,10),
@@ -34,7 +34,7 @@ export default function ActivityLog() {
 
   return (
     <div data-testid="activity-log-page">
-      <PageHeader title="Activity Log" subtitle="Audit trail semua aksi CRUD yang dilakukan user di sistem — klik baris untuk lihat detail perubahan."/>
+      <PageHeader title="Activity Log" subtitle="Audit trail semua aksi CRUD yang dilakukan user di sistem — klik baris untuk lihat detail."/>
 
       <Card className="p-4 mb-5">
         <div className="flex flex-wrap items-end gap-3">
@@ -68,61 +68,85 @@ export default function ActivityLog() {
           </tr></thead>
           <tbody>
             {rows.map((r) => {
-              const isOpen = expanded === r.id;
               const detailEntries = r.details && typeof r.details === "object" ? Object.entries(r.details) : [];
               const hasDetail = detailEntries.length > 0 || r.changes;
               return (
-                <React.Fragment key={r.id}>
-                  <tr data-testid={`activity-row-${r.id}`} className={`${hasDetail ? "cursor-pointer hover:bg-slate-50" : ""}`} onClick={() => hasDetail && setExpanded(isOpen ? null : r.id)}>
-                    <Td className="text-xs font-mono text-slate-700 whitespace-nowrap">{parseServerDate(r.timestamp).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric" })} <span className="text-slate-400">{parseServerDate(r.timestamp).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })} WIB</span></Td>
-                    <Td className="font-semibold">{r.user_name || "—"}</Td>
-                    <Td><span className="text-[10px] uppercase font-bold text-slate-500">{r.user_role || "—"}</span></Td>
-                    <Td>
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${ACTION_COLORS[r.action] || "bg-slate-50 text-slate-700 border-slate-200"}`}>
-                        {r.action_label || r.action}
-                      </span>
-                    </Td>
-                    <Td className="text-xs font-semibold text-slate-700">{r.module_label || r.target_type}</Td>
-                    <Td className="text-xs">{r.entity_label ? <span className="font-semibold text-slate-800">{r.entity_label}</span> : (r.target_id ? <span className="text-[10px] text-slate-400">#{(r.target_id||"").slice(-6)}</span> : "—")}</Td>
-                    <Td className="text-xs text-slate-600 max-w-md">
-                      <div className="flex items-start gap-1">
-                        {hasDetail && (isOpen ? <ChevronDown size={13} className="mt-0.5 shrink-0 text-slate-400"/> : <ChevronRight size={13} className="mt-0.5 shrink-0 text-slate-400"/>)}
-                        <span className={isOpen ? "" : "line-clamp-1"}>{r.changes || r.summary || `${r.method} ${r.path}`}</span>
-                      </div>
-                    </Td>
-                  </tr>
-                  {isOpen && (
-                    <tr className="bg-slate-50">
-                      <Td colSpan={7} className="p-0">
-                        <div className="px-6 py-3">
-                          <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 mb-2">Detail Perubahan</div>
-                          {detailEntries.length > 0 ? (
-                            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-2">
-                              {detailEntries.map(([k, v]) => {
-                                const isObj = v !== null && typeof v === "object";
-                                const val = isObj ? JSON.stringify(v, null, 2) : String(v);
-                                const isLong = isObj || val.length > 40;
-                                return (
-                                  <div key={k} className={`text-xs min-w-0 ${isLong ? "col-span-2 md:col-span-3 xl:col-span-4" : ""}`}>
-                                    <div title={k} className="text-[10px] uppercase tracking-wide font-semibold text-slate-400 truncate">{k}</div>
-                                    <pre className="font-mono text-slate-800 whitespace-pre-wrap break-words m-0 mt-0.5">{val}</pre>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : <div className="text-xs text-slate-500">{r.changes || "Tidak ada detail field."}</div>}
-                          <div className="mt-2 text-[10px] text-slate-400 font-mono">{r.method} {r.path}</div>
-                        </div>
-                      </Td>
-                    </tr>
-                  )}
-                </React.Fragment>
+                <tr key={r.id} data-testid={`activity-row-${r.id}`} className={hasDetail ? "cursor-pointer hover:bg-slate-50" : ""} onClick={() => hasDetail && setDetailRow(r)}>
+                  <Td className="text-xs font-mono text-slate-700 whitespace-nowrap">{parseServerDate(r.timestamp).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric" })} <span className="text-slate-400">{parseServerDate(r.timestamp).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })} WIB</span></Td>
+                  <Td className="font-semibold">{r.user_name || "—"}</Td>
+                  <Td><span className="text-[10px] uppercase font-bold text-slate-500">{r.user_role || "—"}</span></Td>
+                  <Td>
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${ACTION_COLORS[r.action] || "bg-slate-50 text-slate-700 border-slate-200"}`}>
+                      {r.action_label || r.action}
+                    </span>
+                  </Td>
+                  <Td className="text-xs font-semibold text-slate-700">{r.module_label || r.target_type}</Td>
+                  <Td className="text-xs">{r.entity_label ? <span className="font-semibold text-slate-800">{r.entity_label}</span> : (r.target_id ? <span className="text-[10px] text-slate-400">#{(r.target_id||"").slice(-6)}</span> : "—")}</Td>
+                  <Td className="text-xs text-slate-600 max-w-md">
+                    <div className="flex items-center gap-1">
+                      <span className="line-clamp-1">{r.changes || r.summary || `${r.method} ${r.path}`}</span>
+                      {hasDetail && <ChevronRight size={13} className="shrink-0 text-slate-400"/>}
+                    </div>
+                  </Td>
+                </tr>
               );
             })}
             {rows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-10"><Activity size={28} className="mx-auto opacity-30 mb-2"/>Belum ada aktivitas.</Td></tr>}
           </tbody>
         </Table>
       </Card>
+
+      {/* Detail modal */}
+      {detailRow && (() => {
+        const r = detailRow;
+        const detailEntries = r.details && typeof r.details === "object" ? Object.entries(r.details) : [];
+        const meta = [
+          ["Waktu", `${parseServerDate(r.timestamp).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric" })} ${parseServerDate(r.timestamp).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" })} WIB`],
+          ["User", r.user_name || "—"],
+          ["Role", (r.user_role || "—").toUpperCase()],
+          ["Aksi", r.action_label || r.action],
+          ["Modul", r.module_label || r.target_type || "—"],
+          ["Target", r.entity_label || (r.target_id ? `#${r.target_id.slice(-6)}` : "—")],
+        ];
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto" onClick={() => setDetailRow(null)} data-testid="activity-detail-modal">
+            <Card className="w-full max-w-4xl my-8 p-0 overflow-hidden" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between px-5 py-3 border-b border-slate-200 bg-slate-50">
+                <div className="font-heading font-black text-lg text-slate-900">Detail Aktivitas</div>
+                <button data-testid="activity-detail-close" onClick={() => setDetailRow(null)} className="p-1 hover:bg-slate-200 rounded"><X size={18}/></button>
+              </div>
+              <div className="p-5 max-h-[75vh] overflow-y-auto">
+                {/* Meta */}
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3 mb-5">
+                  {meta.map(([k, v]) => (
+                    <div key={k} className="min-w-0">
+                      <div className="text-[10px] uppercase tracking-wide font-semibold text-slate-400">{k}</div>
+                      <div className="text-sm font-semibold text-slate-800 break-words">{v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 mb-2 pt-3 border-t border-slate-100">Detail Perubahan</div>
+                {detailEntries.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-3">
+                    {detailEntries.map(([k, v]) => {
+                      const isObj = v !== null && typeof v === "object";
+                      const val = isObj ? JSON.stringify(v, null, 2) : String(v);
+                      const isLong = isObj || val.length > 60;
+                      return (
+                        <div key={k} className={`min-w-0 ${isLong ? "sm:col-span-2 md:col-span-3" : ""}`}>
+                          <div title={k} className="text-[10px] uppercase tracking-wide font-semibold text-slate-400 truncate">{k}</div>
+                          <pre className={`font-mono text-xs text-slate-800 whitespace-pre-wrap break-words m-0 mt-0.5 ${isObj ? "bg-slate-50 border border-slate-200 rounded p-2 max-h-64 overflow-auto" : ""}`}>{val}</pre>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : <div className="text-sm text-slate-500">{r.changes || "Tidak ada detail field."}</div>}
+                <div className="mt-4 pt-3 border-t border-slate-100 text-[10px] text-slate-400 font-mono">{r.method} {r.path}</div>
+              </div>
+            </Card>
+          </div>
+        );
+      })()}
     </div>
   );
 }
