@@ -1321,6 +1321,7 @@ ACTIVITY_SUBACTION_LABELS = {
     "revert-to-open": "Kembalikan ke Open", "bulk-revert-to-open": "Bulk Kembalikan ke Open",
     "tracking": "Update Tracking", "reconcile": "Rekonsiliasi", "settle": "Settle",
     "reclass-to-accrue": "Reklas ke Accrue", "cancel": "Batalkan", "mark-printed": "Tandai Dicetak",
+    "bulk-settle": "Bulk Settle Hutang Vendor",
     "po-number": "Ubah No. PO", "stop": "Hentikan", "match": "Cocokkan", "unmatch": "Batal Cocok",
     "depreciate": "Susutkan Aset", "password": "Ubah Password", "copy": "Salin", "run": "Jalankan",
     "run-due": "Jalankan Jatuh Tempo", "execute-once": "Eksekusi Sekali", "simulate": "Simulasi",
@@ -2323,6 +2324,30 @@ async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depend
     except HTTPException as e:
         return {"ok": True, "journal_warning": e.detail, "pph_amount": pph_amount, "net_paid": net_paid}
     return {"ok": True, "pph_type": pph_type_label, "pph_rate": pph_rate, "pph_amount": pph_amount, "net_paid": net_paid, "gross": gross}
+
+class BulkSettleIn(BaseModel):
+    cost_ids: List[str] = []
+    cash_account_code: Optional[str] = None
+
+@app.post("/api/costs/bulk-settle")
+async def bulk_settle(data: BulkSettleIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Settle banyak hutang vendor (Accrue → Cash) sekaligus. Hanya id yang dikirim
+    (yang sudah difilter di frontend) yang diproses."""
+    settled, skipped = [], []
+    for cid in data.cost_ids:
+        try:
+            cost = await db.awb_costs.find_one({"_id": _oid(cid)})
+            if not cost:
+                skipped.append({"id": cid, "reason": "tidak ditemukan"}); continue
+            if cost.get("payment_type") != "Accrue":
+                skipped.append({"id": cid, "reason": "bukan Accrue"}); continue
+            await settle_cost(cid, SettleIn(cash_account_code=data.cash_account_code), user)
+            settled.append(cid)
+        except HTTPException as e:
+            skipped.append({"id": cid, "reason": e.detail})
+        except Exception as e:
+            skipped.append({"id": cid, "reason": str(e)})
+    return {"settled": settled, "skipped": skipped, "settled_count": len(settled), "skipped_count": len(skipped)}
 
 @app.delete("/api/costs/{cid}")
 async def delete_cost(cid: str, confirm: bool = False, user: dict = Depends(get_current_user)):

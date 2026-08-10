@@ -1,0 +1,16 @@
+{
+  "summary": "Frontend-only test of AccrueSettlement (/arc/accrue) — bulk-paid + month filter + filter-aware select-all. Login admin/admin123 succeeded. Verified: (1) Month filter dropdown 'accrue-month-filter' has 'Semua Bulan' + Indonesian labels (Juli 2026, Juni 2026, April 2026, Maret 2026, Februari 2026, ...); selecting Juli 2026 reduced 643/643 → 13/643 and counter '{filtered} dari {total} hutang' updated correctly. (2) CRITICAL SAFETY: With vendor filter='ADITYA VENDOR' reducing to 2/643, clicking 'accrue-select-all' selected exactly 2, NOT 643. Bulk-Paid button label was 'Bulk Paid (2)'. Typing in accrue-search cleared the selection immediately. (3) Selected 1 row (AWB 202034, KALIMA, Rp 23.000.000) via accrue-check-<id>; clicked accrue-bulk-paid-btn → POST /api/costs/bulk-settle returned 200 with {settled_count:1, skipped_count:0, settled:['6a5ac28b736c214a7d66094a']}. Row disappeared from Accrue (total 643→642), appeared in Paid Vendor list with reclass-btn-<id>. (4) Restored via reclass-btn — POST /api/costs/{id}/reclass-to-accrue returned 200, total returned to 643. (5) Per-row settle-btn-<id> still present, no layout breakage from new checkbox column.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% (4/4 features)"},
+  "seed_data_creation": "None. Temporarily settled 1 row (id 6a5ac28b736c214a7d66094a, AWB 202034, vendor KALIMA, Rp 23.000.000) then reclassed back. Baseline 643 unsettled Accrue rows fully restored; 96 Paid Vendor rows restored to 96.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin / admin123 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "AccrueSettlement.js at /arc/accrue verified end-to-end. Filter-aware select-all correctly implemented via selectableIds=filtered.map(id) and useEffect clearing selected on [q,vendor,monthFilter]. Prior payments-page incident (select-all ignoring filter) not reproducible here. Data was restored — no cleanup needed.",
+  "rca_of_the_issue": "N/A — feature functioning as designed."
+}

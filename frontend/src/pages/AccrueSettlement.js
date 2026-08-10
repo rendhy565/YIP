@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { CheckCircle2, Wallet, Search, Undo2, BarChart3, ChevronDown, ChevronRight, FileSpreadsheet, Layers } from "lucide-react";
+import { CheckCircle2, Wallet, Search, Undo2, BarChart3, ChevronDown, ChevronRight, FileSpreadsheet, Layers, CheckSquare, Square } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -17,7 +17,10 @@ export default function AccrueSettlement() {
   const [agingExpanded, setAgingExpanded] = useState({});
   const [q, setQ] = useState("");
   const [vendor, setVendor] = useState("");
+  const [monthFilter, setMonthFilter] = useState("");
   const [filterMode, setFilterMode] = useState("AND");
+  const [selected, setSelected] = useState(new Set());
+  const [bulkSaving, setBulkSaving] = useState(false);
 
   const [qPaid, setQPaid] = useState("");
 
@@ -61,14 +64,55 @@ export default function AccrueSettlement() {
 
   const vendors = useMemo(() => Array.from(new Set([...rows, ...paidRows].map((r) => r.vendor_name).filter(Boolean))).sort(), [rows, paidRows]);
 
+  const MONTH_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+  const monthOptions = useMemo(() => {
+    const set = new Set();
+    rows.forEach((r) => { if (r.created_at) set.add(String(r.created_at).slice(0, 7)); });
+    return Array.from(set).sort().reverse().map((ym) => {
+      const [y, m] = ym.split("-");
+      return { value: ym, label: `${MONTH_ID[parseInt(m, 10) - 1]} ${y}` };
+    });
+  }, [rows]);
+
   const filtered = useMemo(() => {
     const qStr = q.trim().toLowerCase();
     const fns = [];
     if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.vendor_name || ""} ${r.description || ""}`.toLowerCase().includes(qStr));
     if (vendor) fns.push((r) => r.vendor_name === vendor);
+    if (monthFilter) fns.push((r) => String(r.created_at || "").slice(0, 7) === monthFilter);
     if (fns.length === 0) return rows;
     return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
-  }, [rows, q, vendor, filterMode]);
+  }, [rows, q, vendor, monthFilter, filterMode]);
+
+  // Bersihkan pilihan tiap kali filter berubah — bulk hanya mengenai yang terfilter
+  useEffect(() => { setSelected(new Set()); }, [q, vendor, monthFilter]);
+
+  const selectableIds = filtered.map((r) => r.id);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
+  const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
+  const toggleAll = () => {
+    const n = new Set(selected);
+    if (allSelected) selectableIds.forEach((id) => n.delete(id));
+    else selectableIds.forEach((id) => n.add(id));
+    setSelected(n);
+  };
+
+  const selectedRows = filtered.filter((r) => selected.has(r.id));
+  const selectedTotal = selectedRows.reduce((s, r) => s + (r.amount || 0), 0);
+
+  const bulkSettle = async () => {
+    const ids = selectedRows.map((r) => r.id);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Tandai ${ids.length} hutang vendor (total ${fmtIDR(selectedTotal)}) sebagai PAID?`)) return;
+    setBulkSaving(true);
+    try {
+      const r = await api.post("/costs/bulk-settle", { cost_ids: ids });
+      toast.success(`${r.data.settled_count} hutang di-settle${r.data.skipped_count ? `, ${r.data.skipped_count} di-skip` : ""}`);
+      setSelected(new Set());
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setBulkSaving(false); }
+  };
 
   const paidFiltered = useMemo(() => {
     const s = qPaid.trim().toLowerCase();
@@ -76,7 +120,7 @@ export default function AccrueSettlement() {
     return paidRows.filter((r) => `${r.awb_number || ""} ${r.vendor_name || ""} ${r.description || ""}`.toLowerCase().includes(s));
   }, [paidRows, qPaid]);
 
-  const pag = usePagination(filtered, { resetKey: `${q}|${vendor}|${filterMode}` });
+  const pag = usePagination(filtered, { resetKey: `${q}|${vendor}|${monthFilter}|${filterMode}` });
   const pagPaid = usePagination(paidFiltered, { resetKey: qPaid });
 
   const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
@@ -223,20 +267,39 @@ export default function AccrueSettlement() {
               {vendors.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
+          <div className="min-w-[190px]">
+            <Label>Bulan (Tgl Biaya)</Label>
+            <select data-testid="accrue-month-filter" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} className="h-10 rounded border border-slate-300 px-3 text-sm bg-white w-full">
+              <option value="">Semua Bulan</option>
+              {monthOptions.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
           <div className="ml-auto text-xs text-slate-500">{filtered.length} dari {rows.length} hutang</div>
         </div>
       </Card>
 
       <Card className="mb-6">
-        <div className="px-4 py-3 border-b border-slate-200"><h3 className="font-bold">Hutang Vendor Belum Dibayar (Accrue)</h3></div>
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-3 flex-wrap">
+          <h3 className="font-bold">Hutang Vendor Belum Dibayar (Accrue)</h3>
+          {selected.size > 0 && (
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="text-xs text-slate-600">{selected.size} terpilih · <span className="font-semibold">{fmtIDR(selectedTotal)}</span></span>
+              <Button data-testid="accrue-bulk-paid-btn" variant="success" disabled={bulkSaving} onClick={bulkSettle}>
+                <CheckCircle2 size={14}/> {bulkSaving ? "Memproses..." : `Bulk Paid (${selected.size})`}
+              </Button>
+            </div>
+          )}
+        </div>
         <Table>
           <thead><tr>
+            <Th><button onClick={toggleAll} data-testid="accrue-select-all">{allSelected ? <CheckSquare size={14}/> : <Square size={14}/>}</button></Th>
             <Th>Tanggal</Th><Th>AWB</Th><Th>Vendor</Th><Th>Deskripsi</Th>
             <Th className="text-right">Jumlah</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
             {pag.paged.map((r) => (
-              <tr key={r.id} data-testid={`accrue-row-${r.id}`}>
+              <tr key={r.id} data-testid={`accrue-row-${r.id}`} className={selected.has(r.id) ? "bg-emerald-50" : ""}>
+                <Td><button onClick={() => toggle(r.id)} data-testid={`accrue-check-${r.id}`}>{selected.has(r.id) ? <CheckSquare size={14} className="text-emerald-600"/> : <Square size={14} className="text-slate-400"/>}</button></Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
                 <Td className="font-mono font-semibold">{r.awb_number}</Td>
                 <Td>{r.vendor_name || "-"}</Td>
@@ -249,7 +312,7 @@ export default function AccrueSettlement() {
                 </Td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><Td colSpan={6} className="text-center text-slate-500 py-10">Tidak ada hutang vendor.</Td></tr>}
+            {filtered.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-10">Tidak ada hutang vendor.</Td></tr>}
           </tbody>
         </Table>
         <Pagination {...pag} testid="pagination-accrue"/>
