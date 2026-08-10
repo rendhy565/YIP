@@ -22,7 +22,6 @@ export function PageHeader({ title, subtitle, action }) {
     <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-5 md:mb-6 pb-4 border-b border-slate-200">
       <div className="min-w-0">
         <h1 className="font-heading font-black text-2xl md:text-3xl lg:text-4xl tracking-tight text-slate-900 break-words">{title}</h1>
-        {subtitle && <p className="text-xs md:text-sm text-slate-500 mt-1">{subtitle}</p>}
       </div>
       {action && <div className="flex-shrink-0">{action}</div>}
     </div>

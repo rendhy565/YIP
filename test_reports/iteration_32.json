@@ -1,0 +1,31 @@
+{
+  "summary": "Comprehensive test of Payments page bulk mark-paid filter safety fix, revert-paid endpoints, AWB month filter, and subtitle removal. All 7 requested features PASS. Baseline restored to 0 Paid / 721 Invoiced.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_payments_bulk_revert.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Payments.js still passes a `subtitle` prop to <PageHeader>. PageHeader ignores it now, so it is a no-op but leaves stale copy in code. Consider removing the prop from all callers for cleanliness.",
+    "In `submitBulk`, `awb_ids` is derived from `selectableRows.some(r => r.id === id)` which is O(N*M). For very large filtered sets this is fine but a Set lookup would be cleaner."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_payments_bulk_revert.py (new)"
+  ],
+  "success_rate": {"backend": "100% (4/4)", "frontend": "100% (7/7)"},
+  "seed_data_creation": "Temporarily marked 3 orders Paid during testing (TEST-UI-BULK-01, TEST-UI-SINGLE-01, TEST-UI-SINGLE-02 + backend fixture set); ALL reverted afterward. Verified final baseline: 0 Paid / 721 Invoiced (matches pre-test state).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin / admin123",
+  "context_for_next_testing_agent": "Verified: (1) BUG FIX — select-all in /arc/payments respects current filter: with search='#5' filtering 1 row, click header select-all → Selected=1 (not 721). Bulk Mark Paid then only marked that 1 order Paid on the server (verified via GET /api/orders?status_v=Paid). (2) Selection auto-clears when q OR month filter changes (both tested). (3) AWB month filter dropdown present (data-testid=payments-month-filter) with Indonesian labels ('Juni 2026', 'Mei 2026' …) built from order created_at; selecting a month changed 721→5 rows. (4) Single Mark Paid → revert-paid-<id> button appears; clicking revert (with confirm dialog) returns row to Invoiced, mark-paid button reappears, backend GET /api/orders/{id} shows status=Invoiced, paid_at unset. (5) Backend POST /api/orders/{oid}/revert-paid returns ok=true first call, HTTP 400 on second call (already-Invoiced). (6) POST /api/payments/bulk-revert-paid reverts multiple ids in one call. (7) Subtitles removed on /arc/payments, /arc/pnl, /arc/hr, /arc/orders, /arc/invoices — no <p> descriptive line under h1. Backend bulk_mark_paid was already correct (only marks passed awb_ids); the fix is entirely in the frontend filter/selection logic.",
+  "rca_of_the_issue": "Original bug: toggleAll used the full unfiltered `rows` set, so header select-all selected all 721 outstanding invoices regardless of filter. Fix (in Payments.js): filtered useMemo now includes monthFilter; selectableRows/selectableIds/allSelected/toggleAll derive from `filtered` not `rows`; useEffect clears selection on any of [q, customerId, monthFilter]; submitBulk restricts awb_ids to selectableRows. Backend bulk-mark-paid was already scoped strictly to passed ids and only marks rows currently in Invoiced status (so even a stale unfiltered call would only affect Invoiced orders, which matched the observed damage of 37 Invoiced → Paid). Undo path added via _revert_one_paid + /api/orders/{oid}/revert-paid and /api/payments/bulk-revert-paid, which also refuses (HTTP 400) if payment_receipts exist for the AWB."
+}

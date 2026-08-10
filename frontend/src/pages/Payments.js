@@ -29,6 +29,7 @@ export default function Payments() {
   const [customerId, setCustomerId] = useState("");
   const [customers, setCustomers] = useState([]);
   const [filterMode, setFilterMode] = useState("AND");
+  const [monthFilter, setMonthFilter] = useState("");
   // Multi-receiver payment modal
   const [multiAwb, setMultiAwb] = useState(null);
   const [payments, setPayments] = useState({ receipts: [], grand_total: 0, total_paid: 0, remaining: 0, is_fully_paid: false });
@@ -74,18 +75,37 @@ export default function Payments() {
     const fns = [];
     if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.invoice_number || ""} ${r.external_invoice_number || ""} ${r.customer_name || ""} ${r.origin || ""} ${r.destination || ""}`.toLowerCase().includes(qStr));
     if (customerId) fns.push((r) => r.customer_id === customerId);
+    if (monthFilter) fns.push((r) => String(r.created_at || "").slice(0, 7) === monthFilter);
     if (fns.length === 0) return rows;
     return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
-  }, [rows, q, customerId, filterMode]);
+  }, [rows, q, customerId, monthFilter, filterMode]);
 
-  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${filterMode}` });
+  // Opsi bulan AWB (berdasarkan tanggal AWB / created_at), terbaru dulu
+  const MONTH_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
+  const monthOptions = useMemo(() => {
+    const set = new Set();
+    rows.forEach((r) => { if (r.created_at) set.add(String(r.created_at).slice(0, 7)); });
+    return Array.from(set).sort().reverse().map((ym) => {
+      const [y, m] = ym.split("-");
+      return { value: ym, label: `${MONTH_ID[parseInt(m, 10) - 1]} ${y}` };
+    });
+  }, [rows]);
 
-  // Filter rows selectable — exclude Paid dari toggle & bulk
-  const selectableRows = rows.filter((r) => r.status !== "Paid");
+  // Bersihkan pilihan tiap kali filter berubah — cegah bulk mengenai baris di luar filter
+  useEffect(() => { setSelected(new Set()); }, [q, customerId, monthFilter]);
+
+  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${monthFilter}|${filterMode}` });
+
+  // Baris yang bisa dipilih = HANYA hasil filter yang belum Paid
+  const selectableRows = filtered.filter((r) => r.status !== "Paid");
+  const selectableIds = selectableRows.map((r) => r.id);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
   const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
   const toggleAll = () => {
-    if (selected.size === selectableRows.length) setSelected(new Set());
-    else setSelected(new Set(selectableRows.map((r) => r.id)));
+    const n = new Set(selected);
+    if (allSelected) selectableIds.forEach((id) => n.delete(id));
+    else selectableIds.forEach((id) => n.add(id));
+    setSelected(n);
   };
 
   const openSingle = (r) => {
@@ -118,8 +138,10 @@ export default function Payments() {
   const submitBulk = async () => {
     setSaving(true);
     try {
+      // Hanya AWB terpilih yang masih ada di hasil filter & belum Paid
+      const ids = Array.from(selected).filter((id) => selectableRows.some((r) => r.id === id));
       const r = await api.post("/payments/bulk-mark-paid", {
-        awb_ids: Array.from(selected),
+        awb_ids: ids,
         payment_invoice_number: form.payment_invoice_number || null,
         paid_date: form.paid_date || null,
       });
@@ -128,6 +150,15 @@ export default function Payments() {
       load();
     } catch (e) { toast.error(errMsg(e)); }
     finally { setSaving(false); }
+  };
+
+  const revertPaid = async (r) => {
+    if (!window.confirm(`Batalkan status LUNAS untuk AWB ${r.awb_number}? Jurnal penerimaan pembayaran akan dihapus dan status kembali ke Invoiced.`)) return;
+    try {
+      await api.post(`/orders/${r.id}/revert-paid`);
+      toast.success(`AWB ${r.awb_number} dikembalikan ke Invoiced`);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
   };
 
   // Outstanding hanya dari yg belum lunas (Invoiced); Paid hanya untuk display
@@ -185,6 +216,13 @@ export default function Payments() {
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
+          <div className="min-w-[200px]">
+            <Label>Bulan AWB</Label>
+            <select data-testid="payments-month-filter" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)} className="h-10 rounded border border-slate-300 px-3 text-sm bg-white w-full">
+              <option value="">Semua Bulan</option>
+              {monthOptions.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
           <div className="ml-auto text-xs text-slate-500">{filtered.length} dari {rows.length} invoice</div>
         </div>
       </Card>
@@ -194,7 +232,7 @@ export default function Payments() {
           <thead><tr>
             <Th>
               <button onClick={toggleAll}>
-                {selected.size === rows.length && rows.length > 0 ? <CheckSquare size={14}/> : <Square size={14}/>}
+                {allSelected ? <CheckSquare size={14}/> : <Square size={14}/>}
               </button>
             </Th>
             <Th>AWB</Th><Th>Invoice No</Th><Th>Tanggal</Th><Th>Customer</Th><Th>Rute</Th>
@@ -232,7 +270,14 @@ export default function Payments() {
                 <Td><StatusBadge status={r.status}/></Td>
                 <Td className="text-right">
                   {isPaid ? (
-                    <span className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">✓ Lunas</span>
+                    <div className="inline-flex gap-2 items-center justify-end">
+                      <span className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">✓ Lunas</span>
+                      {canMarkPaid && (
+                        <Button data-testid={`revert-paid-${r.id}`} variant="secondary" onClick={() => revertPaid(r)} className="!bg-red-50 !text-red-700 hover:!bg-red-100 !border-red-200">
+                          <X size={13}/> Batalkan Lunas
+                        </Button>
+                      )}
+                    </div>
                   ) : (
                     <div className="inline-flex gap-1 justify-end">
                       {canMultiPayment && (

@@ -1325,6 +1325,7 @@ ACTIVITY_SUBACTION_LABELS = {
     "depreciate": "Susutkan Aset", "password": "Ubah Password", "copy": "Salin", "run": "Jalankan",
     "run-due": "Jalankan Jatuh Tempo", "execute-once": "Eksekusi Sekali", "simulate": "Simulasi",
     "approve": "Setujui", "reject": "Tolak", "bulk-mark-paid": "Bulk Tandai Lunas",
+    "revert-paid": "Batalkan Lunas", "bulk-revert-paid": "Bulk Batalkan Lunas",
     "kasbon": "Kasbon", "auto-fill-alfa": "Auto-isi Alfa", "bulk-delete": "Hapus Massal",
     "preset": "Preset", "refresh": "Refresh", "import-numbers": "Import Nomor",
     "import-po-numbers": "Import No. PO", "export-fpk": "Export FPK", "import-bkk": "Import BKK",
@@ -3281,6 +3282,51 @@ async def bulk_mark_paid(data: BulkMarkPaidIn, user: dict = Depends(require_role
             pass
         paid.append({"awb_id": sid, "awb_number": o["awb_number"], "amount": o["grand_total"]})
     return {"paid": paid, "skipped": skipped, "paid_count": len(paid), "skipped_count": len(skipped)}
+
+
+async def _revert_one_paid(oid, user):
+    """Batalkan status LUNAS satu order (Paid → Invoiced): hapus jurnal pembayaran
+    otomatis & reset field pembayaran. Ditolak bila ada pembayaran parsial (receipts)."""
+    o = await db.awb_orders.find_one({"_id": oid})
+    if not o:
+        return {"ok": False, "reason": "not found"}
+    if o.get("status") != "Paid":
+        return {"ok": False, "reason": f"status={o.get('status')}"}
+    receipts = await db.payment_receipts.count_documents({"awb_id": oid})
+    if receipts > 0:
+        return {"ok": False, "reason": "punya pembayaran parsial (multi-bayar) — hapus dulu di Multi-Bayar"}
+    await db.journal_entries.delete_many({"reference_type": "payment", "reference_id": str(oid)})
+    await db.awb_orders.update_one(
+        {"_id": oid},
+        {"$set": {"status": "Invoiced"},
+         "$unset": {"paid_at": "", "paid_by": "", "payment_invoice_number": "", "cash_account_code": ""}},
+    )
+    return {"ok": True, "awb_number": o.get("awb_number")}
+
+
+@app.post("/api/orders/{oid}/revert-paid")
+async def revert_paid(oid: str, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    res = await _revert_one_paid(_oid(oid), user)
+    if not res["ok"]:
+        raise HTTPException(400, f"Gagal membatalkan lunas: {res['reason']}")
+    return res
+
+
+@app.post("/api/payments/bulk-revert-paid")
+async def bulk_revert_paid(data: BulkMarkPaidIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    reverted, skipped = [], []
+    for sid in data.awb_ids:
+        try:
+            oid = _oid(sid)
+        except Exception:
+            skipped.append({"awb_id": sid, "reason": "invalid id"})
+            continue
+        res = await _revert_one_paid(oid, user)
+        if res["ok"]:
+            reverted.append({"awb_id": sid, "awb_number": res.get("awb_number")})
+        else:
+            skipped.append({"awb_id": sid, "reason": res["reason"]})
+    return {"reverted": reverted, "skipped": skipped, "reverted_count": len(reverted), "skipped_count": len(skipped)}
 
 # ---------------------------------------------------------------------------
 # Fixed Costs (Expense — Finance only)
