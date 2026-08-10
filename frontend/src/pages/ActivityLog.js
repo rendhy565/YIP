@@ -104,7 +104,7 @@ export default function ActivityLog() {
                                 const isLong = isObj || val.length > 40;
                                 return (
                                   <div key={k} className={`text-xs min-w-0 ${isLong ? "col-span-2 md:col-span-3 xl:col-span-4" : ""}`}>
-                                    <div className="text-[10px] uppercase tracking-wide font-semibold text-slate-400 truncate">{k}</div>
+                                    <div title={k} className="text-[10px] uppercase tracking-wide font-semibold text-slate-400 truncate">{k}</div>
                                     <pre className="font-mono text-slate-800 whitespace-pre-wrap break-words m-0 mt-0.5">{val}</pre>
                                   </div>
                                 );
