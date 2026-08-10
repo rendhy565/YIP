@@ -11350,6 +11350,68 @@ async def import_invoice_numbers_template(user: dict = Depends(require_role("fin
         headers={"Content-Disposition": "attachment; filename=Template_Import_Invoice_Number.xlsx"},
     )
 
+# --- Helpers: pastikan jurnal AR & pembayaran keposting (idempotent) -------
+async def ensure_invoice_ar_posted(inv: dict, posted_by: str) -> bool:
+    """Post jurnal clearance AR untuk sebuah invoice bila belum:
+    DR 1201 (gross) / CR 1290 (dpp) / CR 2210 (ppn). Idempotent via flag
+    ar_recognized + cek reference_type='invoice'. Return True kalau baru diposting."""
+    if inv.get("ar_recognized"):
+        return False
+    if await journal_exists_for("invoice", str(inv["_id"])):
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"ar_recognized": True}})
+        return False
+    awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+    awbs = await db.awb_orders.find({"_id": {"$in": awb_ids_list}}).to_list(1000)
+    total_dpp = sum(float(a.get("total_tariff") or 0) for a in awbs)
+    total_tax = sum(float(a.get("tax_amount") or 0) for a in awbs)
+    gross = round(total_dpp + total_tax, 2)
+    if gross <= 0:
+        return False
+    inv_date = inv.get("invoice_date") or inv.get("first_printed_at") or datetime.now(timezone.utc)
+    lines = [
+        {"account_code": "1201", "debit": gross, "credit": 0, "memo": inv.get("invoice_number")},
+        {"account_code": "1290", "debit": 0, "credit": round(total_dpp, 2), "memo": f"Clear PYMHD {inv.get('invoice_number')}"},
+    ]
+    if total_tax > 0:
+        lines.append({"account_code": "2210", "debit": 0, "credit": round(total_tax, 2), "memo": f"PPN — {inv.get('invoice_number')}"})
+    try:
+        await post_journal(
+            date=inv_date,
+            description=f"Piutang & PPN — Invoice {inv.get('invoice_number')} (import)",
+            lines=lines, reference_type="invoice", reference_id=str(inv["_id"]), posted_by=posted_by,
+        )
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"ar_recognized": True}})
+        return True
+    except HTTPException:
+        return False
+
+
+async def ensure_awb_payment_posted(awb: dict, posted_by: str, cash_code: str = "1101") -> bool:
+    """Post jurnal pembayaran penuh AWB bila belum: DR 1101 / CR 1201 sebesar
+    grand_total. Idempotent via reference_type='payment' + reference_id=awb_id."""
+    ref = str(awb["_id"])
+    if await journal_exists_for("payment", ref):
+        return False
+    amount = round(float(awb.get("grand_total") or 0), 2)
+    if amount <= 0:
+        return False
+    pay_dt = awb.get("paid_at") or datetime.now(timezone.utc)
+    try:
+        await post_journal(
+            date=pay_dt,
+            description=f"Pembayaran (import) - AWB {awb.get('awb_number')}",
+            lines=[
+                {"account_code": cash_code, "debit": amount, "credit": 0, "memo": awb.get("awb_number")},
+                {"account_code": "1201", "debit": 0, "credit": amount, "memo": awb.get("awb_number")},
+            ],
+            reference_type="payment", reference_id=ref, posted_by=posted_by,
+        )
+        return True
+    except HTTPException:
+        return False
+
+
+
 @app.post("/api/invoices/import-numbers")
 async def import_invoice_numbers(
     file: UploadFile = File(...),
@@ -11391,7 +11453,10 @@ async def import_invoice_numbers(
     if not header_row_idx or "awb" not in col_idx:
         raise HTTPException(400, "Header tidak terdeteksi. Pastikan ada kolom 'AWB Number' dan 'Invoice Number'.")
 
-    summary = {"marked_invoiced": 0, "marked_paid": 0, "skipped": 0, "errors": [], "errors_truncated": 0, "samples": []}
+    summary = {"marked_invoiced": 0, "marked_paid": 0, "skipped": 0, "errors": [], "errors_truncated": 0, "samples": [],
+               "ar_journals_posted": 0, "payment_journals_posted": 0}
+    touched_invoice_ids = set()
+    paid_awb_ids = set()
     now = datetime.now(timezone.utc)
     MAX_ERRORS_REPORTED = 50  # cap agar response payload tidak balloon → hindari 500 di gateway
 
@@ -11488,11 +11553,13 @@ async def import_invoice_numbers(
             inv_doc_set["paid_at"] = update_set.get("paid_at")
         if existing_by_awb:
             # Reimport untuk AWB yg sama — cukup update field, jangan sentuh awb_ids
-            await db.invoices.update_one({"_id": existing_by_awb["_id"]}, {"$set": inv_doc_set})
+            inv_oid = existing_by_awb["_id"]
+            await db.invoices.update_one({"_id": inv_oid}, {"$set": inv_doc_set})
         elif existing_by_inv_no:
             # Grouping — tambahkan AWB ini ke invoice yg sudah ada dgn nomor yg sama
+            inv_oid = existing_by_inv_no["_id"]
             await db.invoices.update_one(
-                {"_id": existing_by_inv_no["_id"]},
+                {"_id": inv_oid},
                 {"$set": inv_doc_set, "$addToSet": {"awb_ids": awb["_id"]}},
             )
         else:
@@ -11502,7 +11569,12 @@ async def import_invoice_numbers(
                 "created_at": now,
                 "created_by": user["id"],
             })
-            await db.invoices.insert_one(inv_doc_set)
+            _ins = await db.invoices.insert_one(inv_doc_set)
+            inv_oid = _ins.inserted_id
+
+        touched_invoice_ids.add(inv_oid)
+        if kind == "paid":
+            paid_awb_ids.add(awb["_id"])
 
         if len(summary["samples"]) < 5:
             summary["samples"].append({"awb": awb_no, "invoice": inv_no, "action": kind})
@@ -11513,6 +11585,20 @@ async def import_invoice_numbers(
             summary["errors"].append({"row": ridx, "message": f"Error: {str(ex)[:120]}"})
         else:
             summary["errors_truncated"] += 1
+
+    # === Post jurnal akuntansi utk invoice yang disentuh import ini (idempotent) ===
+    #  - Invoiced → DR 1201 / CR 1290 (+CR 2210 PPN)  (clearance AR)
+    #  - Paid     → clearance AR di atas + pembayaran DR 1101 / CR 1201
+    if not dry_run:
+        for _iid in touched_invoice_ids:
+            inv_obj = await db.invoices.find_one({"_id": _iid})
+            if inv_obj and await ensure_invoice_ar_posted(inv_obj, user["id"]):
+                summary["ar_journals_posted"] += 1
+        for _aid in paid_awb_ids:
+            awb_paid = await db.awb_orders.find_one({"_id": _aid})
+            if awb_paid and await ensure_awb_payment_posted(awb_paid, user["id"]):
+                summary["payment_journals_posted"] += 1
+
     return summary
 
 

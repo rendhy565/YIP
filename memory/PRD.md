@@ -1,5 +1,11 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Fix Jurnal AR Hilang (Jun 2026) — saldo 1290 menggelembung
+- **Akar masalah:** endpoint `POST /api/invoices/import-numbers` menandai AWB Invoiced/Paid + buat dokumen invoice TAPI tidak memposting jurnal clearance `DR 1201 / CR 1290 (+CR 2210)`. Jurnal AR hanya keposting saat cetak (`mark-printed`). Data via import → 1290 (Belum Ditagih) menggelembung, 1201 (AR) kosong. (Preview: 405/409 invoice tercetak tapi hanya 1 ar_recognized.)
+- **Fix kode** (`server.py`): tambah helper `ensure_invoice_ar_posted()` & `ensure_awb_payment_posted()` (idempotent via flag `ar_recognized` + cek `reference_type`). `import-numbers` kini posting jurnal AR utk Invoiced, dan AR+pembayaran (`DR 1101/CR 1201`, ref `payment`) utk Paid, di akhir proses. Diverifikasi end-to-end + idempotent via curl.
+- **Script koreksi data lama:** `/app/backend/scripts/fix_missing_ar_journals.py` (dry-run default, `--apply` utk terapkan). Dijalankan user sendiri di VPS. Dry-run preview: 1290 6,16 M → 1,61 M; 1201 151 jt → 4,70 M (408 jurnal). Terpisah dari `fix_pymhd_journal_amounts.py` (yg sudah dijalankan user).
+
+
 ## COA Terminology Rename (Jun 2026) — permintaan direksi
 - ✅ Rename akun COA (label-only, flow jurnal double-entry TIDAK diubah):
   - `1201` (Piutang Usaha / AR) → **"PYMHD (Piutang Usaha)"**
