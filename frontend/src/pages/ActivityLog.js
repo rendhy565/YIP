@@ -97,13 +97,18 @@ export default function ActivityLog() {
                         <div className="px-6 py-3">
                           <div className="text-[11px] uppercase tracking-wide font-bold text-slate-500 mb-2">Detail Perubahan</div>
                           {detailEntries.length > 0 ? (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1.5">
-                              {detailEntries.map(([k, v]) => (
-                                <div key={k} className="text-xs flex gap-2">
-                                  <span className="font-semibold text-slate-500 min-w-[110px]">{k}</span>
-                                  <span className="font-mono text-slate-800 break-all">{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
-                                </div>
-                              ))}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                              {detailEntries.map(([k, v]) => {
+                                const isObj = v !== null && typeof v === "object";
+                                const val = isObj ? JSON.stringify(v, null, 2) : String(v);
+                                const isLong = isObj || val.length > 50;
+                                return (
+                                  <div key={k} className={`text-xs min-w-0 ${isLong ? "md:col-span-2" : ""}`}>
+                                    <div className="font-semibold text-slate-500 mb-0.5">{k}</div>
+                                    <pre className="font-mono text-slate-800 whitespace-pre-wrap break-words bg-white border border-slate-200 rounded px-2 py-1 m-0 max-h-48 overflow-auto">{val}</pre>
+                                  </div>
+                                );
+                              })}
                             </div>
                           ) : <div className="text-xs text-slate-500">{r.changes || "Tidak ada detail field."}</div>}
                           <div className="mt-2 text-[10px] text-slate-400 font-mono">{r.method} {r.path}</div>

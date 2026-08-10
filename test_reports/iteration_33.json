@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend-only verification of ActivityLog 'Detail Perubahan' expand rendering fix. Logged in as admin, navigated to /arc/activity-log, expanded rows including one with array value awb_ids. Confirmed labels render bold ABOVE values, values render inside bordered monospace <pre> boxes with whitespace-pre-wrap + break-words (no one-character-per-line wrapping), and toggle expand/collapse works without layout breakage. Object/array values are rendered readable (via JSON.stringify with 2-space indent when object). List still loads (200 rows in current date range).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin / admin123 at /arc/login",
+  "context_for_next_testing_agent": "ActivityLog Detail Perubahan layout fix verified. Screenshots at /app/.screenshots/activity_log_expanded.png and /app/.screenshots/activity_log_bulk_expanded.png show label-above-value bordered pre boxes rendering correctly. Array/object values wrap as words, not per character.",
+  "rca_of_the_issue": "Previous break-all inside narrow 3-col grid caused character-level wrapping. Fix replaced break-all with break-words + whitespace-pre-wrap, moved labels above values, and made object/long values md:col-span-2. Verified visually."
+}
