@@ -1,5 +1,17 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## COA Terminology Rename (Jun 2026) — permintaan direksi
+- ✅ Rename akun COA (label-only, flow jurnal double-entry TIDAK diubah):
+  - `1201` (Piutang Usaha / AR) → **"PYMHD (Piutang Usaha)"**
+  - `1290` (Unbilled Revenue) → **"Pendapatan Belum Ditagih (NY PO)"**
+- Alasan: direksi mau AR disebut "PYMHD" (Pendapatan Yang Masih Harus Diterima).
+- Implementasi: `DEFAULT_COA` di `server.py` diubah + blok force-`$set` di `seed_data()` (berlaku otomatis di DB lama saat backend startup/deploy, tidak perlu langkah manual).
+- Dashboard panel "Pipeline PYMHD" (order belum-invoice = 1290) → dilabeli ulang **"Pipeline NY PO"** agar konsisten global. Permission label `view_pymhd_panel` → "Panel Pipeline NY PO".
+- ReceivablePipeline sudah konsisten sejak awal (PYMHD=AR, NY-PO=belum invoice).
+- Verifikasi: curl `/api/accounts` & `/api/reports/balance-sheet` mengembalikan nama baru; Dashboard visual OK. (Testing agent BANNED oleh user — manual verify only.)
+- Catatan deploy: script `fix_pymhd_journal_amounts.py` (koreksi saldo PYMHD legacy) belum dijalankan user — akan dijalankan sekalian saat deploy ini.
+
+
 ## Latest thread requirements
 1. Total Sales terfilter tampil di Daftar AWB ✅
 2. Prorata Vendor: 1 tagihan vendor split proporsional ke banyak AWB berdasarkan sales ✅

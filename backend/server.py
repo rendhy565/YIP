@@ -271,7 +271,7 @@ MODULE_FEATURES: dict = {
         ("view_revenue_kpi", "Kartu Total Pendapatan"),
         ("view_cost_kpi", "Kartu Total Biaya"),
         ("view_hutang_kpi", "Kartu Hutang Vendor"),
-        ("view_pymhd_panel", "Panel Pipeline PYMHD (PSAK 72)"),
+        ("view_pymhd_panel", "Panel Pipeline NY PO (PSAK 72)"),
         ("view_recurring_widget", "Widget Notifikasi Recurring Expense"),
     ],
     "orders_input": [
@@ -608,7 +608,7 @@ DEFAULT_COA = [
     {"code": "1102", "name": "Bank BCA", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
     {"code": "1103", "name": "Bank Mandiri", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_cash": True, "is_system": True},
     {"code": "1104", "name": "Biaya Dibayar di Muka", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
-    {"code": "1201", "name": "Piutang Usaha", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
+    {"code": "1201", "name": "PYMHD (Piutang Usaha)", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     {"code": "1301", "name": "Persediaan", "type": "asset", "subtype": "current_asset", "normal": "debit"},
     {"code": "1501", "name": "Peralatan & Kendaraan", "type": "asset", "subtype": "fixed_asset", "normal": "debit"},
     {"code": "1502", "name": "Akumulasi Penyusutan", "type": "asset", "subtype": "fixed_asset", "normal": "credit"},
@@ -620,7 +620,7 @@ DEFAULT_COA = [
     {"code": "2223", "name": "Hutang PPh 23", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
     {"code": "2230", "name": "Hutang PPN Kurang Bayar", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
     {"code": "2390", "name": "Pendapatan Belum Diakui (Unearned Revenue)", "type": "liability", "subtype": "current_liability", "normal": "credit", "is_system": True},
-    {"code": "1290", "name": "Pendapatan Yang Masih Harus Diterima (PYMHD)", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
+    {"code": "1290", "name": "Pendapatan Belum Ditagih (NY PO)", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     {"code": "1401", "name": "PPN Masukan", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     {"code": "1402", "name": "PPN Lebih Bayar / Kompensasi", "type": "asset", "subtype": "current_asset", "normal": "debit", "is_system": True},
     # 3xxx - EKUITAS
@@ -871,6 +871,17 @@ async def seed_data():
             {"$setOnInsert": {**a, "active": True, "created_at": datetime.now(timezone.utc)}},
             upsert=True,
         )
+
+    # Rename COA per permintaan direksi (label-only, flow jurnal tidak berubah):
+    #   1201 (Piutang Usaha / AR)   → "PYMHD (Piutang Usaha)"
+    #   1290 (Unbilled Revenue)     → "Pendapatan Belum Ditagih (NY PO)"
+    # Force $set agar berlaku juga di DB lama saat deploy.
+    _coa_rename = {
+        "1201": "PYMHD (Piutang Usaha)",
+        "1290": "Pendapatan Belum Ditagih (NY PO)",
+    }
+    for _code, _name in _coa_rename.items():
+        await db.chart_of_accounts.update_one({"code": _code}, {"$set": {"name": _name}})
 
     # Seed Expense Categories (replaces old hardcoded FIXED_COST_CATEGORIES list)
     # For SYSTEM categories: keep posting_type/account_code in sync with DEFAULT_EXPENSE_CATEGORIES
@@ -7392,19 +7403,21 @@ async def patch_awb_extended(oid: str, data: AwbExtendedUpdate, user: dict = Dep
         upd["updated_at"] = datetime.now(timezone.utc)
         upd["updated_by"] = user["id"]
         await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
-        # Re-post journal if AWB has accrued sales (Reconciled status)
-        if o.get("status") == "Reconciled" and any(k in upd for k in ("total_tariff", "tax_amount")):
+        # Jaga jurnal PYMHD tetap sinkron dgn tarif terbaru (cegah saldo 1290 nyasar).
+        # Berlaku selama AWB belum Invoiced/Paid. Satu jurnal PYMHD saja (hindari dobel).
+        if "total_tariff" in upd and o.get("status") in ("Open", "Reconciled"):
+            new_doc = await db.awb_orders.find_one({"_id": _oid(oid)})
+            await db.journal_entries.delete_many({"reference_type": "awb_order_pymhd", "reference_id": oid})
             await db.journal_entries.delete_many({"reference_type": "sales_accrued", "reference_id": oid})
             try:
-                new_doc = await db.awb_orders.find_one({"_id": _oid(oid)})
                 await post_journal(
-                    date=new_doc.get("reconciled_at") or new_doc.get("created_at"),
-                    description=f"Sales Accrual (edited) - {new_doc['awb_number']}",
+                    date=new_doc.get("created_at"),
+                    description=f"PYMHD (edited) - {new_doc['awb_number']}",
                     lines=[
                         {"account_code": "1290", "debit": new_doc["total_tariff"], "credit": 0, "memo": new_doc["awb_number"]},
                         {"account_code": "2390", "debit": 0, "credit": new_doc["total_tariff"], "memo": new_doc["awb_number"]},
                     ],
-                    reference_type="sales_accrued", reference_id=oid, posted_by=user["id"],
+                    reference_type="awb_order_pymhd", reference_id=oid, posted_by=user["id"],
                 )
             except HTTPException:
                 pass

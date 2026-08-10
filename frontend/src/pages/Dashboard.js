@@ -96,8 +96,8 @@ export default function Dashboard() {
             <div className="flex items-center gap-2">
               <Hourglass size={18} className="text-indigo-700"/>
               <div>
-                <div className="font-heading font-bold text-slate-900">Pipeline PYMHD</div>
-                <div className="text-[11px] text-slate-500">Pendapatan Yang Masih Harus Diterima — order belum di-invoice</div>
+                <div className="font-heading font-bold text-slate-900">Pipeline NY PO</div>
+                <div className="text-[11px] text-slate-500">Not Yet PO — order selesai tapi belum di-invoice</div>
               </div>
             </div>
             <div className="text-right">
@@ -110,7 +110,7 @@ export default function Dashboard() {
             <div className="bg-amber-50 border border-amber-200 rounded p-3">
               <div className="text-[10px] uppercase font-bold text-amber-800">Belum Ada Cost</div>
               <div className="font-mono font-bold text-lg text-amber-900" data-testid="pymhd-unrecognized">{fmtIDR(pymhd.unrecognized_amount)}</div>
-              <div className="text-[10px] text-amber-700">Murni PYMHD (jasa belum jalan)</div>
+              <div className="text-[10px] text-amber-700">Murni NY PO (jasa belum jalan)</div>
             </div>
             <div className="bg-emerald-50 border border-emerald-200 rounded p-3">
               <div className="text-[10px] uppercase font-bold text-emerald-800">Sudah Ada Cost</div>
@@ -124,7 +124,7 @@ export default function Dashboard() {
             </div>
           </div>
           <div className="px-5 py-3">
-            <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Top 5 Customer dengan Saldo PYMHD</div>
+            <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-500 mb-2">Top 5 Customer dengan Saldo NY PO</div>
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-[10px] uppercase text-slate-500 border-b border-slate-200">
