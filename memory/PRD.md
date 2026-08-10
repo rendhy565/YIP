@@ -318,3 +318,7 @@ See `/app/memory/test_credentials.md`
   - Filter bulan AWB: dropdown "Bulan AWB" (data-testid payments-month-filter) berdasarkan tanggal AWB (created_at), label Indonesia + "Semua Bulan".
   - Subtitle: `PageHeader` (ui.js) tidak lagi render `subtitle` → hint/tutorial abu-abu di SEMUA halaman hilang (kesan lebih profesional). Prop subtitle dibiarkan (no-op).
   Perlu deploy backend+frontend.
+- Update 2026-06: **(a) Skrip revert bulk-paid utk VPS, (b) field Asuransi di Edit AWB, (c) panduan deploy zero-downtime**.
+  (a) `/app/scripts/revert_bulk_paid.py` — kelompokkan order Paid per paid_at (bulk = 1 timestamp identik), dry-run default, `--latest --apply` revert cluster terbaru, `--paid-at "<iso>" --apply` revert cluster spesifik; skip order yg punya payment_receipts; hapus jurnal payment. Jalankan: `docker exec arc-backend-1 python /app/scripts/revert_bulk_paid.py`.
+  (b) Edit AWB (Recap.js) kini punya section Asuransi (Ya/Tidak + Nilai Polis + Nilai Asuransi) — mirror form input. Backend PATCH /orders/{id}/extended sudah menerima insurance_enabled/polis_amount/insurance_amount (dicek via curl: persist OK). Catatan: input-time insurance TIDAK menambah grand_total (konsisten dgn create); addons invoice tetap dari step Receive.
+  (c) Downtime deploy: (1) frontend rsync JANGAN pakai --delete → chunk lama tetap ada, sesi user aktif tak error; (2) nginx `proxy_next_upstream error timeout http_502 http_503` utk retry saat backend restart ~detik; (3) deploy di jam sepi; zero-downtime penuh butuh 2 replica backend + rolling.

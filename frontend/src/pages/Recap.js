@@ -196,6 +196,9 @@ export default function Recap() {
       armada: r.armada || "",
       driver_name: r.driver_name || "",
       nopol: r.nopol || "",
+      insurance_enabled: !!r.insurance_enabled,
+      polis_amount: r.polis_amount ? String(r.polis_amount) : "",
+      insurance_amount: r.insurance_amount ? String(r.insurance_amount) : "",
     });
   };
 
@@ -221,7 +224,17 @@ export default function Recap() {
         if (payload[k] !== "" && payload[k] !== null) payload[k] = parseFloat(payload[k]);
       });
       if (payload.koli_count !== "" && payload.koli_count !== null) payload.koli_count = parseInt(payload.koli_count, 10);
-      Object.keys(payload).forEach((k) => { if (payload[k] === "" || payload[k] === null) delete payload[k]; });
+      // Asuransi (input-time): kirim eksplisit; kalau tidak aktif set 0
+      payload.insurance_enabled = !!payload.insurance_enabled;
+      if (payload.insurance_enabled) {
+        payload.polis_amount = payload.polis_amount !== "" && payload.polis_amount != null ? parseFloat(payload.polis_amount) : 0;
+        payload.insurance_amount = payload.insurance_amount !== "" && payload.insurance_amount != null ? parseFloat(payload.insurance_amount) : 0;
+      } else {
+        payload.polis_amount = 0;
+        payload.insurance_amount = 0;
+      }
+      const keepZero = new Set(["polis_amount", "insurance_amount", "insurance_enabled"]);
+      Object.keys(payload).forEach((k) => { if (!keepZero.has(k) && (payload[k] === "" || payload[k] === null)) delete payload[k]; });
       await api.patch(`/orders/${editRow.id}/extended`, payload);
       toast.success("AWB diperbarui");
       setEditRow(null);
@@ -584,6 +597,27 @@ export default function Recap() {
                   </div>
                 )}
                 <p className="text-[10px] text-amber-800 mt-2">PPN dihitung dari Selling saja. Addons (asuransi, polis, SPSI, forklift) TIDAK kena PPN.</p>
+              </div>
+
+              {/* ASURANSI SECTION (input-time) */}
+              <div className="md:col-span-3 border border-emerald-200 bg-emerald-50 rounded p-3 -mb-1">
+                <div className="flex items-center gap-4 mb-2">
+                  <Label className="!mb-0 font-bold !text-emerald-900">Asuransi</Label>
+                  <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input data-testid="edit-insurance-yes" type="radio" checked={editForm.insurance_enabled === true} onChange={() => setEditForm({ ...editForm, insurance_enabled: true })}/>
+                    <span>Ya</span>
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 text-sm cursor-pointer">
+                    <input data-testid="edit-insurance-no" type="radio" checked={editForm.insurance_enabled === false} onChange={() => setEditForm({ ...editForm, insurance_enabled: false })}/>
+                    <span>Tidak</span>
+                  </label>
+                </div>
+                {editForm.insurance_enabled && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div><Label>Nilai Polis (IDR)</Label><Input data-testid="edit-polis-amount" type="number" step="0.01" value={editForm.polis_amount} onChange={(e) => setEditForm({ ...editForm, polis_amount: e.target.value })} placeholder="0"/></div>
+                    <div><Label>Nilai Asuransi (IDR)</Label><Input data-testid="edit-insurance-amount" type="number" step="0.01" value={editForm.insurance_amount} onChange={(e) => setEditForm({ ...editForm, insurance_amount: e.target.value })} placeholder="0"/></div>
+                  </div>
+                )}
               </div>
 
               <div><Label>Koli</Label><Input type="number" value={editForm.koli_count} onChange={(e) => setEditForm({ ...editForm, koli_count: e.target.value })}/></div>
