@@ -884,6 +884,24 @@ async def seed_data():
     for _code, _name in _coa_rename.items():
         await db.chart_of_accounts.update_one({"code": _code}, {"$set": {"name": _name}})
 
+    # Backfill Master Vendor dari data historis (biaya vendor & PO) agar halaman
+    # Master Vendor sudah terisi saat deploy. Vendor baru ditandai pph_reviewed=False
+    # → masuk antrian "Perlu Ditinjau" supaya Finance set jenis PPh-nya.
+    _existing_vendors = {v["name"] async for v in db.vendors.find({}, {"name": 1})}
+    _hist_names = set()
+    async for _c in db.awb_costs.find({"cost_category": "Vendor", "vendor_name": {"$nin": [None, ""]}}, {"vendor_name": 1}):
+        _hist_names.add((_c.get("vendor_name") or "").strip())
+    async for _p in db.purchase_orders.find({"vendor_name": {"$nin": [None, ""]}}, {"vendor_name": 1}):
+        _hist_names.add((_p.get("vendor_name") or "").strip())
+    _hist_names.discard("")
+    _to_add = [n for n in _hist_names if n not in _existing_vendors]
+    if _to_add:
+        await db.vendors.insert_many([
+            {"name": n, "pph_type": None, "pph_reviewed": False, "active": True,
+             "backfilled": True, "created_at": datetime.now(timezone.utc)}
+            for n in _to_add
+        ])
+
     # Seed Expense Categories (replaces old hardcoded FIXED_COST_CATEGORIES list)
     # For SYSTEM categories: keep posting_type/account_code in sync with DEFAULT_EXPENSE_CATEGORIES
     # (so changing a default in code propagates to existing DBs)

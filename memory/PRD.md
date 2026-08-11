@@ -10,7 +10,7 @@
   - `VendorIn` += `pph_reviewed` (default true saat disave via master).
 - **Catatan pajak (dikonfirmasi user):** DPP di luar PPN (benar), tak ada vendor non-NPWP (tak perlu 4%), settle sebulan yang sama (timing aman).
 - **Self-test (curl+screenshot):** quick-add idempotent ✓, master update set PPh23+reviewed ✓, gate fires + no-write ✓, Master Vendor & Cost form render ✓. Testing agent TIDAK dipakai (dilarang user).
-- **Follow-up belum dikerjakan:** input vendor di `Recap.js` (cost add) & `PurchaseOrders.js` masih free-text — belum diubah ke VendorSelect. Backfill PPh 23 retroaktif utk 623 cost Cash (Rp 2,44 M) belum diputuskan user.
+- **Backfill Master Vendor otomatis (startup):** `seed_data()` memindai nama vendor dari `awb_costs` (Vendor) & `purchase_orders`, insert yang belum ada ke `db.vendors` (`pph_reviewed=false`, `backfilled=true`). Idempotent. Verifikasi preview: 48→50 (KALIMA, MU Trans ikut), 0 tertinggal. Jadi saat deploy Master Vendor otomatis terisi dari historikal.
 - **Data live user (arc_db) di-restore ke preview `tms_db`** (10.505 dok, Aug 11). Kondisi sehat: 1290=2,79 M (=Open+Reconciled), 1201=3,31 M. 6,75 M yg dulu dilihat = akumulasi debit kotor 1290, bukan saldo net.
 
 
