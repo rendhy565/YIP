@@ -1,10 +1,10 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
 ## Jadwal Kerja Absensi per Karyawan + Tanda Telat (Jun 2026)
-- **Kebutuhan:** jam masuk/pulang & hari kerja bisa custom per orang; absen telat dari jam yang ditentukan diberi tanda.
-- **Backend** (`server.py`): `EmployeeIn` += `work_days[]`, `work_hour_in`, `work_hour_out` (kosong = ikut config global). Helper `_effective_att_config(cfg, employee)` overlay jadwal per-karyawan di atas global. Dipakai di create/update attendance & Excel import (hari kerja per-orang + perhitungan telat/kurang-jam). Badge TELAT/KURANG JAM sudah ada di UI.
-- **Frontend** (`HrPayroll.js`): section "Jadwal Kerja (opsional)" di form karyawan — Jam Masuk, Jam Pulang, chip Hari Kerja (Sen–Min). `Attendance.js` sudah menampilkan badge Telat (menit) & Kurang Jam.
-- **Self-test:** karyawan jam 08:00 → absen 08:20 = Telat 20m (padahal global 08:30 tidak telat) → override per-orang terbukti; 07:58 = tidak telat. Data test dibersihkan; data live utuh. Testing agent TIDAK dipakai.
+- **Kebutuhan:** jam masuk/pulang bisa custom PER HARI PER ORANG (Senin beda dari Selasa dst); kosong = ikut global; absen telat diberi tanda.
+- **Backend** (`server.py`): `EmployeeIn` += `work_days[]`, `work_schedule` (per-hari `{"mon":{"in","out"},...}`), + legacy `work_hour_in/out`. Helper `_effective_att_config(cfg, employee)` overlay jadwal per-karyawan (termasuk merge per-hari `work_schedule`) di atas global. `_get_day_schedule` sudah pilih jam sesuai hari. Dipakai di create/update attendance & Excel import. Badge TELAT/KURANG JAM sudah ada di Attendance UI.
+- **Frontend** (`HrPayroll.js`): section "Jadwal Kerja per Hari" = tabel 7 hari (checkbox hari kerja + jam masuk + jam pulang per hari). Kosong → "ikut global"; tak dicentang → "libur".
+- **Self-test:** karyawan Senin 08:00 & Sabtu 09:00 → Senin 08:20=Telat20m, Sabtu 08:50=tidak telat, Sabtu 09:20=Telat20m (per-hari terbukti). Sebelumnya juga override vs global terbukti. Data test dibersihkan; data live utuh. Testing agent TIDAK dipakai.
 
 ## Vendor Dropdown di Rekap & PO (Jun 2026)
 - `Recap.js` (modal Plot Biaya) & `PurchaseOrders.js` (form Buat PO): input vendor free-text → `VendorSelect` (dropdown master + quick-add "Baru"). Tidak ada lagi ejaan vendor baru liar. Verifikasi: parse OK + PO form render dropdown+Baru.

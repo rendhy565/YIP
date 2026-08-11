@@ -21,7 +21,7 @@ const EMPTY_EMP = {
   emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
   position: "", bpjs_no: "", ptkp_status: "TK/0", pph21_active: false, base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
-  work_days: [], work_hour_in: "", work_hour_out: "",
+  work_days: [], work_schedule: {},
 };
 
 const WORK_DAY_OPTS = [
@@ -631,28 +631,28 @@ export default function HrPayroll() {
                     </Select>
                   </div>
                 </div>
-                {/* Jadwal Kerja per karyawan (override config global absensi) */}
+                {/* Jadwal Kerja per HARI per karyawan (override config global absensi) */}
                 <div className="mt-3 border border-indigo-200 rounded p-3 bg-indigo-50/50" data-testid="emp-schedule-section">
-                  <div className="font-heading font-bold text-sm text-indigo-900 mb-1">Jadwal Kerja (opsional)</div>
-                  <p className="text-[11px] text-slate-500 mb-2">Kosongkan = ikut jadwal global absensi. Isi untuk custom jam & hari kerja orang ini. Absen masuk melebihi jam ini ditandai <b>Telat</b>.</p>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div><Label>Jam Masuk</Label><Input type="time" data-testid="emp-work-in" value={form.work_hour_in || ""} onChange={(e) => setForm({ ...form, work_hour_in: e.target.value })}/></div>
-                    <div><Label>Jam Pulang</Label><Input type="time" data-testid="emp-work-out" value={form.work_hour_out || ""} onChange={(e) => setForm({ ...form, work_hour_out: e.target.value })}/></div>
-                  </div>
-                  <div className="mt-2">
-                    <Label>Hari Kerja</Label>
-                    <div className="flex flex-wrap gap-1.5 mt-1">
-                      {WORK_DAY_OPTS.map((d) => {
-                        const on = (form.work_days || []).includes(d.k);
-                        return (
-                          <button key={d.k} type="button" data-testid={`emp-day-${d.k}`}
-                            onClick={() => { const s = new Set(form.work_days || []); on ? s.delete(d.k) : s.add(d.k); setForm({ ...form, work_days: Array.from(s) }); }}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${on ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                            {d.l}
-                          </button>
-                        );
-                      })}
-                    </div>
+                  <div className="font-heading font-bold text-sm text-indigo-900 mb-1">Jadwal Kerja per Hari (opsional)</div>
+                  <p className="text-[11px] text-slate-500 mb-2">Centang hari kerja lalu isi jam masuk/pulang <b>masing-masing hari</b> (boleh beda tiap hari). Hari yang dikosongkan jam-nya tetap ikut jadwal global. Absen masuk melebihi jam ini ditandai <b>Telat</b>.</p>
+                  <div className="space-y-1.5">
+                    {WORK_DAY_OPTS.map((d) => {
+                      const on = (form.work_days || []).includes(d.k);
+                      const sc = (form.work_schedule || {})[d.k] || {};
+                      const setDay = (patch) => setForm({ ...form, work_schedule: { ...(form.work_schedule || {}), [d.k]: { ...sc, ...patch } } });
+                      const toggleDay = () => { const s = new Set(form.work_days || []); on ? s.delete(d.k) : s.add(d.k); setForm({ ...form, work_days: Array.from(s) }); };
+                      return (
+                        <div key={d.k} className="flex items-center gap-2">
+                          <button type="button" data-testid={`emp-day-${d.k}`} onClick={toggleDay}
+                            className={`w-16 px-2 py-1.5 rounded-lg text-xs font-bold border transition-colors ${on ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-300 bg-white text-slate-500 hover:bg-slate-50"}`}>{d.l}</button>
+                          <Input type="time" data-testid={`emp-in-${d.k}`} className="w-32" disabled={!on} value={sc.in || ""} onChange={(e) => setDay({ in: e.target.value })} />
+                          <span className="text-slate-400 text-xs">s/d</span>
+                          <Input type="time" data-testid={`emp-out-${d.k}`} className="w-32" disabled={!on} value={sc.out || ""} onChange={(e) => setDay({ out: e.target.value })} />
+                          {!on ? <span className="text-[10px] text-slate-400">libur</span>
+                            : (!sc.in && !sc.out) ? <span className="text-[10px] text-slate-400">ikut global</span> : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
                 {/* Override Gaji Lumpsum */}

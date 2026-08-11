@@ -5127,8 +5127,9 @@ class EmployeeIn(BaseModel):
     join_date: Optional[str] = None           # YYYY-MM-DD
     # --- Jadwal Kerja per karyawan (override config global; kosong = ikut global) ---
     work_days: Optional[List[str]] = None     # mis. ["mon","tue","wed","thu","fri","sat"]
-    work_hour_in: Optional[str] = None        # HH:MM jam masuk
-    work_hour_out: Optional[str] = None       # HH:MM jam pulang
+    work_hour_in: Optional[str] = None        # HH:MM jam masuk (default semua hari)
+    work_hour_out: Optional[str] = None       # HH:MM jam pulang (default semua hari)
+    work_schedule: Optional[dict] = None      # per-hari: {"mon":{"in":"08:00","out":"17:00"}, ...}
     active: bool = True
 
 @app.get("/api/hr/employees")
@@ -6316,6 +6317,14 @@ def _effective_att_config(cfg: dict, employee: Optional[dict]) -> dict:
         eff["work_hour_in"] = employee["work_hour_in"]
     if employee.get("work_hour_out"):
         eff["work_hour_out"] = employee["work_hour_out"]
+    # Jadwal per-hari karyawan overlay per-hari global (hanya hari yg diisi; sisanya ikut global)
+    emp_ws = employee.get("work_schedule") or {}
+    if emp_ws:
+        merged = {**(cfg.get("work_schedule") or {})}
+        for dow, v in emp_ws.items():
+            if v and (v.get("in") or v.get("out")):
+                merged[dow] = v
+        eff["work_schedule"] = merged
     return eff
 
 @app.get("/api/hr/attendance-config")
