@@ -1,5 +1,8 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Vendor Dropdown di Rekap & PO (Jun 2026)
+- `Recap.js` (modal Plot Biaya) & `PurchaseOrders.js` (form Buat PO): input vendor free-text → `VendorSelect` (dropdown master + quick-add "Baru"). Tidak ada lagi ejaan vendor baru liar. Verifikasi: parse OK + PO form render dropdown+Baru.
+
 ## Merge Vendor (Master Vendor) (Jun 2026)
 - **Kebutuhan:** beberapa vendor sebenarnya sama tapi beda ejaan → gabung jadi satu.
 - **Backend** `POST /api/vendors/merge` {vendor_ids[], target_name, dry_run}: 

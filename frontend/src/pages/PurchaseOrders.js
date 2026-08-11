@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
 import SearchableSelect from "../components/SearchableSelect";
+import VendorSelect from "../components/VendorSelect";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, X, Trash2, FileSignature, MessageCircle, Edit2, ChevronDown, ChevronRight } from "lucide-react";
@@ -64,11 +65,14 @@ export default function PurchaseOrders() {
   // Inline item edit popup
   const [editItem, setEditItem] = useState(null); // { po_id, idx, item }
   const [savingItem, setSavingItem] = useState(false);
+  const [vendors, setVendors] = useState([]);
+  const loadVendors = () => api.get("/vendors").then((r) => setVendors(r.data || [])).catch(() => {});
 
   const load = async () => {
     const [po, os] = await Promise.all([api.get("/purchase-orders"), api.get("/orders")]);
     setRows(po.data);
     setAllOrders(os.data);
+    loadVendors();
   };
   useEffect(() => { load(); }, []);
 
@@ -270,7 +274,14 @@ export default function PurchaseOrders() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div className="md:col-span-2">
                   <Label>Nama Vendor *</Label>
-                  <Input data-testid="po-vendor" value={form.vendor_name} onChange={(e) => setForm({ ...form, vendor_name: e.target.value })} required placeholder="Mis. PT. BIG TRUCKING"/>
+                  <VendorSelect
+                    testid="po-vendor-select"
+                    value={form.vendor_name}
+                    onChange={(v) => setForm({ ...form, vendor_name: v })}
+                    vendors={vendors}
+                    onVendorsChange={loadVendors}
+                    required
+                  />
                 </div>
                 <div>
                   <Label>Tanggal *</Label>

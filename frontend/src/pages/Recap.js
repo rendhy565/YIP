@@ -8,6 +8,7 @@ import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircl
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 import CostListModal from "../components/CostListModal";
+import VendorSelect from "../components/VendorSelect";
 import { useCan } from "../lib/useCan";
 
 function todayStr() {
@@ -51,6 +52,8 @@ export default function Recap() {
   const [costFor, setCostFor] = useState(null);
   const [costForm, setCostForm] = useState({ cost_category: "Vendor", amount: "", description: "", vendor_name: "" });
   const [savingCost, setSavingCost] = useState(false);
+  const [vendors, setVendors] = useState([]);
+  const loadVendors = () => api.get("/vendors").then((r) => setVendors(r.data || [])).catch(() => {});
 
   // View cost details popup (shared CostListModal)
   const [viewCostFor, setViewCostFor] = useState(null);
@@ -75,7 +78,7 @@ export default function Recap() {
     setSelectedReconciled(new Set());
   };
 
-  useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); }, []);
+  useEffect(() => { api.get("/customers").then((r) => setCustomers(r.data)); loadVendors(); }, []);
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
 
   // Apply global filters (month + customer) with AND/OR mode
@@ -658,7 +661,16 @@ export default function Recap() {
                 </Select>
               </div>
               {costForm.cost_category === "Vendor" && (
-                <div><Label>Vendor</Label><Input value={costForm.vendor_name} onChange={(e) => setCostForm({ ...costForm, vendor_name: e.target.value })}/></div>
+                <div>
+                  <Label>Vendor</Label>
+                  <VendorSelect
+                    testid="recap-cost-vendor-select"
+                    value={costForm.vendor_name}
+                    onChange={(v) => setCostForm({ ...costForm, vendor_name: v })}
+                    vendors={vendors}
+                    onVendorsChange={loadVendors}
+                  />
+                </div>
               )}
               <div><Label>Jumlah</Label><Input type="number" step="0.01" value={costForm.amount} onChange={(e) => setCostForm({ ...costForm, amount: e.target.value })} required /></div>
               <div><Label>Deskripsi</Label><Input value={costForm.description} onChange={(e) => setCostForm({ ...costForm, description: e.target.value })}/></div>
