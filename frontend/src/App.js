@@ -7,6 +7,7 @@ import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Customers from "./pages/Customers";
+import MasterVendor from "./pages/MasterVendor";
 import Contracts from "./pages/Contracts";
 import OrderInput from "./pages/OrderInput";
 import OrdersList from "./pages/OrdersList";
@@ -104,6 +105,7 @@ export default function App() {
             <Route path="/orders/new" element={<Protected module="orders_input"><Shell><OrderInput /></Shell></Protected>} />
             <Route path="/orders" element={<Protected module="orders_list"><Shell><OrdersList /></Shell></Protected>} />
             <Route path="/customers" element={<Protected module="customers"><Shell><Customers /></Shell></Protected>} />
+            <Route path="/vendors" element={<Protected module="accrue"><Shell><MasterVendor /></Shell></Protected>} />
             <Route path="/contracts" element={<Protected module="contracts"><Shell><Contracts /></Shell></Protected>} />
             <Route path="/costs" element={<Protected module="costs"><Shell><Costs /></Shell></Protected>} />
             <Route path="/accrue" element={<Protected module="accrue"><Shell><AccrueSettlement /></Shell></Protected>} />

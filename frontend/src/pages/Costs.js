@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td } from "../components/ui";
 import SearchableSelect from "../components/SearchableSelect";
+import VendorSelect from "../components/VendorSelect";
 import { errMsg, fmtIDR, fmtDate, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
@@ -13,6 +14,7 @@ export default function Costs() {
   const { user } = useAuth();
   const [orders, setOrders] = useState([]);
   const [costs, setCosts] = useState([]);
+  const [vendors, setVendors] = useState([]);
   const [open, setOpen] = useState(false);
 
   const isOp = user?.role === "operation";
@@ -36,10 +38,12 @@ export default function Costs() {
   const [groups, setGroups] = useState([]);
 
   const loadGroups = () => api.get("/cost-groups").then((r) => setGroups(r.data || [])).catch(() => {});
+  const loadVendors = () => api.get("/vendors").then((r) => setVendors(r.data || [])).catch(() => {});
   const load = async () => {
     const [o, c] = await Promise.all([api.get("/orders"), api.get("/costs")]);
     setOrders(o.data); setCosts(c.data);
     loadGroups();
+    loadVendors();
   };
   useEffect(() => { load(); }, []);
 
@@ -289,7 +293,14 @@ export default function Costs() {
               {form.cost_category === "Vendor" && (
                 <div>
                   <Label>Nama Vendor</Label>
-                  <Input value={form.vendor_name} onChange={(e) => setForm({ ...form, vendor_name: e.target.value })} placeholder="Mis. PT. Truk Cepat"/>
+                  <VendorSelect
+                    testid="cost-vendor-select"
+                    value={form.vendor_name}
+                    onChange={(v) => setForm({ ...form, vendor_name: v })}
+                    vendors={vendors}
+                    onVendorsChange={loadVendors}
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">Pilih dari master. Belum ada? Klik <b>+ Baru</b> — Finance akan set jenis PPh-nya.</p>
                 </div>
               )}
               <div>
@@ -380,7 +391,14 @@ export default function Costs() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <Label>Nama Vendor *</Label>
-                  <Input data-testid="pro-vendor-name" value={proForm.vendor_name} onChange={(e) => setProForm({ ...proForm, vendor_name: e.target.value })} required placeholder="Mis. PT Truk Cepat"/>
+                  <VendorSelect
+                    testid="pro-vendor-select"
+                    value={proForm.vendor_name}
+                    onChange={(v) => setProForm({ ...proForm, vendor_name: v })}
+                    vendors={vendors}
+                    onVendorsChange={loadVendors}
+                    required
+                  />
                 </div>
                 <div>
                   <Label>Periode Bulan *</Label>

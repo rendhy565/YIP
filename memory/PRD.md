@@ -1,5 +1,19 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Master Vendor + Alur PPh 23 (Opsi B) (Jun 2026)
+- **Konteks:** Semua 48 vendor `pph_type` kosong → PPh 23 tak pernah kepotong (2223 = 0). Penyebab: tak ada UI kelola master vendor; nama vendor selalu free-text.
+- **Solusi (Opsi B — quick-add + antrian review):**
+  - **Halaman baru `MasterVendor.js`** (route `/vendors`, menu "Master Vendor", perm `accrue` → Finance/Admin). Kelola vendor: nama, NPWP, **jenis PPh** (PPh23 2% / PPh15 2% / PP23UMKM 0,5% / Non-PPh), rekening. Simpan = tandai `pph_reviewed=true`. Ada nudge + filter "N vendor belum dikonfigurasi PPh".
+  - **Quick-add** `POST /api/vendors/quick` (idempotent, `pph_reviewed=false`) — Operation bisa tambah vendor baru saat input biaya tanpa terblok.
+  - **`components/VendorSelect.js`**: dropdown vendor master + tombol "＋ Baru" — dipakai di form Biaya (single + prorata) di `Costs.js`. Vendor free-text diganti pilihan master (nama konsisten → settle pasti nemu pph_type).
+  - **Warning gate saat settle** (`SettleIn.force`): kalau vendor `pph_reviewed` belum true → `settle_cost` balikin `needs_confirmation` (tanpa write); Finance konfirmasi dulu. `bulk-settle` auto `force=True`. `AccrueSettlement.settle` handle needs_confirmation.
+  - `VendorIn` += `pph_reviewed` (default true saat disave via master).
+- **Catatan pajak (dikonfirmasi user):** DPP di luar PPN (benar), tak ada vendor non-NPWP (tak perlu 4%), settle sebulan yang sama (timing aman).
+- **Self-test (curl+screenshot):** quick-add idempotent ✓, master update set PPh23+reviewed ✓, gate fires + no-write ✓, Master Vendor & Cost form render ✓. Testing agent TIDAK dipakai (dilarang user).
+- **Follow-up belum dikerjakan:** input vendor di `Recap.js` (cost add) & `PurchaseOrders.js` masih free-text — belum diubah ke VendorSelect. Backfill PPh 23 retroaktif utk 623 cost Cash (Rp 2,44 M) belum diputuskan user.
+- **Data live user (arc_db) di-restore ke preview `tms_db`** (10.505 dok, Aug 11). Kondisi sehat: 1290=2,79 M (=Open+Reconciled), 1201=3,31 M. 6,75 M yg dulu dilihat = akumulasi debit kotor 1290, bukan saldo net.
+
+
 ## Fix Jurnal AR Hilang (Jun 2026) — saldo 1290 menggelembung
 - **Akar masalah:** endpoint `POST /api/invoices/import-numbers` menandai AWB Invoiced/Paid + buat dokumen invoice TAPI tidak memposting jurnal clearance `DR 1201 / CR 1290 (+CR 2210)`. Jurnal AR hanya keposting saat cetak (`mark-printed`). Data via import → 1290 (Belum Ditagih) menggelembung, 1201 (AR) kosong. (Preview: 405/409 invoice tercetak tapi hanya 1 ar_recognized.)
 - **Fix kode** (`server.py`): tambah helper `ensure_invoice_ar_posted()` & `ensure_awb_payment_posted()` (idempotent via flag `ar_recognized` + cek `reference_type`). `import-numbers` kini posting jurnal AR utk Invoiced, dan AR+pembayaran (`DR 1101/CR 1201`, ref `payment`) utk Paid, di akhir proses. Diverifikasi end-to-end + idempotent via curl.

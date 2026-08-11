@@ -52,8 +52,14 @@ export default function AccrueSettlement() {
 
   const settle = async (id) => {
     if (!window.confirm("Tandai hutang vendor ini sebagai PAID (lunas)?")) return;
-    try { await api.post(`/costs/${id}/settle`); toast.success("Hutang ditandai Paid"); load(); }
-    catch (e) { toast.error(errMsg(e)); }
+    try {
+      const r = await api.post(`/costs/${id}/settle`);
+      if (r.data && r.data.needs_confirmation) {
+        if (!window.confirm(`⚠️ ${r.data.warning}`)) return;
+        await api.post(`/costs/${id}/settle`, { force: true });
+      }
+      toast.success("Hutang ditandai Paid"); load();
+    } catch (e) { toast.error(errMsg(e)); }
   };
 
   const reclass = async (id) => {

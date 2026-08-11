@@ -507,6 +507,7 @@ class CostIn(BaseModel):
 
 class SettleIn(BaseModel):
     cash_account_code: Optional[str] = None  # which cash account paid the vendor; default 1101
+    force: bool = False  # lanjut settle walau vendor belum ditinjau Finance (skip warning gate)
 
 class SettingIn(BaseModel):
     key_name: Optional[str] = None
@@ -2287,6 +2288,19 @@ async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depend
     pph_amount = round(gross * pph_rate, 2) if pph_rate > 0 else 0.0
     net_paid = round(gross - pph_amount, 2)
 
+    # Warning gate (Opsi B): vendor sudah ada di master tapi BELUM ditinjau Finance
+    # (mis. hasil quick-add operation). Cegah settle tanpa sadar PPh belum di-set.
+    if vendor_doc is not None and not vendor_doc.get("pph_reviewed", False) and not data.force:
+        return {
+            "ok": False,
+            "needs_confirmation": True,
+            "warning": (
+                f"Vendor '{vendor_name}' belum dikonfigurasi PPh oleh Finance (status: perlu ditinjau). "
+                f"Sebaiknya set jenis PPh di Master Vendor dulu. Lanjutkan settle tanpa potong PPh?"
+            ),
+            "vendor_name": vendor_name,
+        }
+
     update = {
         "payment_type": "Cash",
         "is_settled": True,
@@ -2352,7 +2366,7 @@ async def bulk_settle(data: BulkSettleIn, user: dict = Depends(require_role("ope
                 skipped.append({"id": cid, "reason": "tidak ditemukan"}); continue
             if cost.get("payment_type") != "Accrue":
                 skipped.append({"id": cid, "reason": "bukan Accrue"}); continue
-            await settle_cost(cid, SettleIn(cash_account_code=data.cash_account_code), user)
+            await settle_cost(cid, SettleIn(cash_account_code=data.cash_account_code, force=True), user)
             settled.append(cid)
         except HTTPException as e:
             skipped.append({"id": cid, "reason": e.detail})
@@ -7235,6 +7249,7 @@ class VendorIn(BaseModel):
     address: Optional[str] = None
     bank_account: Optional[str] = None
     pph_type: Optional[str] = None        # PPh23 / PPh15 / PP23UMKM / None
+    pph_reviewed: Optional[bool] = True   # True = sudah ditinjau Finance (klasifikasi PPh final)
     notes: Optional[str] = None
     active: bool = True
 
@@ -7249,6 +7264,27 @@ async def create_vendor(data: VendorIn, user: dict = Depends(get_current_user)):
         raise HTTPException(400, "Vendor dengan nama tersebut sudah ada")
     doc = data.model_dump()
     doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.vendors.insert_one(doc)
+    return serialize(await db.vendors.find_one({"_id": r.inserted_id}))
+
+class VendorQuickIn(BaseModel):
+    name: str
+
+@app.post("/api/vendors/quick")
+async def quick_add_vendor(data: VendorQuickIn, user: dict = Depends(get_current_user)):
+    """Quick-add vendor oleh siapa saja (mis. Operation saat input biaya).
+    Idempotent: kalau nama sudah ada, kembalikan yang lama. Vendor baru ditandai
+    pph_reviewed=False → masuk antrian 'Perlu Ditinjau' agar Finance set jenis PPh."""
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Nama vendor wajib diisi")
+    existing = await db.vendors.find_one({"name": name})
+    if existing:
+        return serialize(existing)
+    doc = {
+        "name": name, "pph_type": None, "pph_reviewed": False, "active": True,
+        "quick_added": True, "created_by": user["id"], "created_at": datetime.now(timezone.utc),
+    }
     r = await db.vendors.insert_one(doc)
     return serialize(await db.vendors.find_one({"_id": r.inserted_id}))
 

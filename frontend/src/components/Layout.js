@@ -37,6 +37,7 @@ const NAV = [
   { type: "section", label: "Master & Laporan" },
   { to: "/analytics", label: "Dashboard Analitik", icon: BarChart3, perm: "pnl" },
   { to: "/customers", label: "Customer", icon: Users, perm: "customers" },
+  { to: "/vendors", label: "Master Vendor", icon: Briefcase, perm: "accrue" },
   { to: "/contracts", label: "Perjanjian Rate", icon: ClipboardCheck, perm: "contracts" },
   { to: "/expense-categories", label: "Master Kategori Expense", icon: Banknote, perm: "expense_categories" },
   { to: "/recurring-expenses", label: "Cost Automatic (Recurring)", icon: Repeat, perm: "fixed_costs" },
