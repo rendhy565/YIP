@@ -4,7 +4,7 @@ import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from ".
 import { errMsg } from "../lib/utils";
 import { PPH_LABEL } from "../components/VendorSelect";
 import { toast } from "sonner";
-import { Plus, Trash2, Pencil, X, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, Pencil, X, AlertTriangle, GitMerge } from "lucide-react";
 
 const empty = { name: "", npwp: "", pph_type: "", address: "", bank_account: "", notes: "" };
 
@@ -27,6 +27,37 @@ export default function MasterVendor() {
 
   const reviewCount = useMemo(() => rows.filter((r) => !r.pph_reviewed).length, [rows]);
   const shown = useMemo(() => (onlyReview ? rows.filter((r) => !r.pph_reviewed) : rows), [rows, onlyReview]);
+
+  // ---- Merge vendor ----
+  const [sel, setSel] = useState(new Set());
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeTarget, setMergeTarget] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [merging, setMerging] = useState(false);
+
+  const toggleSel = (id) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); setSel(n); setPreview(null); };
+  const selectedVendors = rows.filter((r) => sel.has(r.id));
+
+  const openMerge = () => {
+    if (sel.size < 2) return;
+    setMergeTarget(selectedVendors[0]?.name || "");
+    setPreview(null); setMergeOpen(true);
+  };
+  const runPreview = async () => {
+    try {
+      const r = await api.post("/vendors/merge", { vendor_ids: Array.from(sel), target_name: mergeTarget, dry_run: true });
+      setPreview(r.data);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const doMerge = async () => {
+    setMerging(true);
+    try {
+      await api.post("/vendors/merge", { vendor_ids: Array.from(sel), target_name: mergeTarget, dry_run: false });
+      toast.success(`Vendor digabung menjadi "${mergeTarget}"`);
+      setMergeOpen(false); setSel(new Set()); setPreview(null); load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setMerging(false); }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -74,14 +105,25 @@ export default function MasterVendor() {
         </button>
       )}
 
+      {sel.size >= 2 && (
+        <div className="mb-3 flex items-center gap-3 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2" data-testid="merge-bar">
+          <span className="text-sm font-semibold text-indigo-900">{sel.size} vendor terpilih</span>
+          <Button data-testid="merge-vendors-btn" onClick={openMerge}><GitMerge size={15}/> Gabung Vendor</Button>
+          <button onClick={() => setSel(new Set())} className="text-xs text-slate-500 hover:text-slate-800 ml-auto">Batal pilih</button>
+        </div>
+      )}
+
       <Card>
         <Table>
           <thead><tr>
-            <Th>Nama</Th><Th>NPWP</Th><Th>Jenis PPh</Th><Th>Status</Th><Th>Rekening</Th><Th className="text-right">Aksi</Th>
+            <Th></Th><Th>Nama</Th><Th>NPWP</Th><Th>Jenis PPh</Th><Th>Status</Th><Th>Rekening</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
             {shown.map((r) => (
-              <tr key={r.id} data-testid={`vendor-row-${r.id}`}>
+              <tr key={r.id} data-testid={`vendor-row-${r.id}`} className={sel.has(r.id) ? "bg-indigo-50" : ""}>
+                <Td>
+                  <input type="checkbox" data-testid={`vendor-check-${r.id}`} checked={sel.has(r.id)} onChange={() => toggleSel(r.id)} className="h-4 w-4 accent-indigo-600 cursor-pointer" />
+                </Td>
                 <Td><span className="font-semibold">{r.name}</span></Td>
                 <Td className="font-mono text-xs">{r.npwp || "-"}</Td>
                 <Td>
@@ -101,7 +143,7 @@ export default function MasterVendor() {
                 </Td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><Td className="text-slate-500 text-center py-8" colSpan={6}>{onlyReview ? "Tidak ada vendor yang perlu ditinjau." : "Belum ada vendor."}</Td></tr>}
+            {shown.length === 0 && <tr><Td className="text-slate-500 text-center py-8" colSpan={7}>{onlyReview ? "Tidak ada vendor yang perlu ditinjau." : "Belum ada vendor."}</Td></tr>}
           </tbody>
         </Table>
       </Card>
@@ -146,6 +188,48 @@ export default function MasterVendor() {
                 <Button data-testid="save-vendor-btn" type="submit">Simpan</Button>
               </div>
             </form>
+          </Card>
+        </div>
+      )}
+
+      {mergeOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="merge-modal">
+          <Card className="w-full max-w-lg p-6">
+            <div className="flex items-start justify-between mb-3">
+              <h3 className="font-heading font-bold text-xl text-slate-900 inline-flex items-center gap-2"><GitMerge size={18}/> Gabung Vendor</h3>
+              <button onClick={() => setMergeOpen(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18} /></button>
+            </div>
+            <div className="text-xs text-slate-500 mb-3">
+              Menggabung {selectedVendors.length} vendor: <b>{selectedVendors.map((v) => v.name).join(", ")}</b>
+            </div>
+            <div className="mb-3">
+              <Label>Nama vendor hasil gabungan *</Label>
+              <Input data-testid="merge-target-input" value={mergeTarget} onChange={(e) => { setMergeTarget(e.target.value); setPreview(null); }} placeholder="Pilih di bawah atau ketik nama baru" />
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {selectedVendors.map((v) => (
+                  <button key={v.id} type="button" onClick={() => { setMergeTarget(v.name); setPreview(null); }}
+                    className={`text-[11px] px-2 py-1 rounded border transition-colors ${mergeTarget === v.name ? "border-indigo-500 bg-indigo-100 text-indigo-900 font-bold" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                    {v.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {!preview ? (
+              <Button data-testid="merge-preview-btn" variant="secondary" onClick={runPreview} disabled={!mergeTarget.trim()}>Pratinjau</Button>
+            ) : (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 space-y-1" data-testid="merge-preview">
+                <div>Akan menggabung <b>{preview.vendors_merged}</b> vendor menjadi <b>"{preview.target_name}"</b>.</div>
+                <div>Memindahkan: <b>{preview.costs_affected}</b> biaya · <b>{preview.pos_affected}</b> PO · <b>{preview.pph_affected}</b> catatan PPh.</div>
+                <div>Menghapus <b>{preview.vendors_to_delete}</b> vendor duplikat.</div>
+                <div>Jenis PPh hasil: <b>{preview.resulting_pph_type ? (PPH_LABEL[preview.resulting_pph_type] || preview.resulting_pph_type) : "Non-PPh"}</b> · {preview.resulting_reviewed ? "Ditinjau" : "Perlu Ditinjau"}</div>
+                <div className="text-[11px] text-amber-700">Saldo & jurnal tidak berubah (jurnal pakai kode akun).</div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="secondary" type="button" onClick={() => setPreview(null)}>Ubah</Button>
+                  <Button data-testid="merge-confirm-btn" type="button" disabled={merging} onClick={doMerge}>{merging ? "Menggabung..." : "Gabungkan Sekarang"}</Button>
+                </div>
+              </div>
+            )}
           </Card>
         </div>
       )}

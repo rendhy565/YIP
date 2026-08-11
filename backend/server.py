@@ -7399,6 +7399,71 @@ async def delete_vendor(vid: str, user: dict = Depends(require_role("administrat
     await db.vendors.delete_one({"_id": _oid(vid)})
     return {"ok": True}
 
+class MergeVendorIn(BaseModel):
+    vendor_ids: List[str] = []
+    target_name: str
+    dry_run: bool = True
+
+@app.post("/api/vendors/merge")
+async def merge_vendors(data: MergeVendorIn, user: dict = Depends(require_role("finance", "administrator"))):
+    """Gabung beberapa vendor (beda ejaan, sebenarnya sama) jadi satu nama kanonik.
+    Semua vendor_name di biaya, PO, catatan PPh dipindah ke target_name; vendor
+    duplikat dihapus. Jurnal tidak berubah (pakai kode akun, bukan nama)."""
+    target_name = (data.target_name or "").strip()
+    if not target_name:
+        raise HTTPException(400, "Nama vendor tujuan wajib diisi")
+    if len(data.vendor_ids) < 2:
+        raise HTTPException(400, "Pilih minimal 2 vendor untuk digabung")
+    selected = await db.vendors.find({"_id": {"$in": [_oid(v) for v in data.vendor_ids]}}).to_list(100)
+    if len(selected) < 2:
+        raise HTTPException(400, "Vendor terpilih tidak ditemukan")
+    sel_names = [v["name"] for v in selected]
+
+    clash = await db.vendors.find_one({"name": target_name, "_id": {"$nin": [_oid(v) for v in data.vendor_ids]}})
+    if clash:
+        raise HTTPException(400, f"Nama '{target_name}' sudah dipakai vendor lain yang tidak dipilih. Ikutkan vendor itu atau pakai nama lain.")
+
+    canonical = next((v for v in selected if v["name"] == target_name), None)
+    if canonical and canonical.get("pph_type"):
+        donor = canonical
+    else:
+        donor = next((v for v in selected if v.get("pph_type")), None)
+    final_pph_type = donor.get("pph_type") if donor else (canonical.get("pph_type") if canonical else None)
+    final_reviewed = any(bool(v.get("pph_reviewed")) for v in selected)
+
+    names_to_move = [n for n in sel_names if n != target_name]
+    costs_affected = await db.awb_costs.count_documents({"vendor_name": {"$in": names_to_move}}) if names_to_move else 0
+    pos_affected = await db.purchase_orders.count_documents({"vendor_name": {"$in": names_to_move}}) if names_to_move else 0
+    pph_affected = await db.pph_records.count_documents({"vendor_name": {"$in": names_to_move}}) if names_to_move else 0
+
+    summary = {
+        "ok": True, "dry_run": data.dry_run, "target_name": target_name,
+        "merged_names": names_to_move, "vendors_merged": len(selected),
+        "vendors_to_delete": len(selected) - 1,
+        "costs_affected": costs_affected, "pos_affected": pos_affected, "pph_affected": pph_affected,
+        "resulting_pph_type": final_pph_type, "resulting_reviewed": final_reviewed,
+    }
+    if data.dry_run:
+        return summary
+
+    if names_to_move:
+        await db.awb_costs.update_many({"vendor_name": {"$in": names_to_move}}, {"$set": {"vendor_name": target_name}})
+        await db.purchase_orders.update_many({"vendor_name": {"$in": names_to_move}}, {"$set": {"vendor_name": target_name}})
+        await db.pph_records.update_many({"vendor_name": {"$in": names_to_move}}, {"$set": {"vendor_name": target_name}})
+
+    keep = canonical or donor or selected[0]
+    keep_id = keep["_id"]
+    await db.vendors.update_one({"_id": keep_id}, {"$set": {
+        "name": target_name, "pph_type": final_pph_type, "pph_reviewed": final_reviewed,
+        "npwp": keep.get("npwp") or (donor.get("npwp") if donor else None),
+        "merged_at": datetime.now(timezone.utc),
+    }})
+    await db.pph_records.update_many({"vendor_name": target_name}, {"$set": {"vendor_id": str(keep_id)}})
+    del_ids = [v["_id"] for v in selected if v["_id"] != keep_id]
+    if del_ids:
+        await db.vendors.delete_many({"_id": {"$in": del_ids}})
+    return summary
+
 # ---- Master Region & Fleet Type (constants) ----
 REGIONS = [
     "JABODETABEK", "JAWA BARAT", "JAWA TENGAH", "JAWA TIMUR", "DI YOGYAKARTA", "BALI",

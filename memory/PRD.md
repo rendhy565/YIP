@@ -1,6 +1,15 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
-## Pembayaran Vendor Bertahap / Multi-Payment (Jun 2026)
+## Merge Vendor (Master Vendor) (Jun 2026)
+- **Kebutuhan:** beberapa vendor sebenarnya sama tapi beda ejaan → gabung jadi satu.
+- **Backend** `POST /api/vendors/merge` {vendor_ids[], target_name, dry_run}: 
+  - dry_run → ringkasan (vendors_merged, vendors_to_delete, costs/pos/pph_affected, resulting_pph_type/reviewed).
+  - eksekusi → update_many `vendor_name` di awb_costs/purchase_orders/pph_records ke target_name; pilih 1 vendor kanonik (nama==target, atau donor ber-PPh, atau pertama), set PPh hasil (warisi dari donor jika kanonik kosong; reviewed=any), hapus vendor duplikat. Cek bentrok nama vendor lain. Jurnal TIDAK berubah (pakai kode akun).
+  - Nama kanonik: pilih salah satu terpilih ATAU ketik baru.
+- **Frontend** `MasterVendor.js`: checkbox per baris + bar "Gabung Vendor" (≥2 terpilih) + modal (input nama + chip pilihan + tombol Pratinjau → ringkasan → Gabungkan Sekarang).
+- **Self-test:** seed 2 vendor+data dummy → preview akurat (PPh23 terwarisi) → eksekusi → referensi pindah, duplikat terhapus → cleanup. UI render (checkbox/bar/modal/preview) OK. Data live utuh. Testing agent TIDAK dipakai.
+
+
 - **Kebutuhan:** bayar DP dulu, sisa belakangan. Keputusan user: input BRUTO, PPh 23 proporsional tiap bayar, status "Sebagian"+riwayat, 1 akun kas (default 1101), bisa void per pembayaran.
 - **Backend** (`server.py`):
   - Helper `_record_vendor_payment()` — catat 1 pembayaran: DR 2101 (bruto) / CR Kas (net) / CR 2223 (PPh proporsional). Update `paid_amount`, `payments[]`, `settle_status` (partial/paid). Jurnal `reference_type="vendor_payment"`, `reference_id=pid`.
