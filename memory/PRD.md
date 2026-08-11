@@ -1,5 +1,11 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Jadwal Kerja Absensi per Karyawan + Tanda Telat (Jun 2026)
+- **Kebutuhan:** jam masuk/pulang & hari kerja bisa custom per orang; absen telat dari jam yang ditentukan diberi tanda.
+- **Backend** (`server.py`): `EmployeeIn` += `work_days[]`, `work_hour_in`, `work_hour_out` (kosong = ikut config global). Helper `_effective_att_config(cfg, employee)` overlay jadwal per-karyawan di atas global. Dipakai di create/update attendance & Excel import (hari kerja per-orang + perhitungan telat/kurang-jam). Badge TELAT/KURANG JAM sudah ada di UI.
+- **Frontend** (`HrPayroll.js`): section "Jadwal Kerja (opsional)" di form karyawan — Jam Masuk, Jam Pulang, chip Hari Kerja (Sen–Min). `Attendance.js` sudah menampilkan badge Telat (menit) & Kurang Jam.
+- **Self-test:** karyawan jam 08:00 → absen 08:20 = Telat 20m (padahal global 08:30 tidak telat) → override per-orang terbukti; 07:58 = tidak telat. Data test dibersihkan; data live utuh. Testing agent TIDAK dipakai.
+
 ## Vendor Dropdown di Rekap & PO (Jun 2026)
 - `Recap.js` (modal Plot Biaya) & `PurchaseOrders.js` (form Buat PO): input vendor free-text → `VendorSelect` (dropdown master + quick-add "Baru"). Tidak ada lagi ejaan vendor baru liar. Verifikasi: parse OK + PO form render dropdown+Baru.
 

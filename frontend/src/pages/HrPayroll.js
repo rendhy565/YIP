@@ -21,7 +21,13 @@ const EMPTY_EMP = {
   emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
   position: "", bpjs_no: "", ptkp_status: "TK/0", pph21_active: false, base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
+  work_days: [], work_hour_in: "", work_hour_out: "",
 };
+
+const WORK_DAY_OPTS = [
+  { k: "mon", l: "Sen" }, { k: "tue", l: "Sel" }, { k: "wed", l: "Rab" },
+  { k: "thu", l: "Kam" }, { k: "fri", l: "Jum" }, { k: "sat", l: "Sab" }, { k: "sun", l: "Min" },
+];
 
 // Kolom yang bisa toggle di table karyawan (fixed cols not in this list)
 const TOGGLABLE_COLS = [
@@ -623,6 +629,30 @@ export default function HrPayroll() {
                       <option value="1">Aktif</option>
                       <option value="0">Nonaktif</option>
                     </Select>
+                  </div>
+                </div>
+                {/* Jadwal Kerja per karyawan (override config global absensi) */}
+                <div className="mt-3 border border-indigo-200 rounded p-3 bg-indigo-50/50" data-testid="emp-schedule-section">
+                  <div className="font-heading font-bold text-sm text-indigo-900 mb-1">Jadwal Kerja (opsional)</div>
+                  <p className="text-[11px] text-slate-500 mb-2">Kosongkan = ikut jadwal global absensi. Isi untuk custom jam & hari kerja orang ini. Absen masuk melebihi jam ini ditandai <b>Telat</b>.</p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div><Label>Jam Masuk</Label><Input type="time" data-testid="emp-work-in" value={form.work_hour_in || ""} onChange={(e) => setForm({ ...form, work_hour_in: e.target.value })}/></div>
+                    <div><Label>Jam Pulang</Label><Input type="time" data-testid="emp-work-out" value={form.work_hour_out || ""} onChange={(e) => setForm({ ...form, work_hour_out: e.target.value })}/></div>
+                  </div>
+                  <div className="mt-2">
+                    <Label>Hari Kerja</Label>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {WORK_DAY_OPTS.map((d) => {
+                        const on = (form.work_days || []).includes(d.k);
+                        return (
+                          <button key={d.k} type="button" data-testid={`emp-day-${d.k}`}
+                            onClick={() => { const s = new Set(form.work_days || []); on ? s.delete(d.k) : s.add(d.k); setForm({ ...form, work_days: Array.from(s) }); }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors ${on ? "border-indigo-500 bg-indigo-600 text-white" : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                            {d.l}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
                 {/* Override Gaji Lumpsum */}

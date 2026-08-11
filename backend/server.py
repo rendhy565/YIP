@@ -5125,6 +5125,10 @@ class EmployeeIn(BaseModel):
     meal_allowance: float = 0  # Uang makan harian (dibayar hanya kalau HADIR)
     gaji_lumpsum: bool = False  # True = gaji pokok tidak dipotong meski Alfa
     join_date: Optional[str] = None           # YYYY-MM-DD
+    # --- Jadwal Kerja per karyawan (override config global; kosong = ikut global) ---
+    work_days: Optional[List[str]] = None     # mis. ["mon","tue","wed","thu","fri","sat"]
+    work_hour_in: Optional[str] = None        # HH:MM jam masuk
+    work_hour_out: Optional[str] = None       # HH:MM jam pulang
     active: bool = True
 
 @app.get("/api/hr/employees")
@@ -6008,11 +6012,12 @@ async def create_attendance(data: AttendanceIn, user: dict = Depends(require_fea
     if data.status not in ALLOWED_ATT_STATUS:
         raise HTTPException(400, f"Status invalid. Pilih: {', '.join(ALLOWED_ATT_STATUS)}")
     # Cek employee exists
-    if not await db.employees.find_one({"_id": _oid(data.employee_id)}):
+    emp = await db.employees.find_one({"_id": _oid(data.employee_id)})
+    if not emp:
         raise HTTPException(404, "Karyawan tidak ditemukan")
     doc = data.model_dump()
-    # Auto-compute is_late / is_under_hours dari jam kerja per hari
-    cfg = await _get_attendance_config()
+    # Auto-compute is_late / is_under_hours dari jam kerja (per-karyawan kalau di-set)
+    cfg = _effective_att_config(await _get_attendance_config(), emp)
     metrics = _compute_late_underhours(cfg, doc.get("date"), doc.get("check_in"), doc.get("check_out"), doc.get("status"))
     doc.update(metrics)
     doc["created_at"] = datetime.now(timezone.utc)
@@ -6031,7 +6036,8 @@ async def update_attendance(aid: str, data: AttendanceIn, user: dict = Depends(r
     if data.status not in ALLOWED_ATT_STATUS:
         raise HTTPException(400, f"Status invalid")
     doc = data.model_dump()
-    cfg = await _get_attendance_config()
+    emp = await db.employees.find_one({"_id": _oid(data.employee_id)})
+    cfg = _effective_att_config(await _get_attendance_config(), emp)
     metrics = _compute_late_underhours(cfg, doc.get("date"), doc.get("check_in"), doc.get("check_out"), doc.get("status"))
     doc.update(metrics)
     doc["updated_at"] = datetime.now(timezone.utc)
@@ -6297,6 +6303,21 @@ async def _get_attendance_config():
             pass
     return dict(DEFAULT_ATTENDANCE_CONFIG)
 
+
+def _effective_att_config(cfg: dict, employee: Optional[dict]) -> dict:
+    """Overlay jadwal kerja per-karyawan di atas config global.
+    Karyawan boleh override work_days, work_hour_in, work_hour_out. Kalau kosong → ikut global."""
+    if not employee:
+        return cfg
+    eff = dict(cfg)
+    if employee.get("work_days"):
+        eff["work_days"] = employee["work_days"]
+    if employee.get("work_hour_in"):
+        eff["work_hour_in"] = employee["work_hour_in"]
+    if employee.get("work_hour_out"):
+        eff["work_hour_out"] = employee["work_hour_out"]
+    return eff
+
 @app.get("/api/hr/attendance-config")
 async def get_attendance_config(user: dict = Depends(require_feature("hr"))):
     return await _get_attendance_config()
@@ -6541,6 +6562,10 @@ async def import_attendance(
             skipped.append({"row": idx + 2, "reason": f"Karyawan tidak ditemukan (id/no/nik/nama={emp_key or emp_no or nik or name})"})
             continue
 
+        # Jadwal kerja efektif per-karyawan (override config global bila di-set)
+        eff_cfg = _effective_att_config(att_cfg, emp)
+        emp_work_days = set([d.lower() for d in (eff_cfg.get("work_days") or [])])
+
         # Parse date
         date_raw = _get(r, "tanggal", "date", "tgl")
         if not date_raw:
@@ -6592,7 +6617,7 @@ async def import_attendance(
         is_holiday = date_str in holidays_map
         if is_holiday:
             holiday_name = holidays_map[date_str].get("name")
-        is_non_workday = (dow_key is not None) and (dow_key not in work_days_set)
+        is_non_workday = (dow_key is not None) and (dow_key not in emp_work_days)
 
         # Map status eksplisit dari file (kalau ada)
         explicit_status = None
