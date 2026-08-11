@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { CheckCircle2, Wallet, Search, Undo2, BarChart3, ChevronDown, ChevronRight, FileSpreadsheet, Layers, CheckSquare, Square } from "lucide-react";
+import { CheckCircle2, Wallet, Search, Undo2, BarChart3, ChevronDown, ChevronRight, FileSpreadsheet, Layers, CheckSquare, Square, Banknote, History, Trash2, X } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 
@@ -23,6 +23,9 @@ export default function AccrueSettlement() {
   const [bulkSaving, setBulkSaving] = useState(false);
 
   const [qPaid, setQPaid] = useState("");
+  const [histRow, setHistRow] = useState(null);
+
+  const remainingOf = (r) => Math.round(((r.amount || 0) - (r.paid_amount || 0)) * 100) / 100;
 
   const load = () => {
     Promise.all([
@@ -51,14 +54,42 @@ export default function AccrueSettlement() {
   useEffect(() => { load(); }, []);
 
   const settle = async (id) => {
-    if (!window.confirm("Tandai hutang vendor ini sebagai PAID (lunas)?")) return;
+    if (!window.confirm("Lunasi seluruh SISA hutang vendor ini sekarang?")) return;
     try {
       const r = await api.post(`/costs/${id}/settle`);
       if (r.data && r.data.needs_confirmation) {
         if (!window.confirm(`⚠️ ${r.data.warning}`)) return;
         await api.post(`/costs/${id}/settle`, { force: true });
       }
-      toast.success("Hutang ditandai Paid"); load();
+      toast.success("Hutang lunas"); load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const payPartial = async (row) => {
+    const remaining = remainingOf(row);
+    const raw = window.prompt(`Bayar sebagian (DP/cicilan) untuk ${row.vendor_name || "vendor"}.\nSisa hutang: ${fmtIDR(remaining)}\n\nMasukkan jumlah BRUTO yang dibayar:`, String(remaining));
+    if (raw === null) return;
+    const amount = Number(String(raw).replace(/[^0-9.]/g, ""));
+    if (!amount || amount <= 0) { toast.error("Jumlah tidak valid"); return; }
+    if (amount > remaining + 0.5) { toast.error(`Melebihi sisa hutang (${fmtIDR(remaining)})`); return; }
+    try {
+      const r = await api.post(`/costs/${row.id}/pay`, { amount });
+      if (r.data && r.data.needs_confirmation) {
+        if (!window.confirm(`⚠️ ${r.data.warning}`)) return;
+        await api.post(`/costs/${row.id}/pay`, { amount, force: true });
+      }
+      const d = r.data || {};
+      toast.success(d.fully_paid ? "Hutang lunas" : `Dibayar ${fmtIDR(amount)} — sisa ${fmtIDR(d.remaining ?? (remaining - amount))}`);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
+  const voidPayment = async (cid, pid) => {
+    if (!window.confirm("Batalkan pembayaran ini? Jurnal akan dibalik.")) return;
+    try {
+      await api.post(`/costs/${cid}/payments/${pid}/void`);
+      toast.success("Pembayaran dibatalkan");
+      setHistRow(null); load();
     } catch (e) { toast.error(errMsg(e)); }
   };
 
@@ -104,7 +135,7 @@ export default function AccrueSettlement() {
   };
 
   const selectedRows = filtered.filter((r) => selected.has(r.id));
-  const selectedTotal = selectedRows.reduce((s, r) => s + (r.amount || 0), 0);
+  const selectedTotal = selectedRows.reduce((s, r) => s + remainingOf(r), 0);
 
   const bulkSettle = async () => {
     const ids = selectedRows.map((r) => r.id);
@@ -129,7 +160,7 @@ export default function AccrueSettlement() {
   const pag = usePagination(filtered, { resetKey: `${q}|${vendor}|${monthFilter}|${filterMode}` });
   const pagPaid = usePagination(paidFiltered, { resetKey: qPaid });
 
-  const total = rows.reduce((s, r) => s + (r.amount || 0), 0);
+  const total = rows.reduce((s, r) => s + remainingOf(r), 0);
   const paidTotal = paidRows.reduce((s, r) => s + (r.amount || 0), 0);
 
   return (
@@ -310,11 +341,29 @@ export default function AccrueSettlement() {
                 <Td className="font-mono font-semibold">{r.awb_number}</Td>
                 <Td>{r.vendor_name || "-"}</Td>
                 <Td className="text-slate-600 text-sm">{r.description || "-"}</Td>
-                <Td className="text-right font-semibold">{fmtIDR(r.amount)}</Td>
                 <Td className="text-right">
-                  <Button data-testid={`settle-btn-${r.id}`} variant="success" onClick={() => settle(r.id)}>
-                    <CheckCircle2 size={14}/> Paid
-                  </Button>
+                  <div className="font-semibold">{fmtIDR(r.amount)}</div>
+                  {(r.paid_amount || 0) > 0 && (
+                    <div className="text-[10px] leading-tight mt-0.5">
+                      <span className="text-emerald-700">Terbayar {fmtIDR(r.paid_amount)}</span>
+                      <span className="text-orange-700 font-bold"> · Sisa {fmtIDR(remainingOf(r))}</span>
+                    </div>
+                  )}
+                </Td>
+                <Td className="text-right">
+                  <div className="flex justify-end gap-1.5 flex-wrap">
+                    <Button data-testid={`pay-btn-${r.id}`} variant="secondary" onClick={() => payPartial(r)} title="Bayar sebagian (DP/cicilan)">
+                      <Banknote size={14}/> Bayar
+                    </Button>
+                    <Button data-testid={`settle-btn-${r.id}`} variant="success" onClick={() => settle(r.id)} title="Lunasi seluruh sisa">
+                      <CheckCircle2 size={14}/> Lunasi
+                    </Button>
+                    {(r.payments || []).length > 0 && (
+                      <button data-testid={`history-btn-${r.id}`} onClick={() => setHistRow(r)} className="p-1.5 rounded hover:bg-slate-100 text-slate-600" title="Riwayat pembayaran">
+                        <History size={15}/>
+                      </button>
+                    )}
+                  </div>
                 </Td>
               </tr>
             ))}
@@ -358,6 +407,36 @@ export default function AccrueSettlement() {
         </Table>
         <Pagination {...pagPaid} testid="pagination-paid"/>
       </Card>
+
+      {histRow && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="payment-history-modal">
+          <Card className="w-full max-w-lg p-6">
+            <div className="flex items-start justify-between mb-1">
+              <h3 className="font-heading font-bold text-lg text-slate-900">Riwayat Pembayaran</h3>
+              <button onClick={() => setHistRow(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="text-xs text-slate-500 mb-3">
+              {histRow.vendor_name} · {histRow.awb_number} · Total {fmtIDR(histRow.amount)} · Sisa <span className="font-bold text-orange-700">{fmtIDR(remainingOf(histRow))}</span>
+            </div>
+            <div className="space-y-2 max-h-[50vh] overflow-auto">
+              {(histRow.payments || []).map((p) => (
+                <div key={p.pid} data-testid={`payment-item-${p.pid}`} className="flex items-center gap-3 border border-slate-200 rounded-lg px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm">{fmtIDR(p.amount)}
+                      {p.pph_amount > 0 && <span className="text-[10px] text-slate-500 font-normal"> · PPh {fmtIDR(p.pph_amount)} · net {fmtIDR(p.net_paid)}</span>}
+                    </div>
+                    <div className="text-[10px] text-slate-400">{fmtDate(p.paid_at)} · Kas {p.cash_account_code}</div>
+                  </div>
+                  <button data-testid={`void-payment-${p.pid}`} onClick={() => voidPayment(histRow.id, p.pid)} className="p-1.5 rounded hover:bg-red-50 text-red-600" title="Batalkan pembayaran">
+                    <Trash2 size={14}/>
+                  </button>
+                </div>
+              ))}
+              {(histRow.payments || []).length === 0 && <div className="text-sm text-slate-500 text-center py-6">Belum ada pembayaran.</div>}
+            </div>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

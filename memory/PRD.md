@@ -1,6 +1,16 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
-## Master Vendor + Alur PPh 23 (Opsi B) (Jun 2026)
+## Pembayaran Vendor Bertahap / Multi-Payment (Jun 2026)
+- **Kebutuhan:** bayar DP dulu, sisa belakangan. Keputusan user: input BRUTO, PPh 23 proporsional tiap bayar, status "Sebagian"+riwayat, 1 akun kas (default 1101), bisa void per pembayaran.
+- **Backend** (`server.py`):
+  - Helper `_record_vendor_payment()` — catat 1 pembayaran: DR 2101 (bruto) / CR Kas (net) / CR 2223 (PPh proporsional). Update `paid_amount`, `payments[]`, `settle_status` (partial/paid). Jurnal `reference_type="vendor_payment"`, `reference_id=pid`.
+  - `POST /api/costs/{cid}/pay` (parsial, cegah overpay, warning gate PPh) · `settle_cost` kini bayar SISA (pakai helper) · bulk-settle tetap · `POST /api/costs/{cid}/payments/{pid}/void` (jurnal balik, hapus pph_record, revert status).
+  - `reclass-to-accrue` di-upgrade: balik semua `payments[]` (fallback legacy). Vendor-aging pakai sisa (amount − paid_amount).
+  - Cost fields baru: `paid_amount`, `payments[]` (pid, amount, pph_amount, net_paid, pph_rate, pph_account, cash_account_code, paid_at, paid_by), `settle_status`.
+- **Frontend** (`AccrueSettlement.js`): tombol **Bayar** (parsial, prompt bruto) + **Lunasi** (sisa) per baris; kolom Terbayar/Sisa; modal **Riwayat Pembayaran** dgn tombol void. Total & bulk pakai sisa.
+- **Self-test (curl+screenshot):** DP 500rb→PPh10rb/net490rb/partial; lunasi 1.215jt→PPh24.3rb/lunas; total PPh 34.300=2%×1.715jt; jurnal 2101/2223/1101 balance; void balik benar; UI render Bayar/Lunasi. Data live di-restore bersih (semua mutasi test dihapus). Testing agent TIDAK dipakai.
+
+
 - **Konteks:** Semua 48 vendor `pph_type` kosong → PPh 23 tak pernah kepotong (2223 = 0). Penyebab: tak ada UI kelola master vendor; nama vendor selalu free-text.
 - **Solusi (Opsi B — quick-add + antrian review):**
   - **Halaman baru `MasterVendor.js`** (route `/vendors`, menu "Master Vendor", perm `accrue` → Finance/Admin). Kelola vendor: nama, NPWP, **jenis PPh** (PPh23 2% / PPh15 2% / PP23UMKM 0,5% / Non-PPh), rekening. Simpan = tandai `pph_reviewed=true`. Ada nudge + filter "N vendor belum dikonfigurasi PPh".

@@ -2302,10 +2302,6 @@ async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depend
     if vendor_name:
         vendor_doc = await db.vendors.find_one({"name": vendor_name})
     pph_rate, pph_account, pph_type_label = pph_info_for_vendor(vendor_doc)
-    gross = float(cost["amount"])
-    pph_amount = round(gross * pph_rate, 2) if pph_rate > 0 else 0.0
-    net_paid = round(gross - pph_amount, 2)
-
     # Warning gate (Opsi B): vendor sudah ada di master tapi BELUM ditinjau Finance
     # (mis. hasil quick-add operation). Cegah settle tanpa sadar PPh belum di-set.
     if vendor_doc is not None and not vendor_doc.get("pph_reviewed", False) and not data.force:
@@ -2319,54 +2315,141 @@ async def settle_cost(cid: str, data: SettleIn = SettleIn(), user: dict = Depend
             "vendor_name": vendor_name,
         }
 
-    update = {
-        "payment_type": "Cash",
-        "is_settled": True,
-        "settled_at": now,
-        "settled_by": user["id"],
-        "cash_account_code": cash_acc,
-    }
-    if pph_amount > 0:
-        update.update({"pph_type": pph_type_label, "pph_rate": pph_rate, "pph_amount": pph_amount, "net_paid": net_paid})
-    await db.awb_costs.update_one({"_id": _oid(cid)}, {"$set": update})
+    # "Lunasi" = bayar seluruh SISA hutang sekaligus (memakai mekanisme pembayaran bertahap).
+    paid = float(cost.get("paid_amount") or 0)
+    remaining = round(float(cost["amount"]) - paid, 2)
+    if remaining <= 0:
+        raise HTTPException(400, "Hutang sudah lunas")
+    res = await _record_vendor_payment(cost, cid, remaining, cash_acc, user, now, vendor_doc)
+    return {"ok": True, **res}
 
-    # Auto-post journal: DR Hutang Usaha (gross) / CR Cash (net) / CR Hutang PPh (potongan)
+
+async def _record_vendor_payment(cost, cid, pay_gross, cash_acc, user, now, vendor_doc):
+    """Catat satu pembayaran hutang vendor (bruto=pay_gross). PPh 23 dipotong
+    PROPORSIONAL atas nilai pembayaran ini. Jurnal: DR 2101 (bruto) / CR Kas (net)
+    / CR PPh (potongan). Update paid_amount & status cost. Return ringkasan."""
+    vendor_name = cost.get("vendor_name") or ""
+    pph_rate, pph_account, pph_type_label = pph_info_for_vendor(vendor_doc)
+    pay_gross = round(float(pay_gross), 2)
+    pph_amount = round(pay_gross * pph_rate, 2) if pph_rate > 0 else 0.0
+    net_paid = round(pay_gross - pph_amount, 2)
+    pid = uuid.uuid4().hex
+    awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
+    awb_no = awb["awb_number"] if awb else ""
+    lines = [
+        {"account_code": "2101", "debit": pay_gross, "credit": 0, "memo": vendor_name},
+        {"account_code": cash_acc, "debit": 0, "credit": net_paid, "memo": f"Bayar {awb_no}"},
+    ]
+    desc = f"Pembayaran hutang vendor {vendor_name} ({awb_no})"
+    if pph_amount > 0:
+        lines.append({"account_code": pph_account, "debit": 0, "credit": pph_amount, "memo": f"{pph_type_label} {pph_rate*100:.1f}% dari {vendor_name}"})
+        desc += f" — potong {pph_type_label} {fmt_idr(pph_amount)}"
+        await db.pph_records.insert_one({
+            "period_month": now.strftime("%Y-%m"), "pph_type": pph_type_label, "rate": pph_rate,
+            "description": f"Potongan dari {vendor_name} atas {awb_no} (cost {cid})",
+            "vendor_name": vendor_name, "vendor_id": str(vendor_doc["_id"]) if vendor_doc else None,
+            "awb_number": awb_no, "cost_id": cid, "payment_id": pid, "gross": pay_gross,
+            "amount": pph_amount, "auto_generated": True, "created_by": user["id"], "created_at": now,
+        })
+    journal_warning = None
     try:
-        awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
-        awb_no = awb["awb_number"] if awb else ""
-        lines = [
-            {"account_code": "2101", "debit": gross, "credit": 0, "memo": vendor_name},
-            {"account_code": cash_acc, "debit": 0, "credit": net_paid, "memo": f"Settle {awb_no}"},
-        ]
-        desc = f"Pelunasan hutang vendor {vendor_name} ({awb_no})"
-        if pph_amount > 0:
-            lines.append({"account_code": pph_account, "debit": 0, "credit": pph_amount, "memo": f"{pph_type_label} {pph_rate*100:.1f}% dari {vendor_name}"})
-            desc += f" — dipotong {pph_type_label} {fmt_idr(pph_amount)}"
-            # Audit trail in db.pph_records for the Tax module
-            await db.pph_records.insert_one({
-                "period_month": now.strftime("%Y-%m"),
-                "pph_type": pph_type_label,
-                "rate": pph_rate,
-                "description": f"Potongan dari {vendor_name} atas {awb_no} (cost {cid})",
-                "vendor_name": vendor_name,
-                "vendor_id": str(vendor_doc["_id"]) if vendor_doc else None,
-                "awb_number": awb_no,
-                "cost_id": cid,
-                "gross": gross,
-                "amount": pph_amount,
-                "auto_generated": True,
-                "created_by": user["id"],
-                "created_at": now,
-            })
-        await post_journal(
-            date=now,
-            description=desc,
-            lines=lines,
-            reference_type="settlement", reference_id=cid, posted_by=user["id"],
-        )
+        await post_journal(date=now, description=desc, lines=lines,
+                           reference_type="vendor_payment", reference_id=pid, posted_by=user["id"])
     except HTTPException as e:
-        return {"ok": True, "journal_warning": e.detail, "pph_amount": pph_amount, "net_paid": net_paid}
-    return {"ok": True, "pph_type": pph_type_label, "pph_rate": pph_rate, "pph_amount": pph_amount, "net_paid": net_paid, "gross": gross}
+        journal_warning = e.detail
+
+    payment = {
+        "pid": pid, "amount": pay_gross, "pph_amount": pph_amount, "net_paid": net_paid,
+        "pph_rate": pph_rate, "pph_type": pph_type_label, "pph_account": pph_account,
+        "cash_account_code": cash_acc, "paid_at": now, "paid_by": user["id"],
+    }
+    total = round(float(cost["amount"]), 2)
+    new_paid = round(float(cost.get("paid_amount") or 0) + pay_gross, 2)
+    fully = new_paid >= total - 0.5
+    setd = {"paid_amount": new_paid, "settle_status": "paid" if fully else "partial", "cash_account_code": cash_acc}
+    if fully:
+        setd.update({"payment_type": "Cash", "is_settled": True, "settled_at": now, "settled_by": user["id"]})
+    await db.awb_costs.update_one({"_id": _oid(cid)}, {"$push": {"payments": payment}, "$set": setd})
+    return {"payment_id": pid, "amount": pay_gross, "pph_amount": pph_amount, "net_paid": net_paid,
+            "paid_amount": new_paid, "remaining": round(total - new_paid, 2), "fully_paid": fully,
+            "journal_warning": journal_warning}
+
+
+class PayIn(BaseModel):
+    amount: float
+    cash_account_code: Optional[str] = None
+    force: bool = False
+
+@app.post("/api/costs/{cid}/pay")
+async def pay_cost_partial(cid: str, data: PayIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Bayar sebagian hutang vendor (DP / cicilan). Jumlah = BRUTO."""
+    cost = await db.awb_costs.find_one({"_id": _oid(cid)})
+    if not cost:
+        raise HTTPException(404, "Biaya tidak ditemukan")
+    if cost.get("cost_category") != "Vendor":
+        raise HTTPException(400, "Hanya biaya kategori Vendor yang bisa dibayar bertahap")
+    if cost.get("is_settled"):
+        raise HTTPException(400, "Hutang sudah lunas")
+    if cost.get("payment_type") != "Accrue":
+        raise HTTPException(400, "Hanya hutang Accrue yang bisa dibayar")
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    pay = round(float(data.amount), 2)
+    if pay <= 0:
+        raise HTTPException(400, "Jumlah pembayaran harus > 0")
+    paid = float(cost.get("paid_amount") or 0)
+    remaining = round(float(cost["amount"]) - paid, 2)
+    if pay > remaining + 0.5:
+        raise HTTPException(400, f"Jumlah melebihi sisa hutang ({fmt_idr(remaining)})")
+    vendor_name = cost.get("vendor_name") or ""
+    vendor_doc = await db.vendors.find_one({"name": vendor_name}) if vendor_name else None
+    if vendor_doc is not None and not vendor_doc.get("pph_reviewed", False) and not data.force:
+        return {
+            "ok": False, "needs_confirmation": True, "vendor_name": vendor_name,
+            "warning": (f"Vendor '{vendor_name}' belum dikonfigurasi PPh oleh Finance (status: perlu ditinjau). "
+                        f"Sebaiknya set jenis PPh di Master Vendor dulu. Lanjutkan bayar tanpa potong PPh?"),
+        }
+    now = datetime.now(timezone.utc)
+    res = await _record_vendor_payment(cost, cid, pay, cash_acc, user, now, vendor_doc)
+    return {"ok": True, **res}
+
+@app.post("/api/costs/{cid}/payments/{pid}/void")
+async def void_cost_payment(cid: str, pid: str, user: dict = Depends(require_role("finance", "administrator"))):
+    """Batalkan satu pembayaran (posting jurnal balik) — mis. salah input DP."""
+    cost = await db.awb_costs.find_one({"_id": _oid(cid)})
+    if not cost:
+        raise HTTPException(404, "Biaya tidak ditemukan")
+    p = next((x for x in (cost.get("payments") or []) if x.get("pid") == pid), None)
+    if not p:
+        raise HTTPException(404, "Pembayaran tidak ditemukan")
+    now = datetime.now(timezone.utc)
+    awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
+    awb_no = awb["awb_number"] if awb else ""
+    vendor_name = cost.get("vendor_name") or ""
+    cash_acc = p.get("cash_account_code") or "1101"
+    lines = [
+        {"account_code": "2101", "debit": 0, "credit": p["amount"], "memo": f"Void bayar {vendor_name}"},
+        {"account_code": cash_acc, "debit": p.get("net_paid", p["amount"]), "credit": 0, "memo": f"Void {awb_no}"},
+    ]
+    if p.get("pph_amount", 0) > 0:
+        lines.append({"account_code": p.get("pph_account", "2223"), "debit": p["pph_amount"], "credit": 0, "memo": "Void PPh"})
+    try:
+        await post_journal(date=now, description=f"Void pembayaran hutang vendor {vendor_name} ({awb_no})",
+                           lines=lines, reference_type="vendor_payment_void", reference_id=pid, posted_by=user["id"])
+    except HTTPException as e:
+        raise HTTPException(400, f"Gagal void: {e.detail}")
+    await db.pph_records.delete_many({"payment_id": pid})
+    new_paid = round(float(cost.get("paid_amount") or 0) - float(p["amount"]), 2)
+    if new_paid < 0:
+        new_paid = 0.0
+    setd = {"paid_amount": new_paid, "payment_type": "Accrue", "is_settled": False,
+            "settle_status": "partial" if new_paid > 0 else "unpaid"}
+    await db.awb_costs.update_one({"_id": _oid(cid)},
+                                  {"$pull": {"payments": {"pid": pid}},
+                                   "$set": setd, "$unset": {"settled_at": ""}})
+    return {"ok": True, "paid_amount": new_paid, "remaining": round(float(cost["amount"]) - new_paid, 2)}
 
 class BulkSettleIn(BaseModel):
     cost_ids: List[str] = []
@@ -9971,32 +10054,46 @@ async def reclass_cost_to_accrue(cid: str, user: dict = Depends(require_role("op
         raise HTTPException(400, "Hanya biaya yang berstatus Paid yang bisa di-reclass")
     if cost.get("cost_category") != "Vendor":
         raise HTTPException(400, "Hanya biaya kategori Vendor yang bisa di-reclass ke Hutang")
-    prev_cash_acc = cost.get("cash_account_code") or "1101"
     now = datetime.now(timezone.utc)
+    awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
+    awb_no = awb["awb_number"] if awb else ""
+    vendor_name = cost.get("vendor_name") or ""
+    payments = cost.get("payments") or []
+    try:
+        if payments:
+            # Balik tiap pembayaran: DR Kas (net) + DR PPh / CR 2101 (bruto)
+            for p in payments:
+                pcash = p.get("cash_account_code") or "1101"
+                rlines = [
+                    {"account_code": "2101", "debit": 0, "credit": p["amount"], "memo": f"Reclass {vendor_name}"},
+                    {"account_code": pcash, "debit": p.get("net_paid", p["amount"]), "credit": 0, "memo": f"Reclass {awb_no}"},
+                ]
+                if p.get("pph_amount", 0) > 0:
+                    rlines.append({"account_code": p.get("pph_account", "2223"), "debit": p["pph_amount"], "credit": 0, "memo": "Reclass PPh"})
+                await post_journal(date=now, description=f"Reclass pembayaran vendor {vendor_name} ({awb_no}) → Hutang",
+                                   lines=rlines, reference_type="cost_reclass", reference_id=cid, posted_by=user["id"])
+            await db.pph_records.delete_many({"cost_id": cid})
+        else:
+            # Legacy: satu settlement penuh (DR Kas / CR Hutang)
+            prev_cash_acc = cost.get("cash_account_code") or "1101"
+            await post_journal(
+                date=now,
+                description=f"Reclass paid vendor {vendor_name} ({awb_no}) → Hutang",
+                lines=[
+                    {"account_code": prev_cash_acc, "debit": cost["amount"], "credit": 0, "memo": f"Reclass {awb_no}"},
+                    {"account_code": "2101", "debit": 0, "credit": cost["amount"], "memo": vendor_name},
+                ],
+                reference_type="cost_reclass", reference_id=cid, posted_by=user["id"],
+            )
+    except HTTPException:
+        pass
     await db.awb_costs.update_one(
         {"_id": _oid(cid)},
         {"$set": {
-            "payment_type": "Accrue",
-            "is_settled": False,
-            "reclassed_at": now,
-            "reclassed_by": user["id"],
-        }, "$unset": {"settled_at": "", "cash_account_code": ""}},
+            "payment_type": "Accrue", "is_settled": False, "paid_amount": 0, "payments": [],
+            "reclassed_at": now, "reclassed_by": user["id"],
+        }, "$unset": {"settled_at": "", "cash_account_code": "", "settle_status": ""}},
     )
-    # Reverse journal: DR Cash / CR Hutang Usaha
-    try:
-        awb = await db.awb_orders.find_one({"_id": cost["awb_id"]})
-        awb_no = awb["awb_number"] if awb else ""
-        await post_journal(
-            date=now,
-            description=f"Reclass paid vendor {cost.get('vendor_name') or ''} ({awb_no}) → Hutang",
-            lines=[
-                {"account_code": prev_cash_acc, "debit": cost["amount"], "credit": 0, "memo": f"Reclass {awb_no}"},
-                {"account_code": "2101", "debit": 0, "credit": cost["amount"], "memo": cost.get("vendor_name") or ""},
-            ],
-            reference_type="cost_reclass", reference_id=cid, posted_by=user["id"],
-        )
-    except HTTPException:
-        pass
     return {"ok": True}
 
 # ===========================================================================
@@ -10396,7 +10493,7 @@ async def vendor_aging(as_of: Optional[str] = None, user: dict = Depends(get_cur
             bucket = "61-90"
         else:
             bucket = "90+"
-        amt = float(c.get("amount") or 0)
+        amt = round(float(c.get("amount") or 0) - float(c.get("paid_amount") or 0), 2)
         if vendor not in by_vendor:
             by_vendor[vendor] = {"vendor": vendor, "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0, "items": []}
         by_vendor[vendor][bucket] += amt
@@ -10456,7 +10553,7 @@ async def export_vendor_aging(as_of: Optional[str] = None, user: dict = Depends(
             cdate = cdate.replace(tzinfo=timezone.utc)
         days = max(0, (ref_date - cdate).days) if isinstance(cdate, datetime) else 0
         bucket = "0-30" if days <= 30 else ("31-60" if days <= 60 else ("61-90" if days <= 90 else "90+"))
-        amt = float(c.get("amount") or 0)
+        amt = round(float(c.get("amount") or 0) - float(c.get("paid_amount") or 0), 2)
         if vendor not in by_vendor:
             by_vendor[vendor] = {"vendor": vendor, "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0, "total": 0, "items": []}
         by_vendor[vendor][bucket] += amt
