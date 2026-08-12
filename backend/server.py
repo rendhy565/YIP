@@ -742,6 +742,34 @@ async def post_journal(
 async def journal_exists_for(reference_type: str, reference_id: str) -> bool:
     return bool(await db.journal_entries.find_one({"reference_type": reference_type, "reference_id": reference_id}))
 
+async def rewrite_journal_lines(journal_id, raw_lines: List[dict]):
+    """Rewrite an existing journal's lines IN PLACE (untuk koreksi nilai).
+    Re-enrich account info + recompute total. Sengaja bypass period lock karena ini
+    koreksi nilai di periode aslinya (bukan posting baru). Menjaga entry_no/date/period."""
+    enriched = []
+    total_dr = total_cr = 0.0
+    for ln in raw_lines:
+        dr = float(ln.get("debit") or 0)
+        cr = float(ln.get("credit") or 0)
+        if dr == 0 and cr == 0:
+            continue
+        acc = await get_account(ln["account_code"])
+        if not acc:
+            raise HTTPException(400, f"Akun {ln['account_code']} tidak ditemukan")
+        enriched.append({
+            "account_code": acc["code"], "account_name": acc["name"], "account_type": acc["type"],
+            "debit": round(dr, 2), "credit": round(cr, 2), "memo": ln.get("memo", ""),
+        })
+        total_dr += dr
+        total_cr += cr
+    if round(total_dr, 2) != round(total_cr, 2):
+        raise HTTPException(400, f"Jurnal koreksi tidak balance: DR {total_dr:.2f} != CR {total_cr:.2f}")
+    await db.journal_entries.update_one(
+        {"_id": journal_id},
+        {"$set": {"lines": enriched, "total_debit": round(total_dr, 2), "total_credit": round(total_cr, 2)}},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Activity Log helpers + Notifications (in-app)
 # ---------------------------------------------------------------------------
@@ -2067,6 +2095,60 @@ async def recognize_revenue_for_awb(awb_id, user_id: str, trigger_date: Optional
         {"$set": {"revenue_recognized": True, "revenue_recognized_at": date}},
     )
     return {"ok": True, "recognized": True, "amount": dpp}
+
+async def resync_awb_tariff_journals(awb) -> dict:
+    """Setelah total_tariff/tax_amount/grand_total AWB berubah, tulis ulang SEMUA jurnal
+    terkait supaya neraca/trial balance tetap sinkron. Tiap akun tetap net nol karena
+    kedua sisi memakai nilai baru yang sama. Mengembalikan ringkasan penyesuaian."""
+    oid = awb["_id"]
+    dpp = float(awb.get("total_tariff") or 0)
+    adjusted = []
+    # 1. PYMHD (order created): DR 1290 / CR 2390 = total_tariff
+    j = await db.journal_entries.find_one({"reference_type": "awb_order_pymhd", "reference_id": str(oid)})
+    if j:
+        await rewrite_journal_lines(j["_id"], [
+            {"account_code": "1290", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+            {"account_code": "2390", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+        ])
+        adjusted.append("PYMHD")
+    # 2. Revenue recognition: DR 2390 / CR 4101 = total_tariff
+    j = await db.journal_entries.find_one({"reference_type": "awb_revenue_recognition", "reference_id": str(oid)})
+    if j:
+        await rewrite_journal_lines(j["_id"], [
+            {"account_code": "2390", "debit": dpp, "credit": 0, "memo": awb["awb_number"]},
+            {"account_code": "4101", "debit": 0, "credit": dpp, "memo": awb["awb_number"]},
+        ])
+        adjusted.append("Revenue")
+    # 3. Invoice clearance (multi-AWB safe): recompute atas SEMUA AWB dalam invoice
+    inv = await db.invoices.find_one({"$or": [{"awb_id": oid}, {"awb_ids": oid}]})
+    if inv:
+        ji = await db.journal_entries.find_one({"reference_type": "invoice", "reference_id": str(inv["_id"])})
+        if ji:
+            awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+            awbs = await db.awb_orders.find({"_id": {"$in": awb_ids_list}}).to_list(100)
+            total_dpp = sum(float(a.get("total_tariff") or 0) for a in awbs)
+            total_tax = sum(float(a.get("tax_amount") or 0) for a in awbs)
+            gross = round(total_dpp + total_tax, 2)
+            lines = [
+                {"account_code": "1201", "debit": gross, "credit": 0, "memo": inv["invoice_number"]},
+                {"account_code": "1290", "debit": 0, "credit": total_dpp, "memo": f"Clear PYMHD {inv['invoice_number']}"},
+            ]
+            if total_tax > 0:
+                lines.append({"account_code": "2210", "debit": 0, "credit": total_tax, "memo": f"PPN — {inv['invoice_number']}"})
+            await rewrite_journal_lines(ji["_id"], lines)
+            adjusted.append("Invoice/AR")
+    # 4. Payment (kalau ada): DR kas / CR 1201 = grand_total
+    gt = float(awb.get("grand_total") or 0)
+    jp = await db.journal_entries.find_one({"reference_type": "payment", "reference_id": str(oid)})
+    if jp:
+        cash = next((l["account_code"] for l in jp.get("lines", []) if float(l.get("debit") or 0) > 0), awb.get("cash_account_code") or "1101")
+        await rewrite_journal_lines(jp["_id"], [
+            {"account_code": cash, "debit": gt, "credit": 0, "memo": awb["awb_number"]},
+            {"account_code": "1201", "debit": 0, "credit": gt, "memo": awb["awb_number"]},
+        ])
+        adjusted.append("Payment")
+    return {"adjusted": adjusted}
+
 
 @app.post("/api/orders")
 async def create_order(data: OrderIn, user: dict = Depends(require_role("operation"))):
@@ -10934,6 +11016,83 @@ async def set_invoice_number(iid: str, data: InvoiceNumberIn, user: dict = Depen
             if changed:
                 await db.journal_entries.update_one({"_id": j["_id"]}, {"$set": {"description": desc, "lines": lines}})
     return serialize(await db.invoices.find_one({"_id": _oid(iid)}))
+
+# ===========================================================================
+# ADMIN — Koreksi Tarif AWB (super admin only). Ubah total_tariff + auto-sync jurnal.
+# ===========================================================================
+class TariffCorrectionIn(BaseModel):
+    new_total_tariff: float
+
+@app.get("/api/admin/tariff/search")
+async def admin_tariff_search(q: str = "", user: dict = Depends(require_role("administrator"))):
+    """Cari AWB (by nomor) untuk koreksi tarif. Admin only."""
+    qs = (q or "").strip()
+    query = {"awb_number": {"$regex": re.escape(qs), "$options": "i"}} if qs else {}
+    rows = await db.awb_orders.find(query).sort("created_at", -1).limit(50).to_list(50)
+    cust_ids = [r.get("customer_id") for r in rows if r.get("customer_id")]
+    cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": cust_ids}}).to_list(500)}
+    out = []
+    for r in rows:
+        inv = await db.invoices.find_one({"$or": [{"awb_id": r["_id"]}, {"awb_ids": r["_id"]}]}, {"invoice_number": 1})
+        out.append({
+            "id": str(r["_id"]),
+            "awb_number": r.get("awb_number"),
+            "status": r.get("status"),
+            "customer_name": (cmap.get(r.get("customer_id")) or {}).get("name"),
+            "total_tariff": float(r.get("total_tariff") or 0),
+            "tax_percentage": float(r.get("tax_percentage") or 0),
+            "tax_amount": float(r.get("tax_amount") or 0),
+            "addons_total": float(r.get("addons_total") or 0),
+            "grand_total": float(r.get("grand_total") or 0),
+            "invoice_number": (inv or {}).get("invoice_number"),
+        })
+    return out
+
+@app.post("/api/admin/tariff/{oid}/correct")
+async def admin_correct_tariff(oid: str, data: TariffCorrectionIn, user: dict = Depends(require_role("administrator"))):
+    """Koreksi total_tariff AWB + hitung ulang PPN & grand_total + sinkron SEMUA jurnal terkait."""
+    awb = await db.awb_orders.find_one({"_id": _oid(oid)})
+    if not awb:
+        raise HTTPException(404, "AWB tidak ditemukan")
+    if awb.get("status") == "Paid":
+        raise HTTPException(400, "AWB sudah Paid — koreksi lewat menu ini tidak diizinkan (perlu batalkan pembayaran dulu).")
+    new_tariff = round(float(data.new_total_tariff or 0), 2)
+    if new_tariff < 0:
+        raise HTTPException(400, "Tarif tidak boleh negatif")
+    tax_pct = float(awb.get("tax_percentage") or 0)
+    new_tax = round(new_tariff * tax_pct / 100.0, 2)
+    addons = float(awb.get("addons_total") or 0)
+    new_gt = round(new_tariff + new_tax + addons, 2)
+    before = {
+        "total_tariff": float(awb.get("total_tariff") or 0),
+        "tax_amount": float(awb.get("tax_amount") or 0),
+        "grand_total": float(awb.get("grand_total") or 0),
+    }
+    upd = {"total_tariff": new_tariff, "tax_amount": new_tax, "grand_total": new_gt}
+    qty = float(awb.get("qty_kg") or 0)
+    if qty > 0 and not awb.get("is_charter"):
+        upd["tariff_per_kg"] = round(new_tariff / qty, 2)
+    upd["tariff_corrected_at"] = datetime.now(timezone.utc)
+    upd["tariff_corrected_by"] = user["id"]
+    await db.awb_orders.update_one({"_id": _oid(oid)}, {"$set": upd})
+    awb2 = await db.awb_orders.find_one({"_id": _oid(oid)})
+    sync = await resync_awb_tariff_journals(awb2)
+    try:
+        await log_activity(
+            user, "update", "awb_order", str(oid),
+            f"Koreksi Tarif AWB {awb['awb_number']}: Rp {before['total_tariff']:,.0f} → Rp {new_tariff:,.0f}",
+            {"before": before, "after": {"total_tariff": new_tariff, "tax_amount": new_tax, "grand_total": new_gt}, "journals_adjusted": sync["adjusted"]},
+        )
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "awb_number": awb["awb_number"],
+        "tax_percentage": tax_pct,
+        "before": before,
+        "after": {"total_tariff": new_tariff, "tax_amount": new_tax, "grand_total": new_gt, "addons_total": addons},
+        "journals_adjusted": sync["adjusted"],
+    }
 
 @app.get("/api/invoices/po-number-template")
 async def invoice_po_number_template(user: dict = Depends(get_current_user)):

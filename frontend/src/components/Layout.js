@@ -75,6 +75,7 @@ const NAV = [
   { to: "/settings", label: "Pengaturan", icon: SettingsIcon, perm: "settings" },
   { type: "section", label: "Administrator", adminOnly: true },
   { to: "/activity-log", label: "Activity Log", icon: Activity, perm: "*", adminOnly: true },
+  { to: "/admin/koreksi-tarif", label: "Koreksi Tarif AWB", icon: Coins, perm: "*", adminOnly: true },
   { to: "/import", label: "Import Excel", icon: Upload, perm: "*", adminOnly: true },
   { to: "/users", label: "User Management", icon: ShieldCheck, perm: "user_management" },
 ];
