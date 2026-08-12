@@ -11564,6 +11564,46 @@ async def bulk_import_template(user: dict = Depends(require_role("administrator"
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": 'attachment; filename="Template_Import_Massal_AWB.xlsx"'})
 
+@app.post("/api/customers/{cid}/apply-default-ppn")
+async def apply_customer_default_ppn(cid: str, dry_run: bool = False, user: dict = Depends(require_role("administrator"))):
+    """Terapkan Default PPN customer ke SEMUA AWB customer tsb (recompute amount + sinkron jurnal).
+    Override PPN lama (mis. 11% → 1.1%). Skip AWB berstatus Paid."""
+    cust = await db.customers.find_one({"_id": _oid(cid)})
+    if not cust:
+        raise HTTPException(404, "Customer tidak ditemukan")
+    dflt = float(cust.get("default_ppn_percentage") or 0)
+    if dflt <= 0:
+        raise HTTPException(400, "Customer belum punya Default PPN. Isi dulu Default PPN (%).")
+    awbs = await db.awb_orders.find({"customer_id": _oid(cid)}).to_list(10000)
+    affected = []; skipped_paid = []
+    for a in awbs:
+        if abs(float(a.get("tax_percentage") or 0) - dflt) < 0.001:
+            continue
+        if a.get("status") == "Paid":
+            skipped_paid.append(a["awb_number"]); continue
+        affected.append(a)
+    if dry_run:
+        return {"default_ppn": dflt, "affected_count": len(affected),
+                "affected": [a["awb_number"] for a in affected[:300]], "skipped_paid": skipped_paid}
+    done = []; errors = []
+    for a in affected:
+        try:
+            dpp = float(a.get("total_tariff") or 0)
+            new_tax = round(dpp * dflt / 100.0, 2)
+            addons = float(a.get("addons_total") or 0)
+            new_gt = round(dpp + new_tax + addons, 2)
+            await db.awb_orders.update_one({"_id": a["_id"]}, {"$set": {"tax_percentage": dflt, "tax_amount": new_tax, "grand_total": new_gt}})
+            a2 = await db.awb_orders.find_one({"_id": a["_id"]})
+            await resync_awb_tariff_journals(a2)
+            done.append(a["awb_number"])
+        except Exception as e:
+            errors.append(f"{a.get('awb_number')}: {str(e)[:100]}")
+    try:
+        await log_activity(user, "update", "customer", str(cid), f"Terapkan Default PPN {dflt}% ke {len(done)} AWB {cust.get('name')}", {"updated": len(done), "skipped_paid": len(skipped_paid)})
+    except Exception:
+        pass
+    return {"default_ppn": dflt, "updated_count": len(done), "updated": done, "skipped_paid": skipped_paid, "errors": errors}
+
 @app.get("/api/invoices/po-number-template")
 async def invoice_po_number_template(user: dict = Depends(get_current_user)):
     """Excel template untuk bulk import PO Number per Invoice."""

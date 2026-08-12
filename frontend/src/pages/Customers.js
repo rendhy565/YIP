@@ -12,6 +12,24 @@ export default function Customers() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
   const [editId, setEditId] = useState(null);
+  const [applyingPpn, setApplyingPpn] = useState(false);
+
+  const applyDefaultPpn = async () => {
+    if (!editId) return;
+    try {
+      const chk = await api.post(`/customers/${editId}/apply-default-ppn?dry_run=true`);
+      if (chk.data.affected_count === 0) {
+        toast.info(`Semua AWB customer ini sudah PPN ${chk.data.default_ppn}%. Tidak ada yang perlu diubah.`);
+        return;
+      }
+      const skip = chk.data.skipped_paid?.length ? ` (${chk.data.skipped_paid.length} AWB Paid dilewati)` : "";
+      if (!window.confirm(`Terapkan PPN ${chk.data.default_ppn}% ke ${chk.data.affected_count} AWB customer ini? PPN & total dihitung ulang dan jurnal akuntansi ikut disesuaikan${skip}.`)) return;
+      setApplyingPpn(true);
+      const res = await api.post(`/customers/${editId}/apply-default-ppn`);
+      toast.success(`${res.data.updated_count} AWB diperbarui ke PPN ${res.data.default_ppn}%${res.data.skipped_paid?.length ? `, ${res.data.skipped_paid.length} Paid dilewati` : ""}`);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setApplyingPpn(false); }
+  };
 
   const load = () => api.get("/customers").then((r) => setRows(r.data));
   useEffect(() => { load(); }, []);
@@ -134,6 +152,11 @@ export default function Customers() {
                 <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Default PPN (%)</label>
                 <Input data-testid="customer-default-ppn-input" type="number" step="0.01" value={form.default_ppn_percentage} onChange={(e) => setForm({ ...form, default_ppn_percentage: e.target.value })} placeholder="mis. 11 atau 1.1 — kosongkan jika tidak ada" />
                 <p className="text-[11px] text-slate-500 mt-1">Dipakai sebagai PPN default saat input order & saat import massal (jika PPN AWB kosong).</p>
+                {editId && (
+                  <Button type="button" variant="secondary" data-testid="apply-default-ppn-btn" onClick={applyDefaultPpn} disabled={applyingPpn} className="mt-2 !bg-amber-50 !text-amber-900 hover:!bg-amber-100 !border-amber-300">
+                    {applyingPpn ? "Menerapkan..." : "Terapkan Default PPN ke Semua AWB Customer Ini"}
+                  </Button>
+                )}
               </div>
               <div>
                 <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Alamat</label>
