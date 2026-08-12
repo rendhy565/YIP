@@ -11265,6 +11265,10 @@ def _bulk_categorize(valid, not_found):
     rep["not_found"] = not_found
     rep["valid_count"] = len(valid)
     rep["total_rows"] = len(valid) + len(not_found)
+    rep["has_actions"] = bool(
+        rep["dpp_changes"] or rep["invoice_fill"] or rep["invoice_changes"] or rep["invoice_create"]
+        or rep["po_fill"] or rep["po_changes"] or rep["ppn_fills"]
+    )
     return rep
 
 class BulkItem(BaseModel):

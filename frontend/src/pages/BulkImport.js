@@ -53,7 +53,11 @@ export default function BulkImport() {
       const fd = new FormData(); fd.append("file", file);
       const r = await api.post("/admin/bulk-import/preview", fd, { headers: { "Content-Type": "multipart/form-data" } });
       setPreview(r.data);
-      toast.success("Pratinjau siap — periksa laporan di bawah");
+      if (r.data?.report?.has_actions === false) {
+        toast.success("Semua data di file sudah sama dengan sistem — tidak ada yang perlu diubah");
+      } else {
+        toast.success("Pratinjau siap — periksa laporan di bawah");
+      }
     } catch (e) { toast.error(errMsg(e)); }
     finally { setLoading(false); }
   };
@@ -101,6 +105,12 @@ export default function BulkImport() {
           </div>
 
           <div className="space-y-2">
+            {rep.has_actions === false && (
+              <div data-testid="bulk-no-changes" className="flex items-center gap-2 rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+                <CheckCircle2 size={18} className="shrink-0" />
+                <span><strong>Semua data sudah sama.</strong> Isi file cocok dengan sistem — tidak ada perubahan yang perlu diterapkan{(rep.not_found || []).length > 0 ? `, kecuali ${(rep.not_found || []).length} AWB yang tidak ditemukan (di-skip).` : "."}</span>
+              </div>
+            )}
             <Section tone="rose" title="AWB Tidak Ditemukan (di-skip)" items={rep.not_found} render={(x) => <span className="font-mono">{x}</span>} />
             <Section tone="amber" title="DPP Berbeda — perlu konfirmasi" items={rep.dpp_changes} render={(x) => <span><span className="font-mono">{x.awb}</span>: {fmtIDR(x.old)} → <strong>{fmtIDR(x.new)}</strong></span>} />
             <Section tone="blue" title="PPN kosong → pakai default customer" items={rep.ppn_fills} render={(x) => <span><span className="font-mono">{x.awb}</span>: PPN {x.ppn}%</span>} />
@@ -121,7 +131,7 @@ export default function BulkImport() {
             </div>
             <p className="text-[11px] text-slate-500 mt-2">Catatan: pengisian nilai kosong, pembuatan invoice baru, dan grouping akan otomatis diterapkan.</p>
             <div className="flex justify-end mt-3">
-              <Button data-testid="bulk-apply-btn" onClick={doApply} disabled={loading}><CheckCircle2 size={14} /> {loading ? "Menerapkan..." : "Terapkan Import"}</Button>
+              <Button data-testid="bulk-apply-btn" onClick={doApply} disabled={loading || rep.has_actions === false}><CheckCircle2 size={14} /> {loading ? "Menerapkan..." : (rep.has_actions === false ? "Tidak Ada Perubahan" : "Terapkan Import")}</Button>
             </div>
           </div>
         </Card>
