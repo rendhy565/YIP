@@ -138,6 +138,11 @@ export default function OrderInput() {
       api.get("/sender-suggestions", { params: { customer_id: form.customer_id } })
         .then((r) => setSenderSuggestions(r.data || []))
         .catch(() => setSenderSuggestions([]));
+      // Auto-isi PPN default dari master customer (jika ada)
+      const cust = customers.find((c) => c.id === form.customer_id);
+      if (cust && cust.default_ppn_percentage != null && cust.default_ppn_percentage !== "") {
+        setForm((f) => ({ ...f, tax_percentage: String(cust.default_ppn_percentage) }));
+      }
     } else {
       setContracts([]);
       setSenderSuggestions([]);

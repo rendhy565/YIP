@@ -448,6 +448,7 @@ class CustomerIn(BaseModel):
     address: Optional[str] = None
     npwp: Optional[str] = None
     tracking_code: Optional[str] = None  # short human-friendly public tracking code (unique, editable)
+    default_ppn_percentage: Optional[float] = None  # PPN default utk order customer ini (auto-isi saat input)
 
 class ContractIn(BaseModel):
     customer_id: str
@@ -768,6 +769,61 @@ async def rewrite_journal_lines(journal_id, raw_lines: List[dict]):
         {"_id": journal_id},
         {"$set": {"lines": enriched, "total_debit": round(total_dr, 2), "total_credit": round(total_cr, 2)}},
     )
+
+async def insert_journal_direct(*, date, description, lines, reference_type, reference_id, posted_by, extra_fields=None):
+    """Post jurnal balanced TANPA cek period lock (untuk koreksi/rebuild di periode asli)."""
+    enriched = []
+    dr = cr = 0.0
+    for ln in lines:
+        d = float(ln.get("debit") or 0)
+        c = float(ln.get("credit") or 0)
+        if d == 0 and c == 0:
+            continue
+        acc = await get_account(ln["account_code"])
+        if not acc:
+            raise HTTPException(400, f"Akun {ln['account_code']} tidak ditemukan")
+        enriched.append({"account_code": acc["code"], "account_name": acc["name"], "account_type": acc["type"],
+                         "debit": round(d, 2), "credit": round(c, 2), "memo": ln.get("memo", "")})
+        dr += d
+        cr += c
+    if not enriched:
+        return None
+    if round(dr, 2) != round(cr, 2):
+        raise HTTPException(400, f"Jurnal tidak balance: {dr:.2f} != {cr:.2f}")
+    doc = {
+        "entry_no": await next_journal_number(), "date": date, "period_month": date.strftime("%Y-%m"),
+        "description": description, "reference_type": reference_type, "reference_id": reference_id,
+        "lines": enriched, "total_debit": round(dr, 2), "total_credit": round(cr, 2),
+        "posted_by": posted_by, "auto": True, "is_locked": False, "created_at": datetime.now(timezone.utc),
+    }
+    if extra_fields:
+        doc.update(extra_fields)
+    r = await db.journal_entries.insert_one(doc)
+    return str(r.inserted_id)
+
+async def rebuild_invoice_ar_journal(inv, posted_by):
+    """Hapus jurnal AR lama invoice ini + post ulang SATU jurnal AR gabungan atas semua awb_ids.
+    Hanya post kalau invoice sudah ar_recognized (sudah dicetak). Dipakai saat merge/koreksi."""
+    await db.journal_entries.delete_many({"reference_type": "invoice", "reference_id": str(inv["_id"])})
+    if not inv.get("ar_recognized"):
+        return False
+    awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+    awbs = await db.awb_orders.find({"_id": {"$in": awb_ids_list}}).to_list(200)
+    total_dpp = sum(float(a.get("total_tariff") or 0) for a in awbs)
+    total_tax = sum(float(a.get("tax_amount") or 0) for a in awbs)
+    gross = round(total_dpp + total_tax, 2)
+    if gross <= 0:
+        return False
+    lines = [
+        {"account_code": "1201", "debit": gross, "credit": 0, "memo": inv["invoice_number"]},
+        {"account_code": "1290", "debit": 0, "credit": total_dpp, "memo": f"Clear PYMHD {inv['invoice_number']}"},
+    ]
+    if total_tax > 0:
+        lines.append({"account_code": "2210", "debit": 0, "credit": total_tax, "memo": f"PPN — {inv['invoice_number']}"})
+    date = inv.get("invoice_date") or inv.get("first_printed_at") or datetime.now(timezone.utc)
+    await insert_journal_direct(date=date, description=f"Piutang & PPN — Invoice {inv['invoice_number']}",
+                                lines=lines, reference_type="invoice", reference_id=str(inv["_id"]), posted_by=posted_by)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -11093,6 +11149,351 @@ async def admin_correct_tariff(oid: str, data: TariffCorrectionIn, user: dict = 
         "after": {"total_tariff": new_tariff, "tax_amount": new_tax, "grand_total": new_gt, "addons_total": addons},
         "journals_adjusted": sync["adjusted"],
     }
+
+# ===========================================================================
+# ADMIN — Import Massal Rekonsiliasi (AWB, DPP, No. Invoice, No. PO)
+# ===========================================================================
+def _bulk_num(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip()
+    if s == "":
+        return None
+    s = re.sub(r"[^0-9,.\-]", "", s)
+    # handle Indonesian thousand sep: if both , and . present, assume . is thousand
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+def _bulk_parse_rows(ws):
+    header = [str(c.value).strip().lower() if c.value is not None else "" for c in ws[1]]
+    def idx(*aliases):
+        for i, h in enumerate(header):
+            for a in aliases:
+                if a in h:
+                    return i
+        return None
+    i_awb = idx("awb"); i_dpp = idx("dpp", "tarif"); i_inv = idx("invoice", "inv"); i_po = idx("po")
+    if i_awb is None: i_awb = 0
+    if i_dpp is None: i_dpp = 1
+    if i_inv is None: i_inv = 2
+    if i_po is None: i_po = 3
+    rows = []
+    for r in ws.iter_rows(min_row=2, values_only=True):
+        if r is None or all(x is None for x in r):
+            continue
+        def g(i):
+            return r[i] if (i is not None and i < len(r)) else None
+        awb = g(i_awb)
+        if awb is None or str(awb).strip() == "" or str(awb).strip().startswith(("ℹ", "•")):
+            continue
+        inv = g(i_inv); po = g(i_po)
+        rows.append({
+            "awb_number": str(awb).strip(),
+            "dpp": _bulk_num(g(i_dpp)),
+            "invoice": (str(inv).strip() if inv not in (None, "") else None),
+            "po": (str(po).strip() if po not in (None, "") else None),
+        })
+    return rows
+
+async def _bulk_gather(rows):
+    valid = []; not_found = []
+    for r in rows:
+        awbn = str(r.get("awb_number") or "").strip()
+        if not awbn:
+            continue
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
+        if not awb:
+            not_found.append(awbn)
+            continue
+        inv = await db.invoices.find_one({"$or": [{"awb_id": awb["_id"]}, {"awb_ids": awb["_id"]}]})
+        cust = await db.customers.find_one({"_id": awb.get("customer_id")}) if awb.get("customer_id") else None
+        valid.append({
+            "awb_id": str(awb["_id"]), "awb_number": awb["awb_number"],
+            "file_dpp": (None if r.get("dpp") in (None, "") else round(float(r.get("dpp")), 2)),
+            "file_inv": (str(r.get("invoice")).strip() or None) if r.get("invoice") not in (None, "") else None,
+            "file_po": (str(r.get("po")).strip() or None) if r.get("po") not in (None, "") else None,
+            "current_dpp": float(awb.get("total_tariff") or 0),
+            "current_inv": (inv.get("invoice_number") if inv else None),
+            "current_po": (inv.get("po_number") if inv else None),
+            "has_invoice_doc": bool(inv),
+            "ar_recognized": bool(inv and inv.get("ar_recognized")),
+            "status": awb.get("status"),
+            "tax_percentage": float(awb.get("tax_percentage") or 0),
+            "customer_default_ppn": float((cust or {}).get("default_ppn_percentage") or 0),
+            "customer_name": (cust or {}).get("name"),
+        })
+    return valid, not_found
+
+def _bulk_categorize(valid, not_found):
+    rep = {"dpp_changes": [], "invoice_fill": [], "invoice_changes": [], "invoice_create": [],
+           "po_fill": [], "po_changes": [], "ppn_fills": [], "groupings": [], "no_change_count": 0}
+    for v in valid:
+        changed = False
+        if v["file_dpp"] is not None and abs(v["file_dpp"] - v["current_dpp"]) >= 0.01:
+            rep["dpp_changes"].append({"awb": v["awb_number"], "old": v["current_dpp"], "new": v["file_dpp"]}); changed = True
+        if v["tax_percentage"] <= 0 and v["customer_default_ppn"] > 0 and v["file_dpp"] is not None:
+            rep["ppn_fills"].append({"awb": v["awb_number"], "ppn": v["customer_default_ppn"]})
+        if v["file_inv"]:
+            if not v["has_invoice_doc"]:
+                rep["invoice_create"].append({"awb": v["awb_number"], "new": v["file_inv"]}); changed = True
+            elif not (v["current_inv"] or ""):
+                rep["invoice_fill"].append({"awb": v["awb_number"], "new": v["file_inv"]}); changed = True
+            elif v["current_inv"] != v["file_inv"]:
+                rep["invoice_changes"].append({"awb": v["awb_number"], "old": v["current_inv"], "new": v["file_inv"]}); changed = True
+        if v["file_po"]:
+            if not (v["current_po"] or ""):
+                rep["po_fill"].append({"awb": v["awb_number"], "new": v["file_po"]}); changed = True
+            elif v["current_po"] != v["file_po"]:
+                rep["po_changes"].append({"awb": v["awb_number"], "old": v["current_po"], "new": v["file_po"]}); changed = True
+        if not changed:
+            rep["no_change_count"] += 1
+    groups = {}
+    for v in valid:
+        if v["file_inv"]:
+            groups.setdefault(v["file_inv"], []).append(v["awb_number"])
+    for inv_no, awbs in groups.items():
+        if len(awbs) > 1:
+            rep["groupings"].append({"invoice": inv_no, "awbs": awbs})
+    rep["not_found"] = not_found
+    rep["valid_count"] = len(valid)
+    rep["total_rows"] = len(valid) + len(not_found)
+    return rep
+
+class BulkItem(BaseModel):
+    awb_number: str
+    dpp: Optional[float] = None
+    invoice: Optional[str] = None
+    po: Optional[str] = None
+
+class BulkApplyIn(BaseModel):
+    items: List[BulkItem]
+    apply_dpp: bool = False
+    apply_invoice: bool = False
+    apply_po: bool = False
+
+@app.post("/api/admin/bulk-import/preview")
+async def bulk_import_preview(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    rows = _bulk_parse_rows(wb.active)
+    if not rows:
+        raise HTTPException(400, "Tidak ada baris data di file")
+    valid, not_found = await _bulk_gather(rows)
+    report = _bulk_categorize(valid, not_found)
+    return {"report": report, "items": rows}
+
+@app.post("/api/admin/bulk-import/apply")
+async def bulk_import_apply(data: BulkApplyIn, user: dict = Depends(require_role("administrator"))):
+    rows = [{"awb_number": it.awb_number, "dpp": it.dpp, "invoice": it.invoice, "po": it.po} for it in data.items]
+    valid, not_found = await _bulk_gather(rows)
+    now = datetime.now(timezone.utc)
+    res = {"not_found": not_found, "dpp_applied": [], "dpp_skipped": [], "ppn_filled": [],
+           "invoice_created": [], "invoice_filled": [], "invoice_changed": [], "invoice_skipped": [],
+           "po_filled": [], "po_changed": [], "po_skipped": [], "po_no_invoice": [], "grouped": [], "errors": []}
+
+    # PHASE 1 — DPP (+ PPN default fill)
+    for v in valid:
+        if v["file_dpp"] is None:
+            continue
+        try:
+            awb = await db.awb_orders.find_one({"_id": _oid(v["awb_id"])})
+            cur = float(awb.get("total_tariff") or 0)
+            new_dpp = round(v["file_dpp"], 2)
+            pct = float(awb.get("tax_percentage") or 0)
+            filled_ppn = False
+            if pct <= 0 and v["customer_default_ppn"] > 0:
+                pct = v["customer_default_ppn"]; filled_ppn = True
+            if abs(cur - new_dpp) < 0.01:
+                # DPP tidak berubah — tetap isi PPN default kalau AWB PPN kosong
+                if filled_ppn and data.apply_dpp:
+                    new_tax = round(new_dpp * pct / 100.0, 2)
+                    addons = float(awb.get("addons_total") or 0)
+                    new_gt = round(new_dpp + new_tax + addons, 2)
+                    await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": {"tax_amount": new_tax, "grand_total": new_gt, "tax_percentage": pct}})
+                    awb2 = await db.awb_orders.find_one({"_id": awb["_id"]})
+                    await resync_awb_tariff_journals(awb2)
+                    res["ppn_filled"].append({"awb": v["awb_number"], "ppn": pct})
+                continue  # no DPP change
+            if not data.apply_dpp:
+                res["dpp_skipped"].append({"awb": v["awb_number"], "old": cur, "new": new_dpp}); continue
+            new_tax = round(new_dpp * pct / 100.0, 2)
+            addons = float(awb.get("addons_total") or 0)
+            new_gt = round(new_dpp + new_tax + addons, 2)
+            upd = {"total_tariff": new_dpp, "tax_amount": new_tax, "grand_total": new_gt}
+            if filled_ppn:
+                upd["tax_percentage"] = pct
+            qty = float(awb.get("qty_kg") or 0)
+            if qty > 0 and not awb.get("is_charter"):
+                upd["tariff_per_kg"] = round(new_dpp / qty, 2)
+            await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": upd})
+            awb2 = await db.awb_orders.find_one({"_id": awb["_id"]})
+            await resync_awb_tariff_journals(awb2)
+            res["dpp_applied"].append({"awb": v["awb_number"], "old": cur, "new": new_dpp, "ppn_pct": pct})
+            if filled_ppn:
+                res["ppn_filled"].append({"awb": v["awb_number"], "ppn": pct})
+        except Exception as e:
+            res["errors"].append(f"DPP {v['awb_number']}: {str(e)[:120]}")
+
+    # PHASE 2 — Invoice grouping / number / PO / creation (group by file invoice)
+    groups = {}
+    for v in valid:
+        if v["file_inv"]:
+            groups.setdefault(v["file_inv"], []).append(v)
+    for inv_no, members in groups.items():
+        try:
+            awb_oids = [_oid(m["awb_id"]) for m in members]
+            group_po = next((m["file_po"] for m in members if m["file_po"]), None)
+            docs = []; seen = set()
+            for oid in awb_oids:
+                d = await db.invoices.find_one({"$or": [{"awb_id": oid}, {"awb_ids": oid}]})
+                if d and str(d["_id"]) not in seen:
+                    docs.append(d); seen.add(str(d["_id"]))
+            was_ar = any(d.get("ar_recognized") for d in docs)
+            member_awbs = [m["awb_number"] for m in members]
+
+            if not docs:
+                # create ONE new invoice doc for all
+                newdoc = {"awb_id": awb_oids[0], "awb_ids": awb_oids, "invoice_number": inv_no,
+                          "created_at": now, "invoice_date": None, "first_printed_at": None,
+                          "print_count": 0, "ar_recognized": False, "created_by": user["id"],
+                          "po_number": group_po}
+                await db.invoices.insert_one(newdoc)
+                for oid in awb_oids:
+                    a = await db.awb_orders.find_one({"_id": oid}, {"status": 1})
+                    if (a or {}).get("status") not in ("Paid", "Invoiced"):
+                        await db.awb_orders.update_one({"_id": oid}, {"$set": {"status": "Invoiced", "invoiced_at": now}})
+                    try:
+                        await recognize_revenue_for_awb(oid, user["id"])
+                    except Exception:
+                        pass
+                res["invoice_created"].append({"invoice": inv_no, "awbs": member_awbs})
+                if group_po:
+                    res["po_filled"].append({"invoice": inv_no, "po": group_po})
+                if len(member_awbs) > 1:
+                    res["grouped"].append({"invoice": inv_no, "awbs": member_awbs, "action": "buat invoice gabungan"})
+                continue
+
+            # canonical among existing docs
+            canonical = next((d for d in docs if (d.get("invoice_number") or "") == inv_no), docs[0])
+            existing_ids = canonical.get("awb_ids") or ([canonical.get("awb_id")] if canonical.get("awb_id") else [])
+            umap = {}
+            for x in list(existing_ids) + awb_oids:
+                umap[str(x)] = x if isinstance(x, ObjectId) else _oid(x)
+            union_oids = list(umap.values())
+
+            # invoice number decision
+            cur_no = canonical.get("invoice_number") or ""
+            set_no = cur_no
+            if not cur_no:
+                set_no = inv_no; res["invoice_filled"].append({"invoice": inv_no, "awbs": member_awbs})
+            elif cur_no == inv_no:
+                pass
+            else:
+                if data.apply_invoice:
+                    set_no = inv_no; res["invoice_changed"].append({"old": cur_no, "new": inv_no, "awbs": member_awbs})
+                else:
+                    res["invoice_skipped"].append({"old": cur_no, "requested": inv_no, "awbs": member_awbs})
+
+            # PO decision
+            cur_po = canonical.get("po_number") or ""
+            set_po = cur_po
+            if group_po is not None:
+                if not cur_po:
+                    set_po = group_po; res["po_filled"].append({"invoice": set_no, "po": group_po})
+                elif cur_po == group_po:
+                    pass
+                else:
+                    if data.apply_po:
+                        set_po = group_po; res["po_changed"].append({"old": cur_po, "new": group_po, "invoice": set_no})
+                    else:
+                        res["po_skipped"].append({"old": cur_po, "requested": group_po, "invoice": set_no})
+
+            # delete other docs + their AR journals
+            for d in docs:
+                if d["_id"] != canonical["_id"]:
+                    await db.journal_entries.delete_many({"reference_type": "invoice", "reference_id": str(d["_id"])})
+                    await db.invoices.delete_one({"_id": d["_id"]})
+
+            await db.invoices.update_one({"_id": canonical["_id"]}, {"$set": {
+                "awb_ids": union_oids, "awb_id": union_oids[0],
+                "invoice_number": set_no, "po_number": (set_po or None), "ar_recognized": was_ar,
+                "invoice_date": canonical.get("invoice_date") or (next((d.get("invoice_date") or d.get("first_printed_at") for d in docs if d.get("invoice_date") or d.get("first_printed_at")), None) if was_ar else None),
+            }})
+            for oid in union_oids:
+                a = await db.awb_orders.find_one({"_id": oid}, {"status": 1})
+                if (a or {}).get("status") not in ("Paid", "Invoiced"):
+                    await db.awb_orders.update_one({"_id": oid}, {"$set": {"status": "Invoiced", "invoiced_at": now}})
+                try:
+                    await recognize_revenue_for_awb(oid, user["id"])
+                except Exception:
+                    pass
+            canon2 = await db.invoices.find_one({"_id": canonical["_id"]})
+            await rebuild_invoice_ar_journal(canon2, user["id"])
+            if len(docs) > 1 or len(member_awbs) > 1:
+                res["grouped"].append({"invoice": set_no, "awbs": member_awbs, "action": "gabung ke satu invoice"})
+        except Exception as e:
+            res["errors"].append(f"Invoice {inv_no}: {str(e)[:150]}")
+
+    # PHASE 3 — PO-only rows (invoice blank tapi ada PO)
+    for v in valid:
+        if v["file_inv"] or not v["file_po"]:
+            continue
+        try:
+            d = await db.invoices.find_one({"$or": [{"awb_id": _oid(v["awb_id"])}, {"awb_ids": _oid(v["awb_id"])}]})
+            if not d:
+                res["po_no_invoice"].append(v["awb_number"]); continue
+            cur_po = d.get("po_number") or ""
+            if cur_po == v["file_po"]:
+                continue
+            if not cur_po:
+                await db.invoices.update_one({"_id": d["_id"]}, {"$set": {"po_number": v["file_po"]}})
+                res["po_filled"].append({"invoice": d.get("invoice_number"), "po": v["file_po"]})
+            else:
+                if data.apply_po:
+                    await db.invoices.update_one({"_id": d["_id"]}, {"$set": {"po_number": v["file_po"]}})
+                    res["po_changed"].append({"old": cur_po, "new": v["file_po"], "invoice": d.get("invoice_number")})
+                else:
+                    res["po_skipped"].append({"old": cur_po, "requested": v["file_po"], "invoice": d.get("invoice_number")})
+        except Exception as e:
+            res["errors"].append(f"PO {v['awb_number']}: {str(e)[:120]}")
+
+    try:
+        await log_activity(user, "import", "awb_order", None, "Import Massal Rekonsiliasi AWB",
+                           {"flags": {"dpp": data.apply_dpp, "invoice": data.apply_invoice, "po": data.apply_po},
+                            "counts": {k: len(res[k]) for k in res if isinstance(res[k], list)}})
+    except Exception:
+        pass
+    return res
+
+@app.get("/api/admin/bulk-import/template")
+async def bulk_import_template(user: dict = Depends(require_role("administrator"))):
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Import Massal AWB"
+    bold_white = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    for i, h in enumerate(["No AWB *", "DPP", "No Invoice", "No PO"], 1):
+        c = ws.cell(1, i, h); c.font = bold_white; c.fill = header_fill
+        c.alignment = Alignment(horizontal="center"); c.border = border
+    ws.column_dimensions["A"].width = 18
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 24
+    ws.column_dimensions["D"].width = 20
+    ws.cell(2, 1, "205605"); ws.cell(2, 2, 1500000); ws.cell(2, 3, "INV/AR/0326/001"); ws.cell(2, 4, "PO-123")
+    output = io.BytesIO(); wb.save(output); output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": 'attachment; filename="Template_Import_Massal_AWB.xlsx"'})
 
 @app.get("/api/invoices/po-number-template")
 async def invoice_po_number_template(user: dict = Depends(get_current_user)):

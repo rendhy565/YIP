@@ -5,7 +5,7 @@ import { errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Pencil, X, Copy, Ticket } from "lucide-react";
 
-const empty = { name: "", company_details: "", address: "", npwp: "", tracking_code: "" };
+const empty = { name: "", company_details: "", address: "", npwp: "", tracking_code: "", default_ppn_percentage: "" };
 
 export default function Customers() {
   const [rows, setRows] = useState([]);
@@ -19,7 +19,7 @@ export default function Customers() {
   const submit = async (e) => {
     e.preventDefault();
     try {
-      const payload = { ...form, tracking_code: (form.tracking_code || "").trim().toUpperCase() || null };
+      const payload = { ...form, tracking_code: (form.tracking_code || "").trim().toUpperCase() || null, default_ppn_percentage: (form.default_ppn_percentage === "" || form.default_ppn_percentage == null) ? null : parseFloat(form.default_ppn_percentage) };
       if (editId) await api.put(`/customers/${editId}`, payload);
       else await api.post("/customers", payload);
       toast.success(editId ? "Customer diperbarui" : "Customer dibuat");
@@ -79,7 +79,7 @@ export default function Customers() {
                 <Td className="font-mono text-xs">{r.npwp || "-"}</Td>
                 <Td className="max-w-[240px] truncate" title={r.address}>{r.address || "-"}</Td>
                 <Td className="text-right">
-                  <button onClick={() => { setForm({ name: r.name, company_details: r.company_details || "", address: r.address || "", npwp: r.npwp || "", tracking_code: r.tracking_code || "" }); setEditId(r.id); setOpen(true); }}
+                  <button onClick={() => { setForm({ name: r.name, company_details: r.company_details || "", address: r.address || "", npwp: r.npwp || "", tracking_code: r.tracking_code || "", default_ppn_percentage: r.default_ppn_percentage ?? "" }); setEditId(r.id); setOpen(true); }}
                     className="p-1.5 rounded hover:bg-slate-100 text-slate-600">
                     <Pencil size={14} />
                   </button>
@@ -129,6 +129,11 @@ export default function Customers() {
               <div>
                 <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">NPWP</label>
                 <Input value={form.npwp} onChange={(e) => setForm({ ...form, npwp: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Default PPN (%)</label>
+                <Input data-testid="customer-default-ppn-input" type="number" step="0.01" value={form.default_ppn_percentage} onChange={(e) => setForm({ ...form, default_ppn_percentage: e.target.value })} placeholder="mis. 11 atau 1.1 — kosongkan jika tidak ada" />
+                <p className="text-[11px] text-slate-500 mt-1">Dipakai sebagai PPN default saat input order & saat import massal (jika PPN AWB kosong).</p>
               </div>
               <div>
                 <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Alamat</label>

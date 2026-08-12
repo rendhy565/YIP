@@ -45,6 +45,7 @@ import AssetModule from "./pages/AssetModule";
 import BankReconciliation from "./pages/BankReconciliation";
 import ImportExcel from "./pages/ImportExcel";
 import TariffCorrection from "./pages/TariffCorrection";
+import BulkImport from "./pages/BulkImport";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import PanjarKerja from "./pages/PanjarKerja";
 import InvoicesCreated from "./pages/InvoicesCreated";
@@ -148,6 +149,7 @@ export default function App() {
 
             <Route path="/import" element={<Protected roles={["administrator"]}><Shell><ImportExcel /></Shell></Protected>} />
             <Route path="/admin/koreksi-tarif" element={<Protected roles={["administrator"]}><Shell><TariffCorrection /></Shell></Protected>} />
+            <Route path="/admin/import-massal" element={<Protected roles={["administrator"]}><Shell><BulkImport /></Shell></Protected>} />
             <Route path="/analytics" element={<Protected module="pnl"><Shell><AnalyticsDashboard /></Shell></Protected>} />
             <Route path="/panjar" element={<Protected module="fixed_costs"><Shell><PanjarKerja /></Shell></Protected>} />
             <Route path="/purchase-orders" element={<Protected module="purchase_orders"><Shell><PurchaseOrders /></Shell></Protected>} />
