@@ -21,7 +21,7 @@ const EMPTY_EMP = {
   emergency2_name: "", emergency2_phone: "", emergency2_relation: "", emergency2_address: "",
   family: [],
   position: "", bpjs_no: "", ptkp_status: "TK/0", pph21_active: false, base_salary: 0, allowance: 0, meal_allowance: 0, gaji_lumpsum: false, join_date: "", active: true,
-  work_days: [], work_schedule: {},
+  work_days: [], work_schedule: {}, sort_priority: "",
 };
 
 const WORK_DAY_OPTS = [
@@ -99,6 +99,7 @@ export default function HrPayroll() {
         allowance: Number(form.allowance || 0),
         meal_allowance: Number(form.meal_allowance || 0),
         gaji_lumpsum: !!form.gaji_lumpsum,
+        sort_priority: (form.sort_priority === "" || form.sort_priority == null || isNaN(parseInt(form.sort_priority, 10))) ? null : parseInt(form.sort_priority, 10),
         family: (form.family || []).filter((f) => (f.nama || "").trim() || (f.hubungan || "").trim()),
       };
       if (editing === "new") await api.post("/hr/employees", payload);
@@ -630,6 +631,12 @@ export default function HrPayroll() {
                       <option value="0">Nonaktif</option>
                     </Select>
                   </div>
+                </div>
+                {/* Prioritas urutan tampil (angka) */}
+                <div className="mt-3">
+                  <Label>Prioritas Urutan (angka)</Label>
+                  <Input type="number" data-testid="emp-sort-priority" value={form.sort_priority} onChange={(e) => setForm({ ...form, sort_priority: e.target.value })} placeholder="mis. 1, 2, 3 — makin kecil makin atas" />
+                  <p className="text-[11px] text-slate-500 mt-1">Menentukan urutan karyawan di dropdown & daftar. Kosong = tampil paling bawah.</p>
                 </div>
                 {/* Jadwal Kerja per HARI per karyawan (override config global absensi) */}
                 <div className="mt-3 border border-indigo-200 rounded p-3 bg-indigo-50/50" data-testid="emp-schedule-section">

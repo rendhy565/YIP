@@ -299,6 +299,7 @@ MODULE_FEATURES: dict = {
     ],
     "invoices_created": [
         ("cancel", "Cancel Invoice Tercetak"),
+        ("edit_invoice_number", "Edit Nomor Invoice"),
         ("import_numbers", "Import Invoice No (Mark Status)"),
         ("export_fpk", "Export FPK (Faktur Pajak)"),
         ("export_ar", "Export Report AR"),
@@ -5130,11 +5131,14 @@ class EmployeeIn(BaseModel):
     work_hour_in: Optional[str] = None        # HH:MM jam masuk (default semua hari)
     work_hour_out: Optional[str] = None       # HH:MM jam pulang (default semua hari)
     work_schedule: Optional[dict] = None      # per-hari: {"mon":{"in":"08:00","out":"17:00"}, ...}
+    sort_priority: Optional[int] = None       # urutan tampil dropdown/list (angka, kecil = atas)
     active: bool = True
 
 @app.get("/api/hr/employees")
 async def list_employees(user: dict = Depends(require_feature("hr"))):
-    docs = await db.employees.find().sort("created_at", -1).to_list(2000)
+    docs = await db.employees.find().to_list(2000)
+    # Sort MURNI berdasarkan angka prioritas (sort_priority) asc; yang belum di-set → paling bawah.
+    docs.sort(key=lambda d: (d.get("sort_priority") is None, d.get("sort_priority") if d.get("sort_priority") is not None else 0))
     out = []
     for d in docs:
         s = serialize(d)
@@ -10891,6 +10895,44 @@ async def set_invoice_po_number(iid: str, data: InvoicePONumberIn, user: dict = 
         {"_id": _oid(iid)},
         {"$set": {"po_number": po_num, "po_number_updated_at": datetime.now(timezone.utc), "po_number_updated_by": user["id"]}}
     )
+    return serialize(await db.invoices.find_one({"_id": _oid(iid)}))
+
+class InvoiceNumberIn(BaseModel):
+    invoice_number: str
+
+@app.patch("/api/invoices/{iid}/invoice-number")
+async def set_invoice_number(iid: str, data: InvoiceNumberIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Edit nomor invoice (untuk nomor yang diinput manual). Update dokumen invoice
+    + sinkron memo/deskripsi jurnal terkait (link jurnal via reference_id, bukan string)."""
+    inv = await db.invoices.find_one({"_id": _oid(iid)})
+    if not inv:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    new_no = (data.invoice_number or "").strip()
+    if not new_no:
+        raise HTTPException(400, "Nomor invoice tidak boleh kosong")
+    old_no = inv.get("invoice_number") or ""
+    if new_no == old_no:
+        return serialize(inv)
+    now = datetime.now(timezone.utc)
+    await db.invoices.update_one(
+        {"_id": _oid(iid)},
+        {"$set": {"invoice_number": new_no, "invoice_number_updated_at": now, "invoice_number_updated_by": user["id"]}}
+    )
+    # Sinkron memo jurnal terkait (cosmetic; jurnal terhubung via reference_id)
+    if old_no:
+        journals = await db.journal_entries.find({"reference_id": str(inv["_id"])}).to_list(200)
+        for j in journals:
+            changed = False
+            desc = j.get("description")
+            if isinstance(desc, str) and old_no in desc:
+                desc = desc.replace(old_no, new_no); changed = True
+            lines = j.get("lines") or []
+            for ln in lines:
+                m = ln.get("memo")
+                if isinstance(m, str) and old_no in m:
+                    ln["memo"] = m.replace(old_no, new_no); changed = True
+            if changed:
+                await db.journal_entries.update_one({"_id": j["_id"]}, {"$set": {"description": desc, "lines": lines}})
     return serialize(await db.invoices.find_one({"_id": _oid(iid)}))
 
 @app.get("/api/invoices/po-number-template")

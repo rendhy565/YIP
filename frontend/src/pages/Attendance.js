@@ -26,6 +26,11 @@ const MONTH_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agus
 // Build 24 periode selector options (12 lalu + 12 depan) berdasarkan cutoff.
 // Konvensi: periode YYYY-MM = (cutoff+1) bulan SEBELUMNYA → cutoff bulan ini.
 // Contoh cutoff=25, "Juli 2026" = 26 Jun → 25 Jul.
+function todayISO() {
+  const t = new Date();
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+}
+
 function buildPeriodOptions(cutoffDay) {
   const today = new Date();
   const opts = [];
@@ -415,7 +420,7 @@ export default function Attendance() {
               <Trash2 size={14}/> Hapus Terpilih ({selectedIds.size})
             </Button>
           )}
-          <Button onClick={() => { setEditingId(null); setShowAdd(true); setForm({ employee_id: "", date: `${month}-01`, status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 }); }} data-testid="att-add-btn">
+          <Button onClick={() => { setEditingId(null); setShowAdd(true); setForm({ employee_id: "", date: todayISO(), status: "Hadir", check_in: "", check_out: "", note: "", overtime_hours: 0, overtime_rate: 0 }); }} data-testid="att-add-btn">
             <Plus size={14}/> Tambah
           </Button>
         </div>

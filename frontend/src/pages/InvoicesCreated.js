@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
-import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save } from "lucide-react";
+import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save, Pencil } from "lucide-react";
 import { useCan } from "../lib/useCan";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
@@ -16,6 +16,7 @@ export default function InvoicesCreated() {
   const canExportAr = useCan("invoices_created", "export_ar");
   const canBulkPrint = useCan("invoices_created", "bulk_print");
   const canSavePoNumber = useCan("invoices_created", "save_po_number");
+  const canEditInvoiceNumber = useCan("invoices_created", "edit_invoice_number");
   const [invoices, setInvoices] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [q, setQ] = useState("");
@@ -37,6 +38,24 @@ export default function InvoicesCreated() {
   // Cancel confirmation modal
   const [cancelInv, setCancelInv] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  // Edit invoice number modal
+  const [editInv, setEditInv] = useState(null);
+  const [editInvNo, setEditInvNo] = useState("");
+  const [savingInvNo, setSavingInvNo] = useState(false);
+
+  const saveInvoiceNumber = async () => {
+    if (!editInv) return;
+    const val = (editInvNo || "").trim();
+    if (!val) { toast.error("Nomor invoice tidak boleh kosong"); return; }
+    setSavingInvNo(true);
+    try {
+      await api.patch(`/invoices/${editInv.id}/invoice-number`, { invoice_number: val });
+      toast.success("Nomor invoice diperbarui");
+      setEditInv(null);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setSavingInvNo(false); }
+  };
 
 
   const COMPANY_OPTIONS = ["PT. Abirama Mitra Pradana", "PT. Abirama Mitra Pratama"];
@@ -322,7 +341,21 @@ export default function InvoicesCreated() {
                     {selected.has(i.id) ? <CheckSquare size={14} className="text-blue-700"/> : <Square size={14} className="text-slate-400"/>}
                   </button>
                 </Td>
-                <Td className="font-mono font-semibold">{i.invoice_number}</Td>
+                <Td className="font-mono font-semibold">
+                  <div className="flex items-center gap-1">
+                    <span data-testid={`invoice-number-${i.id}`}>{i.invoice_number}</span>
+                    {canEditInvoiceNumber && (
+                      <button
+                        data-testid={`edit-invoice-number-${i.id}`}
+                        onClick={() => { setEditInv(i); setEditInvNo(i.invoice_number || ""); }}
+                        title="Edit Nomor Invoice"
+                        className="p-1 rounded text-slate-400 hover:text-blue-700 hover:bg-blue-50"
+                      >
+                        <Pencil size={12}/>
+                      </button>
+                    )}
+                  </div>
+                </Td>
                 <Td className="whitespace-nowrap">
                   <div className="flex items-center gap-1">
                     <Input
@@ -549,6 +582,42 @@ export default function InvoicesCreated() {
               <Button variant="secondary" type="button" onClick={() => setCancelInv(null)} disabled={cancelling}>Batal</Button>
               <Button data-testid="confirm-cancel-invoice-btn" onClick={confirmCancel} disabled={cancelling} className="!bg-rose-600 !text-white hover:!bg-rose-700 !border-rose-600">
                 <X size={14}/> {cancelling ? "Memproses..." : "Ya, Batalkan Invoice"}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Edit Invoice Number Modal */}
+      {editInv && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="edit-invoice-number-modal">
+          <Card className="w-full max-w-md p-6">
+            <div className="flex items-start justify-between mb-4">
+              <h3 className="font-heading font-bold text-xl"><Pencil className="inline mr-2" size={18}/>Edit Nomor Invoice</h3>
+              <button onClick={() => setEditInv(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="space-y-3">
+              <div className="bg-slate-50 border border-slate-200 rounded p-2 text-xs text-slate-600">
+                <div><strong>AWB:</strong> <span className="font-mono">{(editInv.awb_numbers || [editInv.awb_number]).join(", ")}</span></div>
+                <div><strong>Customer:</strong> {editInv.customer_name || "—"}</div>
+              </div>
+              <div>
+                <Label>Nomor Invoice *</Label>
+                <Input
+                  data-testid="edit-invoice-number-input"
+                  value={editInvNo}
+                  onChange={(e) => setEditInvNo(e.target.value)}
+                  placeholder="contoh: INV-202606-0001"
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === "Enter") saveInvoiceNumber(); }}
+                />
+                <p className="text-[11px] text-slate-500 mt-1">Nomor invoice dokumen akan berubah + memo jurnal terkait ikut disinkronkan.</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => setEditInv(null)} disabled={savingInvNo}>Batal</Button>
+              <Button data-testid="confirm-edit-invoice-number-btn" onClick={saveInvoiceNumber} disabled={savingInvNo || !editInvNo.trim()}>
+                <Save size={14}/> {savingInvNo ? "Menyimpan..." : "Simpan"}
               </Button>
             </div>
           </Card>
