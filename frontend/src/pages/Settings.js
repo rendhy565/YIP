@@ -77,6 +77,7 @@ export default function Settings() {
 
   const labelMap = {
     company_name: "Nama Perusahaan (Default)", company_npwp: "NPWP Perusahaan (Default)", company_address: "Alamat Perusahaan (Default)",
+    company_signer: "Penandatangan (Default/Global)", company_bank_name: "Bank Name (Default/Global)", company_bank_holder: "Bank A/N (Default/Global)", company_bank_account: "Bank A/C (Default/Global)",
     tax_ppn_0: "PPN 0%", tax_ppn_1: "PPN 1.1%", tax_ppn_11: "PPN 11%",
     kop_address: "Alamat Kop Surat",
     kop_phone: "Telepon Kop Surat",

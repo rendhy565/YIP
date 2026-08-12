@@ -1113,6 +1113,11 @@ async def seed_data():
         ("kop_email", ""),
         ("kop_website", "http://ar-cargo.com"),
         ("kop_tagline", "Solusi Pengiriman Tercepat, Terpercaya dan Profesional via Darat, Laut, Udara"),
+        # === Bank & Penandatangan GLOBAL/DEFAULT (fallback bila issuer AWB kosong/tidak cocok) ===
+        ("company_signer", ""),
+        ("company_bank_name", "Mandiri"),
+        ("company_bank_holder", ""),
+        ("company_bank_account", ""),
     ]:
         await db.settings.update_one(
             {"key_name": k},
@@ -3222,6 +3227,9 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
     inv = await db.invoices.find_one({"_id": _oid(iid)})
     if not inv:
         raise HTTPException(404, "Invoice tidak ditemukan")
+    return await build_invoice_full(inv)
+
+async def build_invoice_full(inv):
     # Support multi-AWB: gather all AWBs
     awb_ids_list = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
     awbs = await db.awb_orders.find({"_id": {"$in": awb_ids_list}}).to_list(100)
@@ -3239,10 +3247,10 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
             "name": issuer or settings.get("company_name", ""),
             "npwp": settings.get(f"npwp_{issuer}") or settings.get("company_npwp", ""),
             "address": settings.get(f"address_{issuer}") or settings.get("company_address", ""),
-            "signer": settings.get(f"signer_{issuer}", ""),
-            "bank_name": settings.get(f"bank_name_{issuer}", "Mandiri"),
-            "bank_holder": settings.get(f"bank_holder_{issuer}", issuer.replace("PT. ", "")),
-            "bank_account": settings.get(f"bank_account_{issuer}", ""),
+            "signer": settings.get(f"signer_{issuer}") or settings.get("company_signer", ""),
+            "bank_name": settings.get(f"bank_name_{issuer}") or settings.get("company_bank_name") or "Mandiri",
+            "bank_holder": settings.get(f"bank_holder_{issuer}") or settings.get("company_bank_holder") or (issuer.replace("PT. ", "") if issuer else ""),
+            "bank_account": settings.get(f"bank_account_{issuer}") or settings.get("company_bank_account", ""),
             "logo_b64": settings.get("invoice_logo_b64", ""),
             # Kop surat global (dipakai di header InvoicePrint HTML)
             "kop_address": settings.get("kop_address", ""),
@@ -3256,6 +3264,64 @@ async def invoice_full(iid: str, user: dict = Depends(get_current_user)):
 class InvoicePrintIn(BaseModel):
     use_old_date: Optional[bool] = False  # if True (and previously printed) → reuse first_printed_at
     print_date: Optional[str] = None  # YYYY-MM-DD override
+
+class BulkInvoiceDownloadIn(BaseModel):
+    invoice_numbers: List[str]
+
+def _parse_invoice_numbers(raw_list):
+    nums = []
+    for raw in raw_list:
+        for part in re.split(r"[\n,;\t|]+", str(raw or "")):
+            p = part.strip()
+            if p:
+                nums.append(p)
+    seen = set()
+    return [n for n in nums if not (n in seen or seen.add(n))]
+
+@app.post("/api/invoices/bulk-download/validate")
+async def bulk_invoice_validate(data: BulkInvoiceDownloadIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    nums = _parse_invoice_numbers(data.invoice_numbers)
+    found, missing = [], []
+    for num in nums:
+        inv = await db.invoices.find_one({"invoice_number": {"$regex": f"^{re.escape(num)}$", "$options": "i"}}, {"invoice_number": 1})
+        (found if inv else missing).append(inv["invoice_number"] if inv else num)
+    return {"total": len(nums), "found": found, "missing": missing}
+
+@app.post("/api/invoices/bulk-download")
+async def bulk_invoice_download(data: BulkInvoiceDownloadIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    import zipfile
+    import invoice_docs
+    nums = _parse_invoice_numbers(data.invoice_numbers)
+    if not nums:
+        raise HTTPException(400, "Tidak ada nomor invoice")
+    zip_buf = io.BytesIO()
+    found = 0
+    missing = []
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for num in nums:
+            inv = await db.invoices.find_one({"invoice_number": {"$regex": f"^{re.escape(num)}$", "$options": "i"}})
+            if not inv:
+                missing.append(num)
+                continue
+            full = await build_invoice_full(inv)
+            try:
+                pdf = invoice_docs.render_invoice_pdf(full)
+            except Exception:
+                missing.append(f"{num} (gagal render)")
+                continue
+            safe = re.sub(r'[\\/:*?"<>|]+', "_", inv["invoice_number"]) + ".pdf"
+            zf.writestr(safe, pdf)
+            found += 1
+    if found == 0:
+        raise HTTPException(404, f"Tidak ada invoice ditemukan. {', '.join(missing[:20])}")
+    zip_buf.seek(0)
+    headers = {
+        "Content-Disposition": f'attachment; filename="Invoices_{found}.zip"',
+        "X-Found-Count": str(found),
+        "X-Missing": ", ".join(missing[:50]),
+        "Access-Control-Expose-Headers": "X-Found-Count, X-Missing, Content-Disposition",
+    }
+    return StreamingResponse(zip_buf, media_type="application/zip", headers=headers)
 
 @app.post("/api/invoices/{iid}/mark-printed")
 async def mark_invoice_printed(iid: str, data: InvoicePrintIn = InvoicePrintIn(), user: dict = Depends(get_current_user)):
@@ -11227,6 +11293,7 @@ async def _bulk_gather(rows):
             "ar_recognized": bool(inv and inv.get("ar_recognized")),
             "status": awb.get("status"),
             "tax_percentage": float(awb.get("tax_percentage") or 0),
+            "current_tax": float(awb.get("tax_amount") or 0),
             "customer_default_ppn": float((cust or {}).get("default_ppn_percentage") or 0),
             "customer_name": (cust or {}).get("name"),
         })
@@ -11239,8 +11306,8 @@ def _bulk_categorize(valid, not_found):
         changed = False
         if v["file_dpp"] is not None and abs(v["file_dpp"] - v["current_dpp"]) >= 0.01:
             rep["dpp_changes"].append({"awb": v["awb_number"], "old": v["current_dpp"], "new": v["file_dpp"]}); changed = True
-        if v["tax_percentage"] <= 0 and v["customer_default_ppn"] > 0 and v["file_dpp"] is not None:
-            rep["ppn_fills"].append({"awb": v["awb_number"], "ppn": v["customer_default_ppn"]})
+        if (v["tax_percentage"] <= 0 or v.get("current_tax", 0) == 0) and v["customer_default_ppn"] > 0 and v["file_dpp"] is not None and abs(v["customer_default_ppn"] - v["tax_percentage"]) > 0.001:
+            rep["ppn_fills"].append({"awb": v["awb_number"], "old_pct": v["tax_percentage"], "ppn": v["customer_default_ppn"]}); changed = True
         if v["file_inv"]:
             if not v["has_invoice_doc"]:
                 rep["invoice_create"].append({"awb": v["awb_number"], "new": v["file_inv"]}); changed = True
@@ -11313,37 +11380,35 @@ async def bulk_import_apply(data: BulkApplyIn, user: dict = Depends(require_role
         try:
             awb = await db.awb_orders.find_one({"_id": _oid(v["awb_id"])})
             cur = float(awb.get("total_tariff") or 0)
+            cur_tax = float(awb.get("tax_amount") or 0)
             new_dpp = round(v["file_dpp"], 2)
             pct = float(awb.get("tax_percentage") or 0)
             filled_ppn = False
-            if pct <= 0 and v["customer_default_ppn"] > 0:
+            # PPN dianggap "blank" jika % <=0 ATAU amount 0 (sisa default import). Pakai default customer.
+            if (pct <= 0 or cur_tax == 0) and v["customer_default_ppn"] > 0 and abs(v["customer_default_ppn"] - pct) > 0.001:
                 pct = v["customer_default_ppn"]; filled_ppn = True
-            if abs(cur - new_dpp) < 0.01:
-                # DPP tidak berubah — tetap isi PPN default kalau AWB PPN kosong
-                if filled_ppn and data.apply_dpp:
-                    new_tax = round(new_dpp * pct / 100.0, 2)
-                    addons = float(awb.get("addons_total") or 0)
-                    new_gt = round(new_dpp + new_tax + addons, 2)
-                    await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": {"tax_amount": new_tax, "grand_total": new_gt, "tax_percentage": pct}})
-                    awb2 = await db.awb_orders.find_one({"_id": awb["_id"]})
-                    await resync_awb_tariff_journals(awb2)
-                    res["ppn_filled"].append({"awb": v["awb_number"], "ppn": pct})
-                continue  # no DPP change
-            if not data.apply_dpp:
-                res["dpp_skipped"].append({"awb": v["awb_number"], "old": cur, "new": new_dpp}); continue
-            new_tax = round(new_dpp * pct / 100.0, 2)
+            dpp_changed = abs(cur - new_dpp) >= 0.01
+            if not dpp_changed and not filled_ppn:
+                continue  # tidak ada yang berubah
+            # DPP change dihormati flag apply_dpp; PPN-fill tetap otomatis (aturan: blank → default)
+            target_dpp = cur
+            if dpp_changed:
+                if data.apply_dpp:
+                    target_dpp = new_dpp
+                else:
+                    res["dpp_skipped"].append({"awb": v["awb_number"], "old": cur, "new": new_dpp})
+            new_tax = round(target_dpp * pct / 100.0, 2)
             addons = float(awb.get("addons_total") or 0)
-            new_gt = round(new_dpp + new_tax + addons, 2)
-            upd = {"total_tariff": new_dpp, "tax_amount": new_tax, "grand_total": new_gt}
-            if filled_ppn:
-                upd["tax_percentage"] = pct
+            new_gt = round(target_dpp + new_tax + addons, 2)
+            upd = {"total_tariff": target_dpp, "tax_amount": new_tax, "grand_total": new_gt, "tax_percentage": pct}
             qty = float(awb.get("qty_kg") or 0)
             if qty > 0 and not awb.get("is_charter"):
-                upd["tariff_per_kg"] = round(new_dpp / qty, 2)
+                upd["tariff_per_kg"] = round(target_dpp / qty, 2)
             await db.awb_orders.update_one({"_id": awb["_id"]}, {"$set": upd})
             awb2 = await db.awb_orders.find_one({"_id": awb["_id"]})
             await resync_awb_tariff_journals(awb2)
-            res["dpp_applied"].append({"awb": v["awb_number"], "old": cur, "new": new_dpp, "ppn_pct": pct})
+            if dpp_changed and data.apply_dpp:
+                res["dpp_applied"].append({"awb": v["awb_number"], "old": cur, "new": target_dpp, "ppn_pct": pct})
             if filled_ppn:
                 res["ppn_filled"].append({"awb": v["awb_number"], "ppn": pct})
         except Exception as e:
