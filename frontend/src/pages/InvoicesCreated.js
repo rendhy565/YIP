@@ -4,6 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td, StatusBadge } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
+import InvoiceDetailModal from "../components/InvoiceDetailModal";
 import { FileText, Printer, Download, CheckSquare, Square, Search, FileSpreadsheet, X, Upload, Save, Pencil } from "lucide-react";
 import { useCan } from "../lib/useCan";
 import FilterPresets from "../components/FilterPresets";
@@ -41,6 +42,8 @@ export default function InvoicesCreated() {
   const [qtyPreview, setQtyPreview] = useState(null);
   const [qtyPreviewing, setQtyPreviewing] = useState(false);
   const [qtyApplying, setQtyApplying] = useState(false);
+  const [qtyResult, setQtyResult] = useState(null);
+  const [dlTemplate, setDlTemplate] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   // Invoice Number import (mark AWB as Invoiced/Paid)
@@ -53,6 +56,7 @@ export default function InvoicesCreated() {
   const [cancelling, setCancelling] = useState(false);
   // Edit invoice number modal
   const [editInv, setEditInv] = useState(null);
+  const [invoiceDetail, setInvoiceDetail] = useState(null);
   const [editInvNo, setEditInvNo] = useState("");
   const [savingInvNo, setSavingInvNo] = useState(false);
 
@@ -246,15 +250,23 @@ export default function InvoicesCreated() {
     } catch (e) { toast.error(errMsg(e)); }
     finally { setQtyPreviewing(false); }
   };
+  const downloadQtyTemplate = async () => {
+    setDlTemplate(true);
+    try {
+      const r = await api.get("/import/qty-tariff/template", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement("a"); a.href = url; a.download = "Template_Qty_Tarif.xlsx";
+      document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setDlTemplate(false); }
+  };
   const applyQtyTariff = async () => {
     if (!qtyFile) return;
     setQtyApplying(true);
     try {
       const fd = new FormData(); fd.append("file", qtyFile);
       const r = await api.post("/import/qty-tariff/apply", fd, { headers: { "Content-Type": "multipart/form-data" } });
-      const d = r.data;
-      toast.success(`Selesai: ${d.updated} AWB diupdate (Qty ${d.qty_set}, Tarif ${d.tariff_set}). Tidak ditemukan: ${d.not_found.length}`);
-      setShowQtyImport(false); setQtyFile(null); setQtyPreview(null);
+      setQtyResult(r.data);
       load();
     } catch (e) { toast.error(errMsg(e)); }
     finally { setQtyApplying(false); }
@@ -330,7 +342,7 @@ export default function InvoicesCreated() {
         subtitle="Filter, print, export, dan import invoice yang sudah dibuat."
         action={
           <div className="flex gap-2 flex-wrap">
-            <Button data-testid="import-qty-tariff-btn" variant="secondary" onClick={() => { setShowQtyImport(true); setQtyFile(null); setQtyPreview(null); }}><Upload size={16}/> Import Qty & Tarif/Kg</Button>
+            <Button data-testid="import-qty-tariff-btn" variant="secondary" onClick={() => { setShowQtyImport(true); setQtyFile(null); setQtyPreview(null); setQtyResult(null); }}><Upload size={16}/> Import Qty & Tarif/Kg</Button>
             {canImportNumbers && (
               <Button data-testid="import-invoice-no-btn" variant="secondary" onClick={() => { setShowInvNoImport(true); setInvNoFile(null); setInvNoResult(null); }}><Upload size={16}/> Import Invoice No (Mark Status)</Button>
             )}
@@ -439,7 +451,12 @@ export default function InvoicesCreated() {
                 </Td>
                 <Td className="font-mono font-semibold">
                   <div className="flex items-center gap-1">
-                    <span data-testid={`invoice-number-${i.id}`}>{i.invoice_number}</span>
+                    <button
+                      data-testid={`invoice-number-${i.id}`}
+                      onClick={() => setInvoiceDetail(i)}
+                      title="Klik untuk lihat detail invoice"
+                      className="text-blue-700 hover:underline cursor-pointer text-left"
+                    >{i.invoice_number}</button>
                     {canEditInvoiceNumber && (
                       <button
                         data-testid={`edit-invoice-number-${i.id}`}
@@ -786,6 +803,12 @@ export default function InvoicesCreated() {
             <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900 mb-3">
               Import ini <strong>hanya mengisi kolom Qty & Tarif/Kg</strong> (tampilan di lampiran). Nilai <strong>total invoice & jurnal akuntansi TIDAK diubah</strong>. Dicocokkan berdasarkan <strong>No. AWB</strong>. Kolom dibaca: <code>AWB</code>, <code>Qty</code>, <code>Harga /KG</code>.
             </div>
+            <div className="mb-3">
+              <Button data-testid="qty-tariff-template-btn" variant="secondary" onClick={downloadQtyTemplate} disabled={dlTemplate}>
+                <Download size={14}/> {dlTemplate ? "Menyiapkan..." : "Unduh Template Excel"}
+              </Button>
+            </div>
+            {!qtyResult && (<>
             <input
               data-testid="qty-tariff-file-input"
               type="file"
@@ -833,20 +856,54 @@ export default function InvoicesCreated() {
                 </div>
               </div>
             )}
+            </>)}
+            {qtyResult && (
+              <div className="mt-1 text-sm space-y-2" data-testid="qty-tariff-result">
+                <div className="rounded bg-emerald-50 border border-emerald-200 px-3 py-3 text-emerald-900">
+                  ✅ Selesai. <strong>{qtyResult.updated}</strong> AWB diupdate — Qty terisi: <strong>{qtyResult.qty_set}</strong>, Tarif terisi: <strong>{qtyResult.tariff_set}</strong>. (Total invoice & jurnal tidak berubah.)
+                </div>
+                {qtyResult.not_found.length > 0 ? (
+                  <div className="rounded bg-rose-50 border border-rose-200 px-3 py-2 text-rose-900">
+                    <div className="flex items-center justify-between mb-1">
+                      <span><strong>{qtyResult.not_found.length}</strong> AWB tidak ditemukan (perlu ditindaklanjuti):</span>
+                      <Button data-testid="qty-tariff-copy-notfound-btn" variant="secondary" onClick={() => { navigator.clipboard.writeText(qtyResult.not_found.join("\n")); toast.success("Disalin"); }}>Salin</Button>
+                    </div>
+                    <div className="max-h-40 overflow-auto font-mono text-xs bg-white border border-rose-100 rounded p-2">
+                      {qtyResult.not_found.map((n) => (<div key={n}>{n}</div>))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded bg-slate-50 border border-slate-200 px-3 py-2 text-slate-700">Semua AWB pada file ditemukan & diproses.</div>
+                )}
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
-              <Button variant="secondary" type="button" onClick={() => setShowQtyImport(false)} disabled={qtyPreviewing || qtyApplying}>Tutup</Button>
-              {!qtyPreview ? (
-                <Button data-testid="qty-tariff-preview-btn" onClick={previewQtyTariff} disabled={qtyPreviewing || !qtyFile}>
-                  <Search size={14}/> {qtyPreviewing ? "Membaca file..." : "Cek / Preview"}
-                </Button>
-              ) : (
-                <Button data-testid="qty-tariff-apply-btn" onClick={applyQtyTariff} disabled={qtyApplying || qtyPreview.matched === 0}>
-                  <Save size={14}/> {qtyApplying ? "Menerapkan..." : `Terapkan ke ${qtyPreview.matched} AWB`}
-                </Button>
-              )}
+              {qtyResult ? (
+                <Button data-testid="qty-tariff-done-btn" onClick={() => { setShowQtyImport(false); setQtyFile(null); setQtyPreview(null); setQtyResult(null); }}>Selesai</Button>
+              ) : (<>
+                <Button variant="secondary" type="button" onClick={() => setShowQtyImport(false)} disabled={qtyPreviewing || qtyApplying}>Tutup</Button>
+                {!qtyPreview ? (
+                  <Button data-testid="qty-tariff-preview-btn" onClick={previewQtyTariff} disabled={qtyPreviewing || !qtyFile}>
+                    <Search size={14}/> {qtyPreviewing ? "Membaca file..." : "Cek / Preview"}
+                  </Button>
+                ) : (
+                  <Button data-testid="qty-tariff-apply-btn" onClick={applyQtyTariff} disabled={qtyApplying || qtyPreview.matched === 0}>
+                    <Save size={14}/> {qtyApplying ? "Menerapkan..." : `Terapkan ke ${qtyPreview.matched} AWB`}
+                  </Button>
+                )}
+              </>)}
             </div>
           </Card>
         </div>
+      )}
+
+      {/* Invoice Detail Popup */}
+      {invoiceDetail && (
+        <InvoiceDetailModal
+          invoiceId={invoiceDetail.id}
+          invoiceNumber={invoiceDetail.invoice_number}
+          onClose={() => setInvoiceDetail(null)}
+        />
       )}
 
       {/* Print Invoice — Date Picker Modal (single & bulk) */}

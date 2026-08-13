@@ -11767,12 +11767,7 @@ async def qty_tariff_template(user: dict = Depends(require_role("operation", "fi
     )
 
 
-@app.get("/api/import/qty-tariff/template-legacy")
-async def _qty_tariff_template_placeholder():
-    raise HTTPException(404)
-
-
-
+@app.get("/api/admin/bulk-import/template")
 async def bulk_import_template(user: dict = Depends(require_role("administrator"))):
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Import Massal AWB"
     bold_white = Font(bold=True, color="FFFFFF")

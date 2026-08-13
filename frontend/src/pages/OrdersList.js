@@ -10,6 +10,7 @@ import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
 import CostListModal from "../components/CostListModal";
 import TrackingModal from "../components/TrackingModal";
+import AwbDetailModal from "../components/AwbDetailModal";
 
 function todayStr() {
   const d = new Date();
@@ -59,6 +60,9 @@ export default function OrdersList() {
 
   // Tracking popup — posisi barang berjalan
   const [trackFor, setTrackFor] = useState(null);
+
+  // AWB detail popup
+  const [detailFor, setDetailFor] = useState(null);
 
   const load = () => {
     Promise.all([
@@ -337,7 +341,14 @@ export default function OrdersList() {
           <tbody>
             {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`order-row-${r.id}`}>
-                <Td><span className="font-mono font-semibold">{r.awb_number}</span></Td>
+                <Td>
+                  <button
+                    data-testid={`awb-detail-btn-${r.awb_number}`}
+                    onClick={() => setDetailFor(r)}
+                    title="Klik untuk lihat detail inputan AWB"
+                    className="font-mono font-semibold text-blue-700 hover:underline cursor-pointer"
+                  >{r.awb_number}</button>
+                </Td>
                 <Td className="text-slate-600 text-xs">{fmtDate(r.created_at)}</Td>
                 <Td className="text-xs max-w-[220px]">
                   {r.latest_tracking ? (
@@ -629,6 +640,15 @@ export default function OrdersList() {
           awb={trackFor}
           onClose={() => setTrackFor(null)}
           onSaved={load}
+        />
+      )}
+
+      {/* ========== AWB DETAIL POPUP ========== */}
+      {detailFor && (
+        <AwbDetailModal
+          awbId={detailFor.id}
+          awbNumber={detailFor.awb_number}
+          onClose={() => setDetailFor(null)}
         />
       )}
     </div>

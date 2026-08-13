@@ -1,5 +1,13 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Popup Detail AWB & Invoice + Template/Ringkasan Import (Jun 2026)
+- **Template Excel:** endpoint `GET /api/import/qty-tariff/template` (header: AWB, Qty, Harga /KG + 2 baris contoh). Tombol "Unduh Template Excel" di modal import.
+- **Ringkasan setelah Apply:** modal import kini menampilkan panel hasil (`qty-tariff-result`): jumlah diupdate/qty/tarif + daftar AWB tidak ditemukan (dengan tombol Salin) + tombol Selesai. Tidak langsung tutup.
+- **Detail AWB:** komponen `components/AwbDetailModal.js` (fetch `GET /orders/{id}`). Di **Daftar AWB** (`OrdersList.js`), No. AWB kini bisa diklik (`awb-detail-btn-*`) → popup detail inputan (Umum, Rute & Barang, Nilai, Status & Tanggal). Baris opsional hanya tampil bila >0 (fix bug render "0").
+- **Detail Invoice:** komponen `components/InvoiceDetailModal.js` (fetch `GET /invoices/{id}/full`). Di **Invoice Tercetak** (`InvoicesCreated.js`), No. Invoice kini bisa diklik (`invoice-number-*`) → popup header + tabel rincian AWB (DPP/PPN/Grand) + total.
+- **Verifikasi:** template endpoint OK (header benar). Kedua popup diuji via screenshot (buka & tampil data benar). Testing agent TIDAK dipakai.
+
+
 ## Import Qty & Tarif/Kg (display-only, tidak ubah akuntansi) (Jun 2026)
 - **Kebutuhan:** invoice sudah diproses tapi kolom Qty & Tarif/Kg kosong; user punya data Excel. Isi kolom tampilan lampiran SAJA — total invoice & jurnal TIDAK boleh berubah (user: Qty×Tarif belum tentu = total). Cocokkan by No. AWB. Semua AWB.
 - **Backend** (`server.py`): `_parse_qty_tariff_rows(ws)` (cari header row yg memuat 'AWB', map kolom AWB/Qty/'Harga /KG', flexible), `_qty_tariff_match(rows)` (cocokkan by awb_number regex, hitung computed=qty*tarif & flag mismatch vs total_tariff). Endpoint:
