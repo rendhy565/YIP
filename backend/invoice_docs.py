@@ -143,7 +143,8 @@ def _render_invoice_inner(data, override_date=None):
         srow("TOTAL", _fmt_idr(grand_total), bold=True, grey=True)
     )
 
-    po_html = (f'<tr><td width="78" nowrap><b>No. PO :</b></td><td>{_esc(invoice.get("po_number"))}</td></tr>'
+    po_html = ('<tr><td width="72" nowrap><b>No. PO</b></td><td width="10">:</td>'
+               f'<td>{_esc(invoice.get("po_number"))}</td></tr>'
                if invoice.get("po_number") else "")
 
     # Lampiran rows
@@ -152,16 +153,16 @@ def _render_invoice_inner(data, override_date=None):
         g = float(a.get("total_tariff") or 0) + float(a.get("tax_amount") or 0)
         lamp_rows += (
             f'<tr>'
-            f'<td style="border:1px solid #999;padding:4px;">{_esc(a.get("awb_number"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;">{_id_date(a.get("created_at"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;">{_esc(a.get("origin"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;">{_esc(a.get("destination"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;">{_esc(a.get("goods_content"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right">{_esc(a.get("qty_kg"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("tariff_per_kg"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("total_tariff"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("tax_amount"))}</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right"><b>{_fmt_idr(g)}</b></td>'
+            f'<td width="12%" style="border:1px solid #999;padding:4px;">{_esc(a.get("awb_number"))}</td>'
+            f'<td width="9%" style="border:1px solid #999;padding:4px;">{_id_date(a.get("created_at"))}</td>'
+            f'<td width="10%" style="border:1px solid #999;padding:4px;word-wrap:break-word;">{_esc(a.get("origin"))}</td>'
+            f'<td width="14%" style="border:1px solid #999;padding:4px;word-wrap:break-word;">{_esc(a.get("destination"))}</td>'
+            f'<td width="11%" style="border:1px solid #999;padding:4px;word-wrap:break-word;">{_esc(a.get("goods_content"))}</td>'
+            f'<td width="6%" style="border:1px solid #999;padding:4px;" align="right">{_esc(a.get("qty_kg"))}</td>'
+            f'<td width="9%" style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("tariff_per_kg"))}</td>'
+            f'<td width="10%" style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("total_tariff"))}</td>'
+            f'<td width="9%" style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("tax_amount"))}</td>'
+            f'<td width="10%" style="border:1px solid #999;padding:4px;" align="right"><b>{_fmt_idr(g)}</b></td>'
             f'</tr>'
         )
     lamp_total = ""
@@ -198,11 +199,11 @@ def _render_invoice_inner(data, override_date=None):
       <div style="margin-top:6px;">Attn : <b>{_esc(awb.get('consignee') or customer.get('pic_name') or '')}</b></div>
     </td>
     <td width="45%" valign="top">
-      <table cellspacing="0" cellpadding="0">
-        <tr><td width="78" nowrap><b>Invoice No :</b></td><td><b>{_esc(invoice.get('invoice_number'))}</b></td></tr>
+      <table width="100%" cellspacing="0" cellpadding="0">
+        <tr><td width="72" nowrap><b>Invoice No</b></td><td width="10">:</td><td><b>{_esc(invoice.get('invoice_number'))}</b></td></tr>
         {po_html}
-        <tr><td width="78" nowrap><b>Date :</b></td><td>{_id_date(inv_dt)}</td></tr>
-        <tr><td width="78" nowrap><b>Due Date :</b></td><td>{_id_date(due_dt)}</td></tr>
+        <tr><td width="72" nowrap><b>Date</b></td><td width="10">:</td><td>{_id_date(inv_dt)}</td></tr>
+        <tr><td width="72" nowrap><b>Due Date</b></td><td width="10">:</td><td>{_id_date(due_dt)}</td></tr>
       </table>
     </td>
   </tr></table>
@@ -238,10 +239,9 @@ def _render_invoice_inner(data, override_date=None):
     </td>
     <td width="50%" valign="top" style="padding-left:14px;">
       <div style="text-align:left;">Jakarta, {_id_date(inv_dt)}</div>
-      <br/><br/><br/><br/>
+      <br/><br/><br/><br/><br/><br/>
       <div style="text-align:center;font-weight:bold;">( {_esc(company.get('signer') or '...........................')} )</div>
-      <br/><br/>
-      <div style="text-align:left;font-size:8px;color:#555;">
+      <div style="text-align:left;font-size:8px;color:#555;margin-top:6px;">
         <b>{_esc(company.get('name'))}</b><br/>{_esc(company.get('address') or '')}
         {f"<br/>NPWP: {_esc(company.get('npwp'))}" if company.get('npwp') else ''}
       </div>
@@ -255,18 +255,18 @@ def _render_invoice_inner(data, override_date=None):
 <!-- PAGE 2: LAMPIRAN -->
 <div>
   <div style="text-align:center;font-size:18px;font-weight:bold;text-transform:uppercase;margin-bottom:14px;">Lampiran Invoice</div>
-  <table width="100%" style="border:1px solid #999;">
+  <table width="100%" style="border:1px solid #999;table-layout:fixed;">
     <thead><tr class="dark">
-      <td style="border:1px solid #333;padding:4px;">No. AWB</td>
-      <td style="border:1px solid #333;padding:4px;">Tanggal</td>
-      <td style="border:1px solid #333;padding:4px;">Origin</td>
-      <td style="border:1px solid #333;padding:4px;">Tujuan</td>
-      <td style="border:1px solid #333;padding:4px;">Goods</td>
-      <td style="border:1px solid #333;padding:4px;" align="right">Qty</td>
-      <td style="border:1px solid #333;padding:4px;" align="right">Tarif/Kg</td>
-      <td style="border:1px solid #333;padding:4px;" align="right">Subtotal</td>
-      <td style="border:1px solid #333;padding:4px;" align="right">PPN</td>
-      <td style="border:1px solid #333;padding:4px;" align="right">Grand</td>
+      <td width="12%" style="border:1px solid #333;padding:4px;">No. AWB</td>
+      <td width="9%" style="border:1px solid #333;padding:4px;">Tanggal</td>
+      <td width="10%" style="border:1px solid #333;padding:4px;">Origin</td>
+      <td width="14%" style="border:1px solid #333;padding:4px;">Tujuan</td>
+      <td width="11%" style="border:1px solid #333;padding:4px;">Goods</td>
+      <td width="6%" style="border:1px solid #333;padding:4px;" align="right">Qty</td>
+      <td width="9%" style="border:1px solid #333;padding:4px;" align="right">Tarif/Kg</td>
+      <td width="10%" style="border:1px solid #333;padding:4px;" align="right">Subtotal</td>
+      <td width="9%" style="border:1px solid #333;padding:4px;" align="right">PPN</td>
+      <td width="10%" style="border:1px solid #333;padding:4px;" align="right">Grand</td>
     </tr></thead>
     <tbody>{lamp_rows}{lamp_total}</tbody>
   </table>

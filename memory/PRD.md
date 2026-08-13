@@ -1,5 +1,11 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Perbaikan Layout PDF Invoice v2 — Meta, Signer, Lampiran (Jun 2026)
+- **Meta block:** titik dua dikembalikan ke kolom sendiri (terpisah dari label) & sejajar (label `width=72`, colon `width=10`), nilai menempel rapi setelah colon. (Revisi dari versi glued yang ditolak user.)
+- **Signer:** nama signer diturunkan (6 `<br/>` ruang tanda tangan) sehingga tepat di atas nama perusahaan hanya berjarak ~1 baris (`margin-top:6px`); NPWP tetap ±sejajar dengan A/C.
+- **Lampiran (hal.2):** `table-layout:fixed` + lebar kolom eksplisit (Tujuan 14%, Origin 10%, Goods 11%, No.AWB 12%, dst). Teks panjang kini WRAP di dalam sel, tabel tidak ter-override, semua teks terbaca.
+- **Verifikasi:** render sampel (tujuan panjang + AWB 12 digit) → inspeksi gambar hal.1 & hal.2. Tetap 2 halaman. Testing agent TIDAK dipakai.
+
 ## Perbaikan Layout PDF Invoice — Meta Block & Signer (Jun 2026)
 - **Meta block (Invoice No/No. PO/Date/Due Date)** di `invoice_docs.py`: label + `:` digabung jadi satu sel lebar tetap (`width=78`, nowrap) → colon menempel 1 spasi setelah label, nilai langsung setelah colon (tidak lagi terdorong ke kanan). PO row ikut format sama.
 - **Blok tanda tangan:** hilangkan border kotak. Spasi tanda tangan pakai `<br/>` (bukan div height yang di-collapse xhtml2pdf). Diukur presisi via PyMuPDF: NPWP kini sejajar dengan baris `A/C :` di bank box (NPWP y≈652 vs A/C y≈642). Tetap 2 halaman.
