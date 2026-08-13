@@ -64,14 +64,17 @@ def _esc(s):
     return _html.escape(str(s)) if s is not None else ""
 
 
-def render_invoice_html(data):
+def _render_invoice_inner(data, override_date=None):
     invoice = data["invoice"]
     awb = data.get("awb") or {}
     awbs = data.get("awbs") or ([awb] if awb else [])
     customer = data.get("customer") or {}
     company = data.get("company") or {}
 
-    inv_dt = _parse_dt(invoice.get("invoice_date") or invoice.get("first_printed_at") or invoice.get("created_at")) or datetime.now()
+    if override_date:
+        inv_dt = _parse_dt(override_date) or datetime.now()
+    else:
+        inv_dt = _parse_dt(invoice.get("invoice_date") or invoice.get("first_printed_at") or invoice.get("created_at")) or datetime.now()
     due_dt = inv_dt + timedelta(days=30)
 
     sub_total = sum(float(a.get("total_tariff") or 0) for a in awbs)
@@ -172,15 +175,7 @@ def render_invoice_html(data):
             f'</tr>'
         )
 
-    return f"""<html><head><meta charset="utf-8"/>
-<style>
-@page {{ size: A4; margin: 12mm; }}
-body {{ font-family: Helvetica, Arial, sans-serif; font-size: 10px; color:#111; }}
-.band {{ background-color:#7F7F7F; color:#fff; text-align:center; padding:8px; font-size:22px; font-weight:bold; letter-spacing:2px; }}
-.dark {{ background-color:#595959; color:#fff; }}
-table {{ border-collapse: collapse; }}
-</style></head><body>
-
+    return f"""
 <!-- PAGE 1: COVER -->
 <div>
   <table width="100%"><tr>
@@ -278,15 +273,40 @@ table {{ border-collapse: collapse; }}
   </table>
   <div style="font-size:8px;color:#777;margin-top:10px;">Lampiran ini merupakan bagian yang tidak terpisahkan dari Invoice No. {_esc(invoice.get('invoice_number'))}.</div>
 </div>
+"""
 
-</body></html>"""
+
+_STYLE = """<style>
+@page { size: A4; margin: 12mm; }
+body { font-family: Helvetica, Arial, sans-serif; font-size: 10px; color:#111; }
+.band { background-color:#7F7F7F; color:#fff; text-align:center; padding:8px; font-size:22px; font-weight:bold; letter-spacing:2px; }
+.dark { background-color:#595959; color:#fff; }
+table { border-collapse: collapse; }
+</style>"""
 
 
-def render_invoice_pdf(data):
-    html = render_invoice_html(data)
+def render_invoice_html(data, override_date=None):
+    return f'<html><head><meta charset="utf-8"/>{_STYLE}</head><body>{_render_invoice_inner(data, override_date)}</body></html>'
+
+
+def render_invoice_pdf(data, override_date=None):
+    html = render_invoice_html(data, override_date=override_date)
     buf = io.BytesIO()
     result = pisa.CreatePDF(src=html, dest=buf, encoding="utf-8")
     if result.err:
         raise RuntimeError("Gagal render PDF invoice")
+    buf.seek(0)
+    return buf.read()
+
+
+def render_invoices_pdf_combined(list_data):
+    """Gabungkan banyak invoice (cover + lampiran) menjadi SATU file PDF."""
+    blocks = [_render_invoice_inner(d) for d in list_data]
+    joined = '<div style="page-break-before: always;"></div>'.join(blocks)
+    html = f'<html><head><meta charset="utf-8"/>{_STYLE}</head><body>{joined}</body></html>'
+    buf = io.BytesIO()
+    result = pisa.CreatePDF(src=html, dest=buf, encoding="utf-8")
+    if result.err:
+        raise RuntimeError("Gagal render PDF invoice gabungan")
     buf.seek(0)
     return buf.read()

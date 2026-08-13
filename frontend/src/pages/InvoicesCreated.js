@@ -50,6 +50,11 @@ export default function InvoicesCreated() {
   const [editInvNo, setEditInvNo] = useState("");
   const [savingInvNo, setSavingInvNo] = useState(false);
 
+  const [printModal, setPrintModal] = useState(null); // { mode:'single'|'bulk', inv?, ids?, count? }
+  const [printDate, setPrintDate] = useState("");
+  const [printing, setPrinting] = useState(false);
+  const toYMD = (d) => { try { return d ? new Date(d).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10); } catch { return new Date().toISOString().slice(0, 10); } };
+
   const saveInvoiceNumber = async () => {
     if (!editInv) return;
     const val = (editInvNo || "").trim();
@@ -165,32 +170,9 @@ export default function InvoicesCreated() {
     finally { setCancelling(false); }
   };
 
-  const handlePrint = async (inv) => {
-    // Warn if already printed
-    if (inv.print_count > 0 && inv.invoice_date) {
-      const printedDate = new Date(inv.invoice_date);
-      const now = new Date();
-      const sameMonth = printedDate.getMonth() === now.getMonth() && printedDate.getFullYear() === now.getFullYear();
-      const dateLabel = printedDate.toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
-      let msg = `Invoice ini sudah pernah dicetak pada ${dateLabel}.\nApakah Anda mau cetak ulang?\n\n` +
-                `OK = pakai tanggal LAMA (${dateLabel})\nCancel = pakai tanggal BARU (hari ini)`;
-      if (!sameMonth) {
-        msg = `⚠ PERINGATAN: Tanggal cetak lama (${dateLabel}) sudah LEWAT BULAN!\n\n` + msg;
-      }
-      const useOld = window.confirm(msg);
-      try {
-        await api.post(`/invoices/${inv.id}/mark-printed`, { use_old_date: useOld });
-        window.open(`/arc/invoices/${inv.id}/print`, "_blank");
-      } catch (e) { toast.error(errMsg(e)); }
-    } else {
-      // First print
-      try {
-        await api.post(`/invoices/${inv.id}/mark-printed`, { use_old_date: false });
-        toast.success("Invoice dicetak — Piutang tercatat & tanggal invoice diset");
-        window.open(`/arc/invoices/${inv.id}/print`, "_blank");
-        load();
-      } catch (e) { toast.error(errMsg(e)); }
-    }
+  const handlePrint = (inv) => {
+    setPrintModal({ mode: "single", inv });
+    setPrintDate(inv.invoice_date ? toYMD(inv.invoice_date) : toYMD());
   };
 
   const targetIds = () => (selected.size > 0 ? Array.from(selected) : filtered.map((i) => i.id));
@@ -250,10 +232,31 @@ export default function InvoicesCreated() {
   const bulkPrint = () => {
     const ids = targetIds();
     if (ids.length === 0) { toast.error("Tidak ada invoice"); return; }
-    // Open one combined tab containing every selected invoice. User presses
-    // Ctrl+P once and gets a single merged PDF for all selections.
-    window.open(`/arc/invoices/print-bulk?ids=${ids.join(",")}`, "_blank");
-    toast.success(`${ids.length} invoice dibuka dalam 1 tab. Tekan Ctrl+P → Save as PDF.`);
+    setPrintModal({ mode: "bulk", ids, count: ids.length });
+    setPrintDate(toYMD());
+  };
+
+  const confirmPrint = async () => {
+    if (!printModal) return;
+    setPrinting(true);
+    try {
+      if (printModal.mode === "single") {
+        const inv = printModal.inv;
+        await api.post(`/invoices/${inv.id}/mark-printed`, { print_date: printDate, use_old_date: false });
+        const r = await api.get(`/invoices/${inv.id}/pdf`, { responseType: "blob" });
+        const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+        window.open(url, "_blank");
+        toast.success("Invoice dicetak — tanggal & jurnal disinkronkan");
+      } else {
+        const r = await api.post("/invoices/bulk-print-pdf", { invoice_ids: printModal.ids, print_date: printDate }, { responseType: "blob" });
+        const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+        window.open(url, "_blank");
+        toast.success(`${printModal.count} invoice dicetak dalam 1 PDF`);
+      }
+      setPrintModal(null);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setPrinting(false); }
   };
 
   const openBulkDl = () => {
@@ -723,6 +726,45 @@ export default function InvoicesCreated() {
                   <Download size={14}/> {bulkDownloading ? "Menyiapkan ZIP..." : `Download ${bulkValidation.found.length} Invoice`}
                 </Button>
               )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Print Invoice — Date Picker Modal (single & bulk) */}
+      {printModal && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="print-date-modal">
+          <Card className="w-full max-w-md p-6">
+            <div className="flex items-start justify-between mb-4">
+              <h3 className="font-heading font-bold text-xl"><Printer className="inline mr-2" size={18}/>
+                {printModal.mode === "single" ? "Cetak Invoice" : `Cetak ${printModal.count} Invoice (1 PDF)`}
+              </h3>
+              <button onClick={() => setPrintModal(null)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="space-y-3">
+              {printModal.mode === "single" && (
+                <div className="bg-slate-50 border border-slate-200 rounded p-2 text-xs text-slate-600">
+                  <div><strong>Invoice:</strong> <span className="font-mono">{printModal.inv?.invoice_number}</span></div>
+                  <div><strong>Customer:</strong> {printModal.inv?.customer_name || "—"}</div>
+                </div>
+              )}
+              <div>
+                <Label>Tanggal Invoice *</Label>
+                <Input
+                  data-testid="print-date-input"
+                  type="date"
+                  value={printDate}
+                  onChange={(e) => setPrintDate(e.target.value)}
+                  autoFocus
+                />
+                <p className="text-[11px] text-slate-500 mt-1">Tanggal ini dipakai di dokumen PDF (Date & Due Date +30 hari) <strong>dan</strong> disinkronkan ke tanggal jurnal Piutang/PPN.</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => setPrintModal(null)} disabled={printing}>Batal</Button>
+              <Button data-testid="confirm-print-btn" onClick={confirmPrint} disabled={printing || !printDate}>
+                <Printer size={14}/> {printing ? "Menyiapkan PDF..." : "Cetak PDF"}
+              </Button>
             </div>
           </Card>
         </div>

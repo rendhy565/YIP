@@ -3335,17 +3335,14 @@ async def bulk_invoice_download(data: BulkInvoiceDownloadIn, user: dict = Depend
     }
     return StreamingResponse(zip_buf, media_type="application/zip", headers=headers)
 
-@app.post("/api/invoices/{iid}/mark-printed")
-async def mark_invoice_printed(iid: str, data: InvoicePrintIn = InvoicePrintIn(), user: dict = Depends(get_current_user)):
-    """Tandai invoice telah dicetak. PADA CETAK PERTAMA: post AR journal + set invoice_date.
-    Pada cetak ulang: jika use_old_date=True → reuse tanggal lama. Jika False → update ke tanggal baru."""
-    inv = await db.invoices.find_one({"_id": _oid(iid)})
-    if not inv:
-        raise HTTPException(404, "Invoice tidak ditemukan")
+async def _apply_invoice_print(inv, print_date, use_old_date, posted_by):
+    """Set invoice_date + print bookkeeping. On FIRST print → post AR journal.
+    On RE-print dengan tanggal baru → re-date jurnal AR (rebuild) agar akuntansi ikut berubah.
+    Returns fresh invoice doc."""
     now = datetime.now(timezone.utc)
-    if data.print_date:
+    if print_date:
         try:
-            y, m, d = [int(x) for x in data.print_date.split("-")]
+            y, m, d = [int(x) for x in str(print_date).split("-")]
             print_dt = datetime(y, m, d, now.hour, now.minute, now.second, now.microsecond, tzinfo=timezone.utc)
         except Exception:
             raise HTTPException(400, "print_date harus YYYY-MM-DD")
@@ -3357,11 +3354,13 @@ async def mark_invoice_printed(iid: str, data: InvoicePrintIn = InvoicePrintIn()
     is_first = (print_count == 0 or not first_printed_at)
 
     new_invoice_date = inv.get("invoice_date") or print_dt
-    if not is_first and data.use_old_date:
-        # reuse old invoice_date — do nothing
+    date_changed = False
+    if not is_first and use_old_date:
         new_invoice_date = inv.get("invoice_date") or first_printed_at
-    elif not is_first and not data.use_old_date:
-        # update to new date
+    elif not is_first and not use_old_date:
+        new_invoice_date = print_dt
+        date_changed = (inv.get("invoice_date") != print_dt)
+    elif is_first and print_date:
         new_invoice_date = print_dt
 
     upd = {
@@ -3388,20 +3387,62 @@ async def mark_invoice_printed(iid: str, data: InvoicePrintIn = InvoicePrintIn()
                 lines.append({"account_code": "2210", "debit": 0, "credit": total_tax, "memo": f"PPN — {inv['invoice_number']}"})
             try:
                 await post_journal(
-                    date=print_dt,
+                    date=new_invoice_date,
                     description=f"Piutang & PPN — Invoice {inv['invoice_number']} dicetak",
                     lines=lines,
                     reference_type="invoice",
                     reference_id=str(inv["_id"]),
-                    posted_by=user["id"],
+                    posted_by=posted_by,
                 )
             except HTTPException:
                 pass
         upd["ar_recognized"] = True
 
     await db.invoices.update_one({"_id": inv["_id"]}, {"$set": upd})
-    new = await db.invoices.find_one({"_id": inv["_id"]})
-    return serialize(new)
+    fresh = await db.invoices.find_one({"_id": inv["_id"]})
+
+    # On re-print dengan tanggal berubah → rebuild jurnal AR pakai invoice_date baru
+    if not is_first and date_changed and fresh.get("ar_recognized"):
+        await rebuild_invoice_ar_journal(fresh, posted_by)
+
+    return fresh
+
+
+@app.post("/api/invoices/{iid}/mark-printed")
+async def mark_invoice_printed(iid: str, data: InvoicePrintIn = InvoicePrintIn(), user: dict = Depends(get_current_user)):
+    """Tandai invoice telah dicetak. PADA CETAK PERTAMA: post AR journal + set invoice_date.
+    Pada cetak ulang: jika use_old_date=True → reuse tanggal lama. Jika False → update ke tanggal baru + re-date jurnal."""
+    inv = await db.invoices.find_one({"_id": _oid(iid)})
+    if not inv:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    fresh = await _apply_invoice_print(inv, data.print_date, bool(data.use_old_date), user["id"])
+    return serialize(fresh)
+
+
+class BulkPrintPdfIn(BaseModel):
+    invoice_ids: List[str]
+    print_date: Optional[str] = None  # YYYY-MM-DD override (opsional)
+
+
+@app.post("/api/invoices/bulk-print-pdf")
+async def bulk_print_pdf(data: BulkPrintPdfIn, user: dict = Depends(get_current_user)):
+    """Cetak banyak invoice sekaligus → SATU file PDF gabungan. Tanggal (opsional) diterapkan
+    ke setiap invoice (invoice_date + jurnal AR) sebelum render."""
+    import invoice_docs
+    if not data.invoice_ids:
+        raise HTTPException(400, "Tidak ada invoice dipilih")
+    fulls = []
+    for iid in data.invoice_ids:
+        inv = await db.invoices.find_one({"_id": _oid(iid)})
+        if not inv:
+            continue
+        fresh = await _apply_invoice_print(inv, data.print_date, False, user["id"])
+        fulls.append(await build_invoice_full(fresh))
+    if not fulls:
+        raise HTTPException(404, "Tidak ada invoice ditemukan")
+    pdf = invoice_docs.render_invoices_pdf_combined(fulls)
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'inline; filename="Invoices_{len(fulls)}.pdf"'})
 
 @app.post("/api/invoices/{iid}/cancel")
 async def cancel_invoice(iid: str, user: dict = Depends(require_role("operation"))):

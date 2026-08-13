@@ -1,5 +1,13 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Atur Tanggal Invoice saat Cetak (Individual & Bulk) — server-side PDF (Jun 2026)
+- **Kebutuhan user:** saat cetak invoice (individual & bulk) muncul pilihan atur tanggal. Keputusan user: (1a) pop-up date-picker tiap cetak; (2b) tanggal IKUT mengubah data akuntansi (jurnal AR di-re-date); (3a) kedua jalur pakai server-side PDF; (4a) kosong = pakai invoice_date yang ada.
+- **Backend** (`server.py`): refactor logika `mark-printed` → helper `_apply_invoice_print(inv, print_date, use_old_date, posted_by)`. First print → post jurnal AR dgn tanggal terpilih. **Re-print dgn tanggal beda → rebuild jurnal AR (`rebuild_invoice_ar_journal`) sehingga tanggal jurnal ikut berubah** (sebelumnya tidak). Endpoint baru `POST /api/invoices/bulk-print-pdf` {invoice_ids[], print_date} → terapkan tanggal ke tiap invoice + jurnal, lalu render SATU PDF gabungan.
+- **`invoice_docs.py`:** dipecah jadi `_render_invoice_inner()` (isi body) + `render_invoice_html()` (wrapper) + `render_invoices_pdf_combined([...])` (banyak invoice → 1 PDF, page-break antar invoice). `render_invoice_pdf(data, override_date=None)`.
+- **Frontend** (`InvoicesCreated.js`): `handlePrint`/`bulkPrint` kini buka modal date-picker (`data-testid="print-date-modal"`, input `print-date-input`, tombol `confirm-print-btn`). Single: mark-printed{print_date} → GET `/pdf` (blob) buka tab. Bulk: POST `/bulk-print-pdf` (blob) buka tab. Ganti `window.print()` browser lama.
+- **Self-test:** sintetis 2-AWB invoice → first print 2026-06-10 (jurnal balance 808.800), re-print 2026-07-20 (jurnal RE-DATED, tetap 1 & balance), bulk-print-pdf 2026-08-05 (PDF gabungan + jurnal re-dated), single `/pdf` OK. PDF renderer (single/override/combined) OK. Data live di-restore bersih. Testing agent TIDAK dipakai (dilarang user). UI modal terverifikasi via screenshot.
+
+
 ## Jadwal Kerja Absensi per Karyawan + Tanda Telat (Jun 2026)
 - **Kebutuhan:** jam masuk/pulang bisa custom PER HARI PER ORANG (Senin beda dari Selasa dst); kosong = ikut global; absen telat diberi tanda.
 - **Backend** (`server.py`): `EmployeeIn` += `work_days[]`, `work_schedule` (per-hari `{"mon":{"in","out"},...}`), + legacy `work_hour_in/out`. Helper `_effective_att_config(cfg, employee)` overlay jadwal per-karyawan (termasuk merge per-hari `work_schedule`) di atas global. `_get_day_schedule` sudah pilih jam sesuai hari. Dipakai di create/update attendance & Excel import. Badge TELAT/KURANG JAM sudah ada di Attendance UI.
