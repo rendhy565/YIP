@@ -11601,6 +11601,151 @@ async def bulk_import_apply(data: BulkApplyIn, user: dict = Depends(require_role
         pass
     return res
 
+# ---------------------------------------------------------------------------
+# Import Qty & Tarif/Kg (isi kolom tampilan lampiran SAJA — total & jurnal TIDAK diubah)
+# ---------------------------------------------------------------------------
+def _parse_qty_tariff_rows(ws):
+    """Cari baris header yg memuat 'AWB', lalu ambil kolom AWB / Qty / Harga per Kg.
+    Return list {awb_number, qty (float|None), tariff (float|None)}. Total TIDAK dihitung."""
+    header_row = 1
+    for r in range(1, min(8, ws.max_row) + 1):
+        cells = [_norm(c.value) for c in ws[r]]
+        if any(c == "awb" or c.startswith("awb") or c == "no awb" for c in cells):
+            header_row = r
+            break
+    header = [_norm(c.value) for c in ws[header_row]]
+
+    def idx(match_fn):
+        for i, h in enumerate(header):
+            if match_fn(h):
+                return i
+        return None
+    i_awb = idx(lambda h: h == "awb" or h == "no awb" or (h.startswith("awb")) )
+    if i_awb is None:
+        i_awb = idx(lambda h: "awb" in h)
+    i_qty = idx(lambda h: h == "qty" or h.startswith("qty"))
+    i_tar = idx(lambda h: "harga" in h)  # 'Harga /KG'
+    if i_awb is None:
+        raise HTTPException(400, "Kolom 'AWB' tidak ditemukan di file")
+
+    def _num(v):
+        if v in (None, ""):
+            return None
+        try:
+            return round(float(v), 2)
+        except Exception:
+            try:
+                return round(float(str(v).replace(".", "").replace(",", ".")), 2)
+            except Exception:
+                return None
+
+    rows = []
+    for r in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        if r is None or all(x is None for x in r):
+            continue
+        def g(i):
+            return r[i] if (i is not None and i < len(r)) else None
+        awb = g(i_awb)
+        if awb is None or str(awb).strip() == "" or str(awb).strip().startswith(("ℹ", "•")):
+            continue
+        rows.append({
+            "awb_number": str(awb).strip().replace(".0", "") if str(awb).strip().endswith(".0") else str(awb).strip(),
+            "qty": _num(g(i_qty)),
+            "tariff": _num(g(i_tar)),
+        })
+    return rows
+
+
+async def _qty_tariff_match(rows):
+    """Cocokkan tiap row ke awb_orders by awb_number. Return (items, not_found)."""
+    items = []
+    not_found = []
+    seen = set()
+    for r in rows:
+        awbn = str(r.get("awb_number") or "").strip()
+        if not awbn or awbn in seen:
+            continue
+        seen.add(awbn)
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
+        if not awb:
+            not_found.append(awbn)
+            continue
+        cur_qty = float(awb.get("qty_kg") or 0)
+        cur_tar = float(awb.get("tariff_per_kg") or 0)
+        total = float(awb.get("total_tariff") or 0)
+        new_qty = r.get("qty")
+        new_tar = r.get("tariff")
+        computed = round((new_qty or 0) * (new_tar or 0), 2) if (new_qty and new_tar) else None
+        mismatch = bool(computed is not None and abs(computed - total) >= 1)
+        items.append({
+            "awb_id": str(awb["_id"]), "awb_number": awb["awb_number"],
+            "current_qty": cur_qty, "current_tariff": cur_tar, "total_tariff": total,
+            "new_qty": new_qty, "new_tariff": new_tar,
+            "computed": computed, "mismatch": mismatch,
+        })
+    return items, not_found
+
+
+@app.post("/api/import/qty-tariff/preview")
+async def qty_tariff_preview(file: UploadFile = File(...), user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    rows = _parse_qty_tariff_rows(wb.active)
+    if not rows:
+        raise HTTPException(400, "Tidak ada baris data (kolom AWB kosong semua)")
+    items, not_found = await _qty_tariff_match(rows)
+    qty_fill = sum(1 for it in items if it["new_qty"] is not None and abs(it["new_qty"] - it["current_qty"]) >= 0.01)
+    tar_fill = sum(1 for it in items if it["new_tariff"] is not None and abs(it["new_tariff"] - it["current_tariff"]) >= 0.01)
+    return {
+        "total_rows": len(rows),
+        "matched": len(items),
+        "not_found": not_found,
+        "qty_to_fill": qty_fill,
+        "tariff_to_fill": tar_fill,
+        "mismatch_count": sum(1 for it in items if it["mismatch"]),
+        "items": items,
+    }
+
+
+@app.post("/api/import/qty-tariff/apply")
+async def qty_tariff_apply(file: UploadFile = File(...), user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Isi HANYA qty_kg & tariff_per_kg pada AWB. total_tariff / tax / grand_total / jurnal TIDAK disentuh."""
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    rows = _parse_qty_tariff_rows(wb.active)
+    items, not_found = await _qty_tariff_match(rows)
+    now = datetime.now(timezone.utc)
+    updated = 0
+    qty_set = 0
+    tar_set = 0
+    for it in items:
+        upd = {}
+        if it["new_qty"] is not None:
+            upd["qty_kg"] = it["new_qty"]; qty_set += 1
+        if it["new_tariff"] is not None:
+            upd["tariff_per_kg"] = it["new_tariff"]; tar_set += 1
+        if not upd:
+            continue
+        upd["updated_at"] = now
+        upd["updated_by"] = user["id"]
+        await db.awb_orders.update_one({"_id": _oid(it["awb_id"])}, {"$set": upd})
+        updated += 1
+    try:
+        await log_activity(user, "import", "awb_order", None, "Import Qty & Tarif/Kg (display only)",
+                           {"updated": updated, "qty_set": qty_set, "tariff_set": tar_set, "not_found": len(not_found)})
+    except Exception:
+        pass
+    return {"updated": updated, "qty_set": qty_set, "tariff_set": tar_set,
+            "matched": len(items), "not_found": not_found}
+
+
+
 @app.get("/api/admin/bulk-import/template")
 async def bulk_import_template(user: dict = Depends(require_role("administrator"))):
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Import Massal AWB"

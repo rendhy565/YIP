@@ -36,6 +36,11 @@ export default function InvoicesCreated() {
   const [savingPo, setSavingPo] = useState({});
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState(null);
+  const [showQtyImport, setShowQtyImport] = useState(false);
+  const [qtyFile, setQtyFile] = useState(null);
+  const [qtyPreview, setQtyPreview] = useState(null);
+  const [qtyPreviewing, setQtyPreviewing] = useState(false);
+  const [qtyApplying, setQtyApplying] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState(null);
   // Invoice Number import (mark AWB as Invoiced/Paid)
@@ -230,6 +235,31 @@ export default function InvoicesCreated() {
     } catch (e) { toast.error(errMsg(e)); }
   };
 
+  const previewQtyTariff = async () => {
+    if (!qtyFile) { toast.error("Pilih file Excel dulu"); return; }
+    setQtyPreviewing(true); setQtyPreview(null);
+    try {
+      const fd = new FormData(); fd.append("file", qtyFile);
+      const r = await api.post("/import/qty-tariff/preview", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setQtyPreview(r.data);
+      if (r.data.matched === 0) toast.error("Tidak ada AWB yang cocok");
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setQtyPreviewing(false); }
+  };
+  const applyQtyTariff = async () => {
+    if (!qtyFile) return;
+    setQtyApplying(true);
+    try {
+      const fd = new FormData(); fd.append("file", qtyFile);
+      const r = await api.post("/import/qty-tariff/apply", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      const d = r.data;
+      toast.success(`Selesai: ${d.updated} AWB diupdate (Qty ${d.qty_set}, Tarif ${d.tariff_set}). Tidak ditemukan: ${d.not_found.length}`);
+      setShowQtyImport(false); setQtyFile(null); setQtyPreview(null);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setQtyApplying(false); }
+  };
+
   const bulkPrint = () => {
     const ids = targetIds();
     if (ids.length === 0) { toast.error("Tidak ada invoice"); return; }
@@ -300,6 +330,7 @@ export default function InvoicesCreated() {
         subtitle="Filter, print, export, dan import invoice yang sudah dibuat."
         action={
           <div className="flex gap-2 flex-wrap">
+            <Button data-testid="import-qty-tariff-btn" variant="secondary" onClick={() => { setShowQtyImport(true); setQtyFile(null); setQtyPreview(null); }}><Upload size={16}/> Import Qty & Tarif/Kg</Button>
             {canImportNumbers && (
               <Button data-testid="import-invoice-no-btn" variant="secondary" onClick={() => { setShowInvNoImport(true); setInvNoFile(null); setInvNoResult(null); }}><Upload size={16}/> Import Invoice No (Mark Status)</Button>
             )}
@@ -737,6 +768,80 @@ export default function InvoicesCreated() {
               ) : (
                 <Button data-testid="bulk-download-confirm-btn" onClick={downloadBulk} disabled={bulkDownloading || !bulkDlDate}>
                   <Download size={14}/> {bulkDownloading ? "Menyiapkan ZIP..." : `Download ${bulkValidation.found.length} Invoice`}
+                </Button>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Import Qty & Tarif/Kg Modal (isi tampilan lampiran saja; total & jurnal tidak berubah) */}
+      {showQtyImport && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="qty-tariff-import-modal">
+          <Card className="w-full max-w-2xl p-6">
+            <div className="flex items-start justify-between mb-4">
+              <h3 className="font-heading font-bold text-xl"><Upload className="inline mr-2" size={18}/>Import Qty & Tarif/Kg</h3>
+              <button onClick={() => setShowQtyImport(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900 mb-3">
+              Import ini <strong>hanya mengisi kolom Qty & Tarif/Kg</strong> (tampilan di lampiran). Nilai <strong>total invoice & jurnal akuntansi TIDAK diubah</strong>. Dicocokkan berdasarkan <strong>No. AWB</strong>. Kolom dibaca: <code>AWB</code>, <code>Qty</code>, <code>Harga /KG</code>.
+            </div>
+            <input
+              data-testid="qty-tariff-file-input"
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={(e) => { setQtyFile(e.target.files?.[0] || null); setQtyPreview(null); }}
+              className="w-full border border-slate-300 rounded p-2 text-sm"
+            />
+            {qtyPreview && (
+              <div className="mt-3 text-sm space-y-2" data-testid="qty-tariff-preview">
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded bg-emerald-50 border border-emerald-200 px-3 py-2 text-emerald-900">
+                    <strong>{qtyPreview.matched}</strong> AWB cocok · akan isi Qty: <strong>{qtyPreview.qty_to_fill}</strong>, Tarif: <strong>{qtyPreview.tariff_to_fill}</strong>
+                  </div>
+                  <div className="rounded bg-slate-50 border border-slate-200 px-3 py-2 text-slate-700">
+                    Total baris file: <strong>{qtyPreview.total_rows}</strong>
+                  </div>
+                </div>
+                {qtyPreview.mismatch_count > 0 && (
+                  <div className="rounded bg-amber-50 border border-amber-200 px-3 py-2 text-amber-900">
+                    ⚠ <strong>{qtyPreview.mismatch_count}</strong> AWB: Qty × Tarif ≠ total invoice (tampilan lampiran bisa terlihat tidak pas, tapi total tetap benar).
+                  </div>
+                )}
+                {qtyPreview.not_found.length > 0 && (
+                  <div className="rounded bg-rose-50 border border-rose-200 px-3 py-2 text-rose-900 max-h-24 overflow-auto">
+                    <strong>{qtyPreview.not_found.length}</strong> AWB tidak ditemukan (dilewati): <span className="font-mono text-xs">{qtyPreview.not_found.slice(0, 30).join(", ")}</span>
+                  </div>
+                )}
+                <div className="max-h-60 overflow-auto border border-slate-200 rounded">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-100 sticky top-0"><tr>
+                      <th className="p-2 text-left">No. AWB</th><th className="p-2 text-right">Qty</th><th className="p-2 text-right">Tarif/Kg</th><th className="p-2 text-right">Total</th><th className="p-2 text-center">Ket</th>
+                    </tr></thead>
+                    <tbody>
+                      {qtyPreview.items.slice(0, 200).map((it) => (
+                        <tr key={it.awb_number} className="border-t border-slate-100">
+                          <td className="p-2 font-mono">{it.awb_number}</td>
+                          <td className="p-2 text-right">{it.current_qty} → <strong>{it.new_qty ?? "—"}</strong></td>
+                          <td className="p-2 text-right">{fmtIDR(it.current_tariff)} → <strong>{it.new_tariff != null ? fmtIDR(it.new_tariff) : "—"}</strong></td>
+                          <td className="p-2 text-right">{fmtIDR(it.total_tariff)}</td>
+                          <td className="p-2 text-center">{it.mismatch ? <span className="text-amber-600 font-semibold">≠ total</span> : <span className="text-emerald-600">ok</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-4 mt-4 border-t">
+              <Button variant="secondary" type="button" onClick={() => setShowQtyImport(false)} disabled={qtyPreviewing || qtyApplying}>Tutup</Button>
+              {!qtyPreview ? (
+                <Button data-testid="qty-tariff-preview-btn" onClick={previewQtyTariff} disabled={qtyPreviewing || !qtyFile}>
+                  <Search size={14}/> {qtyPreviewing ? "Membaca file..." : "Cek / Preview"}
+                </Button>
+              ) : (
+                <Button data-testid="qty-tariff-apply-btn" onClick={applyQtyTariff} disabled={qtyApplying || qtyPreview.matched === 0}>
+                  <Save size={14}/> {qtyApplying ? "Menerapkan..." : `Terapkan ke ${qtyPreview.matched} AWB`}
                 </Button>
               )}
             </div>

@@ -1,5 +1,14 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Import Qty & Tarif/Kg (display-only, tidak ubah akuntansi) (Jun 2026)
+- **Kebutuhan:** invoice sudah diproses tapi kolom Qty & Tarif/Kg kosong; user punya data Excel. Isi kolom tampilan lampiran SAJA — total invoice & jurnal TIDAK boleh berubah (user: Qty×Tarif belum tentu = total). Cocokkan by No. AWB. Semua AWB.
+- **Backend** (`server.py`): `_parse_qty_tariff_rows(ws)` (cari header row yg memuat 'AWB', map kolom AWB/Qty/'Harga /KG', flexible), `_qty_tariff_match(rows)` (cocokkan by awb_number regex, hitung computed=qty*tarif & flag mismatch vs total_tariff). Endpoint:
+  - `POST /api/import/qty-tariff/preview` (multipart) → ringkasan: total_rows, matched, not_found[], qty_to_fill, tariff_to_fill, mismatch_count, items[].
+  - `POST /api/import/qty-tariff/apply` (multipart) → set HANYA `qty_kg` & `tariff_per_kg`. TIDAK menyentuh total_tariff/tax/grand_total/jurnal.
+- **Frontend** (`InvoicesCreated.js`): tombol header `import-qty-tariff-btn` + modal (`qty-tariff-import-modal`): upload → `qty-tariff-preview-btn` (preview tabel per-AWB old→new, warning mismatch & not-found) → `qty-tariff-apply-btn`.
+- **Verifikasi:** file tes kecil (4 AWB asli + 1 not-found). Preview benar (4 cocok, qty 4/tarif 3, 1 mismatch, 1 not-found). Apply: qty_kg & tariff_per_kg terisi; total_tariff/tax/grand_total & jumlah jurnal SEMUA tetap; nilai asli di-restore setelah tes. UI diverifikasi via screenshot. Catatan: upload file BESAR (5MB+) via curl shell gagal (HTTP 000) tapi via UI/file kecil normal. Testing agent TIDAK dipakai.
+
+
 ## Perbaikan Layout PDF Invoice v2 — Meta, Signer, Lampiran (Jun 2026)
 - **Meta block:** titik dua dikembalikan ke kolom sendiri (terpisah dari label) & sejajar (label `width=72`, colon `width=10`), nilai menempel rapi setelah colon. (Revisi dari versi glued yang ditolak user.)
 - **Signer:** nama signer diturunkan (6 `<br/>` ruang tanda tangan) sehingga tepat di atas nama perusahaan hanya berjarak ~1 baris (`margin-top:6px`); NPWP tetap ±sejajar dengan A/C.
