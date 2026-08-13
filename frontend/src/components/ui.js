@@ -19,9 +19,9 @@ export function Card({ children, className = "", ...rest }) {
 
 export function PageHeader({ title, subtitle, action }) {
   return (
-    <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-5 md:mb-6 pb-4 border-b border-slate-200">
+    <div className="flex flex-col md:flex-row md:flex-wrap md:items-end md:justify-between gap-3 mb-5 md:mb-6 pb-4 border-b border-slate-200">
       <div className="min-w-0">
-        <h1 className="font-heading font-black text-2xl md:text-3xl lg:text-4xl tracking-tight text-slate-900 break-words">{title}</h1>
+        <h1 className="font-heading font-black text-2xl md:text-3xl lg:text-4xl tracking-tight text-slate-900 break-words whitespace-nowrap">{title}</h1>
       </div>
       {action && <div className="flex-shrink-0">{action}</div>}
     </div>
