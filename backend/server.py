@@ -11746,7 +11746,33 @@ async def qty_tariff_apply(file: UploadFile = File(...), user: dict = Depends(re
 
 
 
-@app.get("/api/admin/bulk-import/template")
+@app.get("/api/import/qty-tariff/template")
+async def qty_tariff_template(user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Template Excel dengan header yang pas untuk Import Qty & Tarif/Kg."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Qty_Tarif"
+    ws.append(["AWB", "Qty", "Harga /KG"])
+    ws.append(["205654", 100, 6305])
+    ws.append(["205680", 50, 15000])
+    for col, w in zip(("A", "B", "C"), (22, 12, 14)):
+        ws.column_dimensions[col].width = w
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Template_Qty_Tarif.xlsx"'},
+    )
+
+
+@app.get("/api/import/qty-tariff/template-legacy")
+async def _qty_tariff_template_placeholder():
+    raise HTTPException(404)
+
+
+
 async def bulk_import_template(user: dict = Depends(require_role("administrator"))):
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Import Massal AWB"
     bold_white = Font(bold=True, color="FFFFFF")
