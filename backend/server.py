@@ -11746,6 +11746,197 @@ async def qty_tariff_apply(file: UploadFile = File(...), user: dict = Depends(re
             "matched": len(items), "not_found": not_found}
 
 
+# ---------------------------------------------------------------------------
+# Import COST (update biaya per AWB) — TIMPA cost lama + jurnal langsung.
+# Revenue & jurnal revenue TIDAK disentuh. Cocokkan by No. AWB.
+# ---------------------------------------------------------------------------
+def _pick_cost_sheet(wb, sheet_names=None):
+    SKIP = {"REPORT", "DASHBOARD", "PIVOT TABLE", "SUMMARY", "SHEET4"}
+    if sheet_names:
+        cands = [s for s in wb.sheetnames if s in sheet_names]
+    elif "DATA ALL BASE (2)" in wb.sheetnames:
+        cands = ["DATA ALL BASE (2)"]
+    elif "DATA ALL BASE" in wb.sheetnames:
+        cands = ["DATA ALL BASE"]
+    else:
+        cands = [s for s in wb.sheetnames if s.upper() not in SKIP]
+    for sn in cands:
+        ws = wb[sn]
+        if ws.max_row < 3:
+            continue
+        hr, hmap = _find_header_row(ws)
+        if hmap and "awb_number" in hmap:
+            return ws, hr, hmap
+    return None, None, None
+
+
+def _parse_cost_rows(content: bytes, sheet_names=None):
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    ws, header_row, header_map = _pick_cost_sheet(wb, sheet_names)
+    if ws is None:
+        raise HTTPException(400, "Sheet data (dengan kolom AWB) tidak ditemukan")
+    rows = []
+    for row_idx in range(header_row + 1, ws.max_row + 1):
+        row = [c.value for c in ws[row_idx]]
+        def col(key):
+            i = header_map.get(key)
+            if i is None or i > len(row):
+                return None
+            return row[i - 1]
+        awb_raw = col("awb_number")
+        if awb_raw is None or _norm(awb_raw) in ("", "-"):
+            continue
+        awb_no = str(awb_raw).strip()
+        if awb_no.endswith(".0"):
+            awb_no = awb_no[:-2]
+        if "," in awb_no or ";" in awb_no or len(awb_no) > 25:
+            continue
+        armada_type = _to_str(col("armada_type"))
+        fleet_type = _to_str(col("fleet_type"))
+        pickup_date = _to_date(col("pickup_date")) or datetime.now(timezone.utc)
+        costs = []
+        v1 = _to_float(col("vendor1_total")) or _to_float(col("vendor1_invoice"))
+        if v1 > 0:
+            costs.append({"category": "Vendor", "amount": round(v1, 2), "vendor_name": _to_str(col("vendor1_name")), "status": _to_str(col("vendor1_status"))})
+        v2 = _to_float(col("vendor2_total")) or _to_float(col("vendor2_invoice"))
+        if v2 > 0:
+            costs.append({"category": "Vendor", "amount": round(v2, 2), "vendor_name": _to_str(col("vendor2_name")), "status": _to_str(col("vendor2_status"))})
+        bops = _to_float(col("biaya_ops"))
+        if bops > 0:
+            costs.append({"category": "Operational", "amount": round(bops, 2), "vendor_name": None, "status": None})
+        ujln = _to_float(col("uang_jalan"))
+        if ujln > 0:
+            costs.append({"category": "Lintas", "amount": round(ujln, 2), "vendor_name": None, "status": None})
+        if not costs:
+            continue
+        rows.append({"awb_number": awb_no, "armada_type": armada_type, "fleet_type": fleet_type,
+                     "pickup_date": pickup_date, "costs": costs})
+    return rows
+
+
+async def _cost_match(rows):
+    items = []
+    not_found = []
+    seen = set()
+    for r in rows:
+        awbn = r["awb_number"]
+        if awbn in seen:
+            for it in items:
+                if it["awb_number"] == awbn:
+                    it["new_costs"].extend(r["costs"])
+                    it["new_cost_sum"] = round(sum(c["amount"] for c in it["new_costs"]), 2)
+                    it["new_cost_count"] = len(it["new_costs"])
+            continue
+        seen.add(awbn)
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
+        if not awb:
+            not_found.append(awbn)
+            continue
+        old = await db.awb_costs.find({"awb_id": awb["_id"]}).to_list(1000)
+        items.append({
+            "awb_id": str(awb["_id"]), "awb_number": awb["awb_number"],
+            "armada_type": r["armada_type"], "fleet_type": r["fleet_type"], "pickup_date": r["pickup_date"],
+            "old_cost_count": len(old), "old_cost_sum": round(sum(float(c.get("amount") or 0) for c in old), 2),
+            "new_costs": list(r["costs"]),
+            "new_cost_count": len(r["costs"]), "new_cost_sum": round(sum(c["amount"] for c in r["costs"]), 2),
+        })
+    return items, not_found
+
+
+@app.post("/api/import/cost/preview")
+async def cost_import_preview(file: UploadFile = File(...), user: dict = Depends(require_role("finance", "administrator"))):
+    content = await file.read()
+    rows = _parse_cost_rows(content)
+    if not rows:
+        raise HTTPException(400, "Tidak ada baris cost (semua kolom biaya kosong)")
+    items, not_found = await _cost_match(rows)
+    return {
+        "total_rows": len(rows),
+        "matched": len(items),
+        "not_found": not_found,
+        "old_costs_to_replace": sum(it["old_cost_count"] for it in items),
+        "old_cost_sum": round(sum(it["old_cost_sum"] for it in items), 2),
+        "new_costs": sum(it["new_cost_count"] for it in items),
+        "new_cost_sum": round(sum(it["new_cost_sum"] for it in items), 2),
+        "items": items[:500],
+    }
+
+
+@app.post("/api/import/cost/apply")
+async def cost_import_apply(file: UploadFile = File(...), user: dict = Depends(require_role("finance", "administrator"))):
+    """TIMPA cost per AWB (hapus cost lama + jurnalnya) lalu insert cost baru + jurnal langsung.
+    Revenue & jurnal revenue TIDAK disentuh."""
+    content = await file.read()
+    rows = _parse_cost_rows(content)
+    items, not_found = await _cost_match(rows)
+    vendor_cache = {}
+
+    async def get_vendor_id(name, armada):
+        if not name:
+            return None
+        if name in vendor_cache:
+            return vendor_cache[name]
+        ex = await db.vendors.find_one({"name": name})
+        if ex:
+            vendor_cache[name] = ex["_id"]
+            return ex["_id"]
+        r = await db.vendors.insert_one({"name": name, "armada_type": armada, "active": True, "created_at": datetime.now(timezone.utc)})
+        vendor_cache[name] = r.inserted_id
+        return r.inserted_id
+
+    awbs_updated = 0
+    old_removed = 0
+    new_created = 0
+    journals_posted = 0
+    for it in items:
+        awb_oid = _oid(it["awb_id"])
+        old = await db.awb_costs.find({"awb_id": awb_oid}).to_list(1000)
+        for c in old:
+            await db.journal_entries.delete_many({"reference_type": "cost", "reference_id": str(c["_id"])})
+        if old:
+            await db.awb_costs.delete_many({"awb_id": awb_oid})
+            old_removed += len(old)
+        for c in it["new_costs"]:
+            is_settled = (_norm(c.get("status")) == "sudah bayar")
+            vendor_id = await get_vendor_id(c.get("vendor_name"), it["armada_type"])
+            cost_doc = {
+                "awb_id": awb_oid, "cost_category": c["category"], "amount": c["amount"],
+                "payment_type": "Cash" if is_settled else "Accrue",
+                "vendor_name": c.get("vendor_name"), "vendor_id": vendor_id,
+                "armada_type": it["armada_type"], "fleet_type": it["fleet_type"],
+                "is_settled": is_settled,
+                "description": f"Import Cost — AWB {it['awb_number']}",
+                "created_by_role": "imported", "created_at": it["pickup_date"],
+            }
+            if is_settled:
+                cost_doc["cash_account_code"] = "1101"
+            cr = await db.awb_costs.insert_one(cost_doc)
+            new_created += 1
+            expense_code = COST_CATEGORY_TO_COA.get(c["category"], "5102")
+            credit_code = "1101" if is_settled else "2101"
+            lines = [
+                {"account_code": expense_code, "debit": c["amount"], "credit": 0, "memo": it["awb_number"]},
+                {"account_code": credit_code, "debit": 0, "credit": c["amount"], "memo": c.get("vendor_name") or ""},
+            ]
+            try:
+                await post_journal(date=it["pickup_date"], description=f"[Import Cost] {c['category']} {it['awb_number']}",
+                                   lines=lines, reference_type="cost", reference_id=str(cr.inserted_id),
+                                   posted_by=user["id"], auto=True)
+                journals_posted += 1
+            except HTTPException:
+                pass
+        awbs_updated += 1
+
+    try:
+        await log_activity(user, "import", "awb_cost", None, "Import Cost (timpa + jurnal)",
+                           {"awbs_updated": awbs_updated, "old_removed": old_removed, "new_created": new_created, "not_found": len(not_found)})
+    except Exception:
+        pass
+    return {"awbs_updated": awbs_updated, "old_costs_removed": old_removed,
+            "new_costs_created": new_created, "journals_posted": journals_posted, "not_found": not_found}
+
+
+
 
 @app.get("/api/import/qty-tariff/template")
 async def qty_tariff_template(user: dict = Depends(require_role("operation", "finance", "administrator"))):

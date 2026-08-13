@@ -17,6 +17,12 @@ export default function ImportExcel() {
   const [wipeText, setWipeText] = useState("");
   const [step, setStep] = useState(1); // 1=upload, 2=sheets, 3=preview, 4=done
 
+  // ── Update Cost (Timpa) — importer terpisah khusus biaya ──
+  const [costFile, setCostFile] = useState(null);
+  const [costPreview, setCostPreview] = useState(null);
+  const [costResult, setCostResult] = useState(null);
+  const [costBusy, setCostBusy] = useState(false);
+
   if (user?.role !== "administrator") {
     return (
       <div className="p-8 max-w-2xl">
@@ -100,6 +106,29 @@ export default function ImportExcel() {
     setSelectedSheets((s) => s.includes(n) ? s.filter((x) => x !== n) : [...s, n]);
   };
 
+  const costRunPreview = async () => {
+    if (!costFile) return toast.error("Pilih file dulu");
+    setCostBusy(true); setCostPreview(null); setCostResult(null);
+    try {
+      const fd = new FormData(); fd.append("file", costFile);
+      const r = await api.post("/import/cost/preview", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 180000 });
+      setCostPreview(r.data);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setCostBusy(false); }
+  };
+  const costRunApply = async () => {
+    if (!costPreview) return;
+    if (!window.confirm(`TIMPA biaya untuk ${costPreview.matched} AWB?\n\nCost lama pada AWB tsb (${costPreview.old_costs_to_replace} baris) akan DIHAPUS beserta jurnalnya, lalu diganti ${costPreview.new_costs} cost baru + jurnal biaya. Revenue TIDAK berubah.`)) return;
+    setCostBusy(true);
+    try {
+      const fd = new FormData(); fd.append("file", costFile);
+      const r = await api.post("/import/cost/apply", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300000 });
+      setCostResult(r.data);
+      toast.success(`Selesai — ${r.data.awbs_updated} AWB, ${r.data.new_costs_created} cost, ${r.data.journals_posted} jurnal`);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setCostBusy(false); }
+  };
+
   return (
     <div data-testid="import-page">
       <PageHeader title="Import Data Excel" subtitle="Import REPORT PENJUALAN dari file XLSX. Master Customer & Vendor otomatis dibuat. Jurnal akunting otomatis terposting." />
@@ -124,6 +153,92 @@ export default function ImportExcel() {
           </div>
         </div>
       )}
+
+      {/* UPDATE COST (TIMPA) — importer khusus biaya */}
+      <Card className="mb-6 border-indigo-300" data-testid="cost-import-card">
+        <div className="px-4 py-3 bg-indigo-50 border-b border-indigo-200 flex items-center gap-2">
+          <FileSpreadsheet size={16} className="text-indigo-700"/>
+          <h3 className="font-bold text-indigo-900">Update Cost (Timpa) — Biaya per AWB</h3>
+        </div>
+        <div className="p-4 text-sm">
+          <div className="bg-amber-50 border border-amber-200 rounded p-2 text-xs text-amber-900 mb-3">
+            Upload file yang <b>AWB-nya sama</b> tapi kolom <b>biaya</b> sudah diisi. Sistem mencocokkan <b>No. AWB</b>, lalu <b>menimpa (overwrite)</b> semua cost lama AWB tsb dengan yang baru dan <b>membuat jurnal biaya langsung</b> (Dr Beban / Cr Hutang Vendor 2101 atau Kas 1101 bila "sudah bayar"). <b>Revenue & jurnal revenue TIDAK diubah.</b> Kolom terbaca: Vendor 1/2 + T.Tagihan/Inv + Status, Biaya Ops, Uang Jalan (Lintas).
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex-1 min-w-[260px]">
+              <Label>File (.xlsx)</Label>
+              <input
+                data-testid="cost-import-file-input"
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={(e) => { setCostFile(e.target.files?.[0] || null); setCostPreview(null); setCostResult(null); }}
+                className="block w-full text-sm border border-slate-300 rounded px-3 py-2 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:bg-indigo-600 file:text-white file:cursor-pointer file:font-bold"
+              />
+              {costFile && <div className="text-xs text-slate-500 mt-1">📎 {costFile.name} ({(costFile.size/1024).toFixed(1)} KB)</div>}
+            </div>
+            <Button data-testid="cost-import-preview-btn" onClick={costRunPreview} disabled={!costFile || costBusy}>
+              <Eye size={14}/> {costBusy && !costResult ? "Membaca..." : "Cek / Preview"}
+            </Button>
+          </div>
+
+          {costPreview && !costResult && (
+            <div className="mt-4" data-testid="cost-import-preview">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                <Stat label="AWB cocok" value={costPreview.matched} good/>
+                <Stat label="Cost baru" value={costPreview.new_costs} good/>
+                <Stat label="Cost lama ditimpa" value={costPreview.old_costs_to_replace} warn={costPreview.old_costs_to_replace > 0}/>
+                <Stat label="AWB tak ditemukan" value={(costPreview.not_found || []).length} warn={(costPreview.not_found || []).length > 0}/>
+              </div>
+              <div className="text-xs text-slate-600 mb-3">
+                Total cost baru: <b>{fmtIDR(costPreview.new_cost_sum)}</b> · Total cost lama yang akan diganti: <b>{fmtIDR(costPreview.old_cost_sum)}</b>
+              </div>
+              {(costPreview.not_found || []).length > 0 && (
+                <details className="rounded border border-rose-300 bg-rose-50/60 mb-3">
+                  <summary className="px-3 py-2 cursor-pointer text-sm font-bold text-rose-900">{costPreview.not_found.length} AWB tidak ditemukan (dilewati)</summary>
+                  <div className="px-3 pb-3 font-mono text-xs max-h-32 overflow-auto">{costPreview.not_found.join(", ")}</div>
+                </details>
+              )}
+              <div className="border border-slate-200 rounded max-h-64 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-100 sticky top-0"><tr>
+                    <th className="p-2 text-left">No. AWB</th><th className="p-2 text-right">Cost Lama</th><th className="p-2 text-right">Cost Baru</th><th className="p-2 text-right">Nilai Baru</th>
+                  </tr></thead>
+                  <tbody>
+                    {costPreview.items.map((it) => (
+                      <tr key={it.awb_number} className="border-t border-slate-100">
+                        <td className="p-2 font-mono">{it.awb_number}</td>
+                        <td className="p-2 text-right">{it.old_cost_count}</td>
+                        <td className="p-2 text-right font-semibold">{it.new_cost_count}</td>
+                        <td className="p-2 text-right font-mono">{fmtIDR(it.new_cost_sum)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="text-right mt-3">
+                <Button data-testid="cost-import-apply-btn" variant="success" onClick={costRunApply} disabled={costBusy || costPreview.matched === 0}>
+                  <PlayCircle size={14}/> {costBusy ? "Menerapkan..." : `Timpa & Buat Jurnal (${costPreview.matched} AWB)`}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {costResult && (
+            <div className="mt-4 bg-emerald-50/50 rounded p-3" data-testid="cost-import-result">
+              <div className="text-sm font-bold mb-2 flex items-center gap-2"><CheckCircle2 size={16} className="text-emerald-700"/> Selesai</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Stat label="AWB diupdate" value={costResult.awbs_updated} good/>
+                <Stat label="Cost lama dihapus" value={costResult.old_costs_removed}/>
+                <Stat label="Cost baru dibuat" value={costResult.new_costs_created} good/>
+                <Stat label="Jurnal diposting" value={costResult.journals_posted} good/>
+              </div>
+              {(costResult.not_found || []).length > 0 && (
+                <p className="text-xs text-rose-700 mt-2">{costResult.not_found.length} AWB tidak ditemukan: <span className="font-mono">{costResult.not_found.slice(0,40).join(", ")}</span></p>
+              )}
+            </div>
+          )}
+        </div>
+      </Card>
 
       {/* DANGER ZONE: WIPE */}
       <Card className="mb-6 border-rose-300">

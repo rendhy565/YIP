@@ -1,5 +1,14 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Import COST (Update Cost / Timpa + Jurnal) (Jun 2026)
+- **Kebutuhan:** importer "Import Data Excel" lama bersifat ADD/append (push item revenue + inc total + insert cost tiap kali; baris Selling<=0 di-skip) → tidak aman untuk upload ulang / update cost bertahap (revenue dobel, atau cost-only ter-skip). Solusi: importer COST terpisah. Pilihan user: jurnal langsung + timpa.
+- **Backend** (`server.py`): `_pick_cost_sheet` (pilih sheet DATA ALL BASE (2)/(...) via `_find_header_row`), `_parse_cost_rows` (baca AWB + Vendor1/2 total/status, Biaya Ops→Operational, Uang Jalan→Lintas), `_cost_match` (cocokkan by awb_number, gabung baris duplikat, hitung old vs new). Endpoint:
+  - `POST /api/import/cost/preview` → matched, not_found[], old_costs_to_replace/sum, new_costs/sum, items[].
+  - `POST /api/import/cost/apply` → TIMPA: hapus semua awb_costs AWB tsb + `journal_entries` ref cost, lalu insert cost baru + post jurnal (Dr beban 5101/5102/5103 / Cr 2101 hutang; jika status "sudah bayar" → Cr 1101 kas). Revenue & jurnal revenue TIDAK disentuh.
+- **Frontend** (`ImportExcel.js`): kartu "Update Cost (Timpa)" (`cost-import-card`) → upload → `cost-import-preview-btn` (ringkasan + tabel per-AWB) → `cost-import-apply-btn` (konfirmasi timpa) → hasil.
+- **Verifikasi:** parse file asli (304 baris cost, total 854jt cocok). Apply sintetis: 3 cost + jurnal balance (DR=CR=1.378.500), revenue tetap, apply ke-2 (timpa) tidak dobel (tetap 3), not_found benar. UI preview file asli via screenshot (304 cocok/416 baru/316 timpa/0 not-found). Data live TIDAK diubah (apply tidak dijalankan di live). Testing agent TIDAK dipakai.
+
+
 ## "Attn" pada Invoice dari Nama Attn Customer (Jun 2026)
 - **Kebutuhan:** baris "Attn" di invoice cetak diambil dari field "Nama Attn" di Master Customer.
 - **Backend:** `CustomerIn` += `attn` (persist via model_dump di create/update). `invoice_docs.py` baris Attn: `customer.attn or awb.consignee or ''` (fallback ke consignee bila kosong).
