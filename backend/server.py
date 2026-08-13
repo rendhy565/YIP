@@ -3279,6 +3279,7 @@ class InvoicePrintIn(BaseModel):
 
 class BulkInvoiceDownloadIn(BaseModel):
     invoice_numbers: List[str]
+    print_date: Optional[str] = None  # YYYY-MM-DD — jika diisi, set invoice_date + jurnal AR tiap invoice
 
 def _parse_invoice_numbers(raw_list):
     nums = []
@@ -3315,6 +3316,8 @@ async def bulk_invoice_download(data: BulkInvoiceDownloadIn, user: dict = Depend
             if not inv:
                 missing.append(num)
                 continue
+            if data.print_date:
+                inv = await _apply_invoice_print(inv, data.print_date, False, user["id"])
             full = await build_invoice_full(inv)
             try:
                 pdf = invoice_docs.render_invoice_pdf(full)

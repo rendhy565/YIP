@@ -27,6 +27,7 @@ export default function InvoicesCreated() {
   const [selected, setSelected] = useState(new Set());
   // Bulk download (ZIP of individual PDFs)
   const [showBulkDl, setShowBulkDl] = useState(false);
+  const [bulkDlDate, setBulkDlDate] = useState("");
   const [bulkText, setBulkText] = useState("");
   const [bulkChecking, setBulkChecking] = useState(false);
   const [bulkValidation, setBulkValidation] = useState(null);
@@ -264,6 +265,7 @@ export default function InvoicesCreated() {
     const nums = invoices.filter((i) => ids.includes(i.id)).map((i) => i.invoice_number);
     setBulkText(nums.join("\n"));
     setBulkValidation(null);
+    setBulkDlDate(toYMD());
     setShowBulkDl(true);
   };
   const checkBulk = async () => {
@@ -279,13 +281,14 @@ export default function InvoicesCreated() {
   const downloadBulk = async () => {
     setBulkDownloading(true);
     try {
-      const r = await api.post("/invoices/bulk-download", { invoice_numbers: [bulkText] }, { responseType: "blob" });
+      const r = await api.post("/invoices/bulk-download", { invoice_numbers: [bulkText], print_date: bulkDlDate }, { responseType: "blob" });
       const found = r.headers["x-found-count"] || "";
       const url = window.URL.createObjectURL(new Blob([r.data]));
       const a = document.createElement("a"); a.href = url; a.download = `Invoices_${found}.zip`;
       document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
-      toast.success(`${found} invoice didownload (ZIP)`);
+      toast.success(`${found} invoice didownload (ZIP) — tanggal cetak diupdate`);
       setShowBulkDl(false);
+      load();
     } catch (e) { toast.error(errMsg(e)); }
     finally { setBulkDownloading(false); }
   };
@@ -703,6 +706,16 @@ export default function InvoicesCreated() {
               className="w-full border border-slate-300 rounded p-2 text-sm font-mono"
               placeholder={"INV/AR-EMR/0526/00859\nINV/AR-EMR/0526/00860\n..."}
             />
+            <div className="mt-3">
+              <Label>Tanggal Invoice (dipakai di PDF & jurnal) *</Label>
+              <Input
+                data-testid="bulk-download-date-input"
+                type="date"
+                value={bulkDlDate}
+                onChange={(e) => setBulkDlDate(e.target.value)}
+              />
+              <p className="text-[11px] text-slate-500 mt-1">Tanggal ini di-set ke tiap invoice yang didownload (Date & Due Date +30 hari) <strong>dan</strong> disinkronkan ke tanggal jurnal Piutang/PPN.</p>
+            </div>
             {bulkValidation && (
               <div className="mt-3 text-sm space-y-2" data-testid="bulk-download-validation">
                 <div className="rounded bg-emerald-50 border border-emerald-200 px-3 py-2 text-emerald-900">
@@ -722,7 +735,7 @@ export default function InvoicesCreated() {
                   <Search size={14}/> {bulkChecking ? "Mengecek..." : "Cek Nomor Invoice"}
                 </Button>
               ) : (
-                <Button data-testid="bulk-download-confirm-btn" onClick={downloadBulk} disabled={bulkDownloading}>
+                <Button data-testid="bulk-download-confirm-btn" onClick={downloadBulk} disabled={bulkDownloading || !bulkDlDate}>
                   <Download size={14}/> {bulkDownloading ? "Menyiapkan ZIP..." : `Download ${bulkValidation.found.length} Invoice`}
                 </Button>
               )}

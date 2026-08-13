@@ -1,5 +1,12 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Bulk Download ZIP + Atur Tanggal (Jun 2026)
+- **Kebutuhan:** modal Bulk Download ZIP juga bisa pilih tanggal; setelah download, tanggal cetak (invoice_date + jurnal AR) tiap invoice ikut di-update. Sisanya tidak diubah.
+- **Backend** (`server.py`): `BulkInvoiceDownloadIn` += `print_date`. Di `bulk_invoice_download`, bila `print_date` diisi → `_apply_invoice_print(inv, print_date, False, user_id)` sebelum render tiap invoice (set invoice_date + post/re-date jurnal AR).
+- **Frontend** (`InvoicesCreated.js`): modal bulk-download tambah input tanggal (`bulk-download-date-input`, default hari ini, wajib), dikirim di POST `/bulk-download`, dan `load()` setelah selesai. Toast: "tanggal cetak diupdate".
+- **Self-test:** sintetis invoice → bulk-download 2026-09-12 (ZIP OK, invoice_date+jurnal balance 505.500 dated 12-09), re-download 2026-10-03 (jurnal re-dated, tetap 1 & balance). UI modal date-input terverifikasi via screenshot. Data live bersih. Testing agent TIDAK dipakai.
+
+
 ## Atur Tanggal Invoice saat Cetak (Individual & Bulk) — server-side PDF (Jun 2026)
 - **Kebutuhan user:** saat cetak invoice (individual & bulk) muncul pilihan atur tanggal. Keputusan user: (1a) pop-up date-picker tiap cetak; (2b) tanggal IKUT mengubah data akuntansi (jurnal AR di-re-date); (3a) kedua jalur pakai server-side PDF; (4a) kosong = pakai invoice_date yang ada.
 - **Backend** (`server.py`): refactor logika `mark-printed` → helper `_apply_invoice_print(inv, print_date, use_old_date, posted_by)`. First print → post jurnal AR dgn tanggal terpilih. **Re-print dgn tanggal beda → rebuild jurnal AR (`rebuild_invoice_ar_journal`) sehingga tanggal jurnal ikut berubah** (sebelumnya tidak). Endpoint baru `POST /api/invoices/bulk-print-pdf` {invoice_ids[], print_date} → terapkan tanggal ke tiap invoice + jurnal, lalu render SATU PDF gabungan.
