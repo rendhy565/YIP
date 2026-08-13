@@ -196,7 +196,7 @@ def _render_invoice_inner(data, override_date=None):
       <div style="font-size:12px;font-weight:bold;">{_esc(customer.get('name') or awb.get('company_name') or '')}</div>
       <div style="color:#333;">{_esc(customer.get('address') or '')}</div>
       {f'<div style="color:#333;">NPWP: {_esc(customer.get("npwp"))}</div>' if customer.get('npwp') else ''}
-      <div style="margin-top:6px;">Attn : <b>{_esc(awb.get('consignee') or customer.get('pic_name') or '')}</b></div>
+      <div style="margin-top:6px;">Attn : <b>{_esc(customer.get('attn') or awb.get('consignee') or customer.get('pic_name') or '')}</b></div>
     </td>
     <td width="45%" valign="top">
       <table width="100%" cellspacing="0" cellpadding="0">

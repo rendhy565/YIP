@@ -1,5 +1,16 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## "Attn" pada Invoice dari Nama Attn Customer (Jun 2026)
+- **Kebutuhan:** baris "Attn" di invoice cetak diambil dari field "Nama Attn" di Master Customer.
+- **Backend:** `CustomerIn` += `attn` (persist via model_dump di create/update). `invoice_docs.py` baris Attn: `customer.attn or awb.consignee or ''` (fallback ke consignee bila kosong).
+- **Frontend** (`Customers.js`): input "Nama Attn" (`customer-attn-input`) di form tambah/edit, disertakan di payload & saat edit.
+- **Verifikasi:** unit PDF (attn dipakai + fallback consignee), API create/persist attn (customer sementara lalu dihapus), UI form via screenshot. Testing agent TIDAK dipakai.
+
+## Fix Header Responsif (PageHeader) (Jun 2026)
+- **Bug:** di layar sempit, banyak tombol aksi menggencet judul jadi teks vertikal 1 huruf/baris (mis. Invoice Tercetak).
+- **Fix:** `components/ui.js` PageHeader → tambah `md:flex-wrap` di container + `whitespace-nowrap` pada judul; blok tombol turun rapi di bawah judul saat sempit. Berlaku semua halaman. Diuji @900px & @1150px via screenshot.
+
+
 ## Popup Detail AWB & Invoice + Template/Ringkasan Import (Jun 2026)
 - **Template Excel:** endpoint `GET /api/import/qty-tariff/template` (header: AWB, Qty, Harga /KG + 2 baris contoh). Tombol "Unduh Template Excel" di modal import.
 - **Ringkasan setelah Apply:** modal import kini menampilkan panel hasil (`qty-tariff-result`): jumlah diupdate/qty/tarif + daftar AWB tidak ditemukan (dengan tombol Salin) + tombol Selesai. Tidak langsung tutup.

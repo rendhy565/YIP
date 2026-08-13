@@ -448,6 +448,7 @@ class CustomerIn(BaseModel):
     address: Optional[str] = None
     npwp: Optional[str] = None
     tracking_code: Optional[str] = None  # short human-friendly public tracking code (unique, editable)
+    attn: Optional[str] = None  # Nama Attn — dipakai di baris "Attn" pada invoice cetak
     default_ppn_percentage: Optional[float] = None  # PPN default utk order customer ini (auto-isi saat input)
 
 class ContractIn(BaseModel):

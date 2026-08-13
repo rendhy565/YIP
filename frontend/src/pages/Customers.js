@@ -5,7 +5,7 @@ import { errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Pencil, X, Copy, Ticket } from "lucide-react";
 
-const empty = { name: "", company_details: "", address: "", npwp: "", tracking_code: "", default_ppn_percentage: "" };
+const empty = { name: "", company_details: "", address: "", npwp: "", tracking_code: "", attn: "", default_ppn_percentage: "" };
 
 export default function Customers() {
   const [rows, setRows] = useState([]);
@@ -97,7 +97,7 @@ export default function Customers() {
                 <Td className="font-mono text-xs">{r.npwp || "-"}</Td>
                 <Td className="max-w-[240px] truncate" title={r.address}>{r.address || "-"}</Td>
                 <Td className="text-right">
-                  <button onClick={() => { setForm({ name: r.name, company_details: r.company_details || "", address: r.address || "", npwp: r.npwp || "", tracking_code: r.tracking_code || "", default_ppn_percentage: r.default_ppn_percentage ?? "" }); setEditId(r.id); setOpen(true); }}
+                  <button onClick={() => { setForm({ name: r.name, company_details: r.company_details || "", address: r.address || "", npwp: r.npwp || "", tracking_code: r.tracking_code || "", attn: r.attn || "", default_ppn_percentage: r.default_ppn_percentage ?? "" }); setEditId(r.id); setOpen(true); }}
                     className="p-1.5 rounded hover:bg-slate-100 text-slate-600">
                     <Pencil size={14} />
                   </button>
@@ -157,6 +157,11 @@ export default function Customers() {
                     {applyingPpn ? "Menerapkan..." : "Terapkan Default PPN ke Semua AWB Customer Ini"}
                   </Button>
                 )}
+              </div>
+              <div>
+                <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Nama Attn</label>
+                <Input data-testid="customer-attn-input" value={form.attn} onChange={(e) => setForm({ ...form, attn: e.target.value })} placeholder="Nama yang muncul di baris 'Attn' pada invoice" />
+                <p className="text-[11px] text-slate-500 mt-1">Dipakai di baris <b>Attn</b> pada invoice cetak. Jika kosong, memakai nama consignee AWB.</p>
               </div>
               <div>
                 <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Alamat</label>
