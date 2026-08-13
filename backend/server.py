@@ -3261,6 +3261,18 @@ async def build_invoice_full(inv):
         },
     }
 
+@app.get("/api/invoices/{iid}/pdf")
+async def invoice_pdf(iid: str, token: Optional[str] = None, user: dict = Depends(get_current_user)):
+    import invoice_docs
+    inv = await db.invoices.find_one({"_id": _oid(iid)})
+    if not inv:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    full = await build_invoice_full(inv)
+    pdf = invoice_docs.render_invoice_pdf(full)
+    safe = re.sub(r'[\\/:*?"<>|]+', "_", inv.get("invoice_number") or iid)
+    return StreamingResponse(io.BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'inline; filename="{safe}.pdf"'})
+
 class InvoicePrintIn(BaseModel):
     use_old_date: Optional[bool] = False  # if True (and previously printed) → reuse first_printed_at
     print_date: Optional[str] = None  # YYYY-MM-DD override

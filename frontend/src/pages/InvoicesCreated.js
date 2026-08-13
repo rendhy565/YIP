@@ -23,6 +23,7 @@ export default function InvoicesCreated() {
   const [customerId, setCustomerId] = useState("");
   const [company, setCompany] = useState("");
   const [filterMode, setFilterMode] = useState("OR"); // "OR" | "AND"
+  const [monthFilter, setMonthFilter] = useState("");
   const [selected, setSelected] = useState(new Set());
   // Bulk download (ZIP of individual PDFs)
   const [showBulkDl, setShowBulkDl] = useState(false);
@@ -121,17 +122,26 @@ export default function InvoicesCreated() {
   // OR  : row passes if it matches ANY active filter (default).
   // AND : row passes only if it matches ALL active filters.
   // "Active" = filter has a non-empty value. When no filter active, show all.
+  const invMonth = (i) => (i.invoice_date || i.first_printed_at || i.created_at || "").slice(0, 7);
+  const monthOptions = useMemo(() => {
+    const set = new Set();
+    for (const i of invoices) { const m = invMonth(i); if (m) set.add(m); }
+    const ID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+    return Array.from(set).sort().reverse().map((m) => ({ value: m, label: `${ID[parseInt(m.slice(5, 7), 10) - 1]} ${m.slice(0, 4)}` }));
+  }, [invoices]);
+
   const filtered = useMemo(() => {
     const qStr = q.trim().toLowerCase();
     const activeFilters = [];
     if (qStr) activeFilters.push((i) => `${i.invoice_number || ""} ${i.awb_number || ""} ${i.customer_name || ""} ${i.company_name || ""}`.toLowerCase().includes(qStr));
     if (customerId) activeFilters.push((i) => i.customer_id === customerId);
     if (company) activeFilters.push((i) => i.company_name === company);
+    if (monthFilter) activeFilters.push((i) => invMonth(i) === monthFilter);
     if (activeFilters.length === 0) return invoices;
     return invoices.filter((i) => filterMode === "AND" ? activeFilters.every((fn) => fn(i)) : activeFilters.some((fn) => fn(i)));
-  }, [invoices, q, customerId, company, filterMode]);
+  }, [invoices, q, customerId, company, monthFilter, filterMode]);
 
-  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${company}|${filterMode}` });
+  const pag = usePagination(filtered, { resetKey: `${q}|${customerId}|${company}|${monthFilter}|${filterMode}` });
 
   const toggle = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
   const toggleAll = () => {
@@ -302,9 +312,9 @@ export default function InvoicesCreated() {
           storageKey="invoices"
           mode={filterMode}
           setMode={setFilterMode}
-          currentFilters={{ q, customerId, company }}
-          onLoadPreset={(f) => { setQ(f.q || ""); setCustomerId(f.customerId || ""); setCompany(f.company || ""); }}
-          activeCount={[q.trim(), customerId, company].filter(Boolean).length}
+          currentFilters={{ q, customerId, company, monthFilter }}
+          onLoadPreset={(f) => { setQ(f.q || ""); setCustomerId(f.customerId || ""); setCompany(f.company || ""); setMonthFilter(f.monthFilter || ""); }}
+          activeCount={[q.trim(), customerId, company, monthFilter].filter(Boolean).length}
         />
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[260px]">
@@ -326,6 +336,13 @@ export default function InvoicesCreated() {
             <Select data-testid="invoice-company-filter" value={company} onChange={(e) => setCompany(e.target.value)}>
               <option value="">Semua Company</option>
               {COMPANY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </Select>
+          </div>
+          <div className="min-w-[200px]">
+            <Label>Filter Bulan (Tgl Invoice)</Label>
+            <Select data-testid="invoice-month-filter" value={monthFilter} onChange={(e) => setMonthFilter(e.target.value)}>
+              <option value="">Semua Bulan</option>
+              {monthOptions.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </Select>
           </div>
           <div className="ml-auto text-xs text-slate-500">

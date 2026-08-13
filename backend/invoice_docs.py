@@ -88,7 +88,7 @@ def render_invoice_html(data):
     logo = company.get("logo_b64") or ""
     if logo and not logo.startswith("data:"):
         logo = "data:image/png;base64," + logo
-    logo_html = f'<img src="{logo}" style="height:70px;" />' if logo else ""
+    logo_html = f'<img src="{logo}" style="height:95px;" />' if logo else ""
 
     kop_lines = []
     if company.get("kop_address"):
@@ -184,11 +184,12 @@ table {{ border-collapse: collapse; }}
 <!-- PAGE 1: COVER -->
 <div>
   <table width="100%"><tr>
-    <td width="120" valign="top">{logo_html}</td>
-    <td align="center" valign="top">
-      <div style="font-size:15px;font-weight:bold;color:#1e3a8a;text-transform:uppercase;">{_esc(company.get('name') or 'PT. Abirama Mitra')}</div>
-      <div style="font-size:9px;color:#333;margin-top:2px;">{kop_html}</div>
+    <td width="110" valign="middle">{logo_html}</td>
+    <td align="center" valign="middle">
+      <div style="font-size:21px;font-weight:bold;color:#1e3a8a;">{_esc((company.get('name') or 'PT. Abirama Mitra').upper())}</div>
+      <div style="font-size:9px;color:#333;margin-top:3px;">{kop_html}</div>
     </td>
+    <td width="110">&nbsp;</td>
   </tr></table>
 
   <div class="band" style="margin-top:10px;margin-bottom:14px;">INVOICE</div>
@@ -240,14 +241,16 @@ table {{ border-collapse: collapse; }}
         <div style="text-align:left;margin-top:8px;">A/N : {_esc(company.get('bank_holder'))}<br/>A/C : {_esc(company.get('bank_account') or '________________________')}</div>
       </td></tr></table>
     </td>
-    <td width="50%" valign="top" align="center">
-      <div style="text-align:left;">Jakarta, {_id_date(inv_dt)}</div>
-      <div style="height:70px;"></div>
-      <div style="font-weight:bold;">( {_esc(company.get('signer') or '...........................')} )</div>
-      <div style="text-align:left;font-size:8px;color:#555;margin-top:10px;">
-        <b>{_esc(company.get('name'))}</b><br/>{_esc(company.get('address') or '')}
-        {f"<br/>NPWP: {_esc(company.get('npwp'))}" if company.get('npwp') else ''}
-      </div>
+    <td width="50%" valign="top">
+      <table width="100%" style="border:1px solid #333;"><tr><td style="padding:8px;" valign="top" height="150">
+        <div style="text-align:left;">Jakarta, {_id_date(inv_dt)}</div>
+        <div style="height:78px;"></div>
+        <div style="text-align:center;font-weight:bold;">( {_esc(company.get('signer') or '...........................')} )</div>
+        <div style="text-align:left;font-size:8px;color:#555;margin-top:10px;">
+          <b>{_esc(company.get('name'))}</b><br/>{_esc(company.get('address') or '')}
+          {f"<br/>NPWP: {_esc(company.get('npwp'))}" if company.get('npwp') else ''}
+        </div>
+      </td></tr></table>
     </td>
   </tr></table>
 </div>

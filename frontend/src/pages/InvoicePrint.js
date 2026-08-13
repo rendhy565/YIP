@@ -311,12 +311,20 @@ export default function InvoicePrint() {
 
   if (!data) return <div className="p-10 text-center text-slate-500">Memuat...</div>;
 
+  const openServerPdf = async () => {
+    try {
+      const r = await api.get(`/invoices/${id}/pdf`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data], { type: "application/pdf" }));
+      window.open(url, "_blank");
+    } catch (e) { window.print(); }
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 py-6 print:bg-white print:py-0">
       <InvoicePrintStyles />
       <div className="max-w-[210mm] mx-auto px-4 mb-4 flex items-center gap-2 no-print">
         <Button variant="secondary" onClick={() => window.close()}><ArrowLeft size={14}/> Tutup</Button>
-        <Button data-testid="print-now-btn" onClick={() => window.print()} className="ml-auto"><Printer size={14}/> Cetak Invoice + Lampiran</Button>
+        <Button data-testid="print-now-btn" onClick={openServerPdf} className="ml-auto"><Printer size={14}/> Cetak Invoice + Lampiran (PDF)</Button>
       </div>
       <InvoicePrintBody data={data} />
     </div>
