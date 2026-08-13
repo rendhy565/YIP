@@ -143,7 +143,7 @@ def _render_invoice_inner(data, override_date=None):
         srow("TOTAL", _fmt_idr(grand_total), bold=True, grey=True)
     )
 
-    po_html = (f'<tr><td><b>No. PO</b></td><td>:</td><td>{_esc(invoice.get("po_number"))}</td></tr>'
+    po_html = (f'<tr><td width="78" nowrap><b>No. PO :</b></td><td>{_esc(invoice.get("po_number"))}</td></tr>'
                if invoice.get("po_number") else "")
 
     # Lampiran rows
@@ -198,11 +198,11 @@ def _render_invoice_inner(data, override_date=None):
       <div style="margin-top:6px;">Attn : <b>{_esc(awb.get('consignee') or customer.get('pic_name') or '')}</b></div>
     </td>
     <td width="45%" valign="top">
-      <table>
-        <tr><td><b>Invoice No</b></td><td>:</td><td><b>{_esc(invoice.get('invoice_number'))}</b></td></tr>
+      <table cellspacing="0" cellpadding="0">
+        <tr><td width="78" nowrap><b>Invoice No :</b></td><td><b>{_esc(invoice.get('invoice_number'))}</b></td></tr>
         {po_html}
-        <tr><td><b>Date</b></td><td>:</td><td>{_id_date(inv_dt)}</td></tr>
-        <tr><td><b>Due Date</b></td><td>:</td><td>{_id_date(due_dt)}</td></tr>
+        <tr><td width="78" nowrap><b>Date :</b></td><td>{_id_date(inv_dt)}</td></tr>
+        <tr><td width="78" nowrap><b>Due Date :</b></td><td>{_id_date(due_dt)}</td></tr>
       </table>
     </td>
   </tr></table>
@@ -236,16 +236,15 @@ def _render_invoice_inner(data, override_date=None):
         <div style="text-align:left;margin-top:8px;">A/N : {_esc(company.get('bank_holder'))}<br/>A/C : {_esc(company.get('bank_account') or '________________________')}</div>
       </td></tr></table>
     </td>
-    <td width="50%" valign="top">
-      <table width="100%" style="border:1px solid #333;"><tr><td style="padding:8px;" valign="top" height="150">
-        <div style="text-align:left;">Jakarta, {_id_date(inv_dt)}</div>
-        <div style="height:78px;"></div>
-        <div style="text-align:center;font-weight:bold;">( {_esc(company.get('signer') or '...........................')} )</div>
-        <div style="text-align:left;font-size:8px;color:#555;margin-top:10px;">
-          <b>{_esc(company.get('name'))}</b><br/>{_esc(company.get('address') or '')}
-          {f"<br/>NPWP: {_esc(company.get('npwp'))}" if company.get('npwp') else ''}
-        </div>
-      </td></tr></table>
+    <td width="50%" valign="top" style="padding-left:14px;">
+      <div style="text-align:left;">Jakarta, {_id_date(inv_dt)}</div>
+      <br/><br/><br/><br/>
+      <div style="text-align:center;font-weight:bold;">( {_esc(company.get('signer') or '...........................')} )</div>
+      <br/><br/>
+      <div style="text-align:left;font-size:8px;color:#555;">
+        <b>{_esc(company.get('name'))}</b><br/>{_esc(company.get('address') or '')}
+        {f"<br/>NPWP: {_esc(company.get('npwp'))}" if company.get('npwp') else ''}
+      </div>
     </td>
   </tr></table>
 </div>

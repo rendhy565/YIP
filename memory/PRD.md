@@ -1,5 +1,11 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Perbaikan Layout PDF Invoice — Meta Block & Signer (Jun 2026)
+- **Meta block (Invoice No/No. PO/Date/Due Date)** di `invoice_docs.py`: label + `:` digabung jadi satu sel lebar tetap (`width=78`, nowrap) → colon menempel 1 spasi setelah label, nilai langsung setelah colon (tidak lagi terdorong ke kanan). PO row ikut format sama.
+- **Blok tanda tangan:** hilangkan border kotak. Spasi tanda tangan pakai `<br/>` (bukan div height yang di-collapse xhtml2pdf). Diukur presisi via PyMuPDF: NPWP kini sejajar dengan baris `A/C :` di bank box (NPWP y≈652 vs A/C y≈642). Tetap 2 halaman.
+- **Verifikasi:** render sampel 8-AWB → cek koordinat teks (A/C vs NPWP) + inspeksi gambar halaman 1. Testing agent TIDAK dipakai.
+
+
 ## Bulk Download ZIP + Atur Tanggal (Jun 2026)
 - **Kebutuhan:** modal Bulk Download ZIP juga bisa pilih tanggal; setelah download, tanggal cetak (invoice_date + jurnal AR) tiap invoice ikut di-update. Sisanya tidak diubah.
 - **Backend** (`server.py`): `BulkInvoiceDownloadIn` += `print_date`. Di `bulk_invoice_download`, bila `print_date` diisi → `_apply_invoice_print(inv, print_date, False, user_id)` sebelum render tiap invoice (set invoice_date + post/re-date jurnal AR).
