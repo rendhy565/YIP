@@ -4384,96 +4384,142 @@ async def receivable_pipeline(
     month: Optional[str] = None,
     user: dict = Depends(require_role("finance", "operation")),
 ):
-    """Laporan pipeline penerimaan kas:
-    - NY-PO (Not Yet PO): order sudah selesai/Reconciled tapi BELUM di-invoice
-      (menunggu Nomor PO dari customer). Bahan eskalasi ke customer.
-    - PYMHD: order sudah di-invoice tapi BELUM dibayar (piutang berjalan).
-    Filter bulan opsional (berdasarkan tanggal reconcile utk NY-PO, tanggal invoice utk PYMHD).
+    """Laporan pipeline penerimaan kas — 3 kategori:
+    - OPEN: pekerjaan masih berjalan (status Open). Aging dari TANGGAL ORDER dibuat.
+    - NY-PO (Belum Invoice): Reconciled belum jadi invoice DITAMBAH invoice yang
+      sudah dibuat tapi BELUM diprint (selama belum print → dianggap belum invoice).
+      Aging dari TANGGAL RECONCILE.
+    - INVOICED (Belum Dibayar): invoice yang SUDAH diprint tapi belum Paid.
+      Aging dari TANGGAL PRINT (first_printed_at).
+    Filter bulan opsional: tiap kategori difilter oleh tanggal acuannya masing-masing.
     """
     now = datetime.now(timezone.utc)
+    now_naive = now.replace(tzinfo=None)
+
+    def _naive(dt):
+        if dt is None:
+            return None
+        try:
+            return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) is not None else dt
+        except Exception:
+            return None
 
     def _in_month(dt):
-        if not month or not dt:
+        if not month:
             return True
+        if not dt:
+            return False
         try:
             return dt.strftime("%Y-%m") == month
         except Exception:
             return False
 
     def _age_days(dt):
+        dt = _naive(dt)
         if not dt:
             return None
         try:
-            return max(0, (now - dt).days)
+            return max(0, (now_naive - dt).days)
         except Exception:
             return None
 
-    # Kumpulkan customer names
-    cust_ids = set()
+    open_orders = await db.awb_orders.find({"status": "Open"}).sort("created_at", 1).to_list(20000)
+    recon_orders = await db.awb_orders.find({"status": "Reconciled"}).sort("reconciled_at", 1).to_list(20000)
+    invoiced_orders = await db.awb_orders.find({"status": "Invoiced"}).sort("invoiced_at", 1).to_list(20000)
 
-    # NY-PO: status Reconciled
-    ny_orders = await db.awb_orders.find({"status": "Reconciled"}).sort("reconciled_at", 1).to_list(20000)
-    # PYMHD: status Invoiced
-    pymhd_orders = await db.awb_orders.find({"status": "Invoiced"}).sort("invoiced_at", 1).to_list(20000)
-    for o in ny_orders + pymhd_orders:
-        if o.get("customer_id"):
-            cust_ids.add(o["customer_id"])
-    cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": list(cust_ids)}}).to_list(2000)}
-    # Invoice numbers lookup
-    inv_ids = [o["_id"] for o in pymhd_orders]
-    inv_map = {}
-    for inv in await db.invoices.find({"awb_id": {"$in": inv_ids}}).to_list(20000):
-        inv_map[inv["awb_id"]] = inv
+    # Customer name map
+    cust_ids = {o["customer_id"] for o in (open_orders + recon_orders + invoiced_orders) if o.get("customer_id")}
+    cmap = {c["_id"]: c for c in await db.customers.find({"_id": {"$in": list(cust_ids)}}).to_list(5000)}
 
-    ny_rows = []
-    ny_total = 0.0
-    for o in ny_orders:
-        recd = o.get("reconciled_at")
-        if not _in_month(recd):
-            continue
+    # Invoice lookup untuk order Invoiced (dukung multi-AWB via awb_ids)
+    inv_order_ids = [o["_id"] for o in invoiced_orders]
+    inv_by_order = {}
+    if inv_order_ids:
+        for inv in await db.invoices.find({"$or": [
+            {"awb_id": {"$in": inv_order_ids}},
+            {"awb_ids": {"$in": inv_order_ids}},
+        ]}).to_list(40000):
+            ids = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+            for aid in ids:
+                inv_by_order[aid] = inv
+
+    def _cname(o):
         c = cmap.get(o.get("customer_id"))
-        val = float(o.get("grand_total") or o.get("total_tariff") or 0)
-        ny_total += val
+        return c["name"] if c else None
+
+    def _val(o):
+        return float(o.get("grand_total") or o.get("total_tariff") or 0)
+
+    # ── OPEN ───────────────────────────────────────────────
+    open_rows, open_total = [], 0.0
+    for o in open_orders:
+        ref = o.get("created_at")
+        if not _in_month(ref):
+            continue
+        v = _val(o); open_total += v
+        open_rows.append({
+            "awb_id": str(o["_id"]), "awb_number": o.get("awb_number"),
+            "customer_name": _cname(o), "origin": o.get("origin"), "destination": o.get("destination"),
+            "ref_date": ref.isoformat() if ref else None, "value": v, "age_days": _age_days(ref),
+        })
+
+    # ── NY-PO (Reconciled + Invoiced-belum-print) ──────────
+    ny_rows, ny_total = [], 0.0
+    for o in recon_orders:
+        ref = o.get("reconciled_at")
+        if not _in_month(ref):
+            continue
+        v = _val(o); ny_total += v
         ny_rows.append({
-            "awb_id": str(o["_id"]),
-            "awb_number": o.get("awb_number"),
-            "customer_name": c["name"] if c else None,
-            "origin": o.get("origin"),
-            "destination": o.get("destination"),
-            "reconciled_at": recd.isoformat() if recd else None,
-            "value": val,
-            "age_days": _age_days(recd),
+            "awb_id": str(o["_id"]), "awb_number": o.get("awb_number"),
+            "customer_name": _cname(o), "origin": o.get("origin"), "destination": o.get("destination"),
+            "ref_date": ref.isoformat() if ref else None, "value": v, "age_days": _age_days(ref),
+            "sub": "Belum Invoice",
         })
 
-    pymhd_rows = []
-    pymhd_total = 0.0
-    for o in pymhd_orders:
-        invd = o.get("invoiced_at")
-        if not _in_month(invd):
-            continue
-        c = cmap.get(o.get("customer_id"))
-        inv = inv_map.get(o["_id"])
-        val = float(o.get("grand_total") or o.get("total_tariff") or 0)
-        pymhd_total += val
-        pymhd_rows.append({
-            "awb_id": str(o["_id"]),
-            "awb_number": o.get("awb_number"),
-            "customer_name": c["name"] if c else None,
-            "invoice_number": (inv or {}).get("invoice_number") or o.get("invoice_number"),
-            "invoiced_at": invd.isoformat() if invd else None,
-            "value": val,
-            "age_days": _age_days(invd),
-        })
+    # ── INVOICED-printed vs Invoiced-belum-print ───────────
+    inv_rows, inv_total = [], 0.0
+    for o in invoiced_orders:
+        inv = inv_by_order.get(o["_id"])
+        printed_at = (inv or {}).get("first_printed_at")
+        if printed_at:
+            # Sudah diprint → kategori INVOICED (aging dari tgl print)
+            if not _in_month(printed_at):
+                continue
+            v = _val(o); inv_total += v
+            inv_rows.append({
+                "awb_id": str(o["_id"]), "awb_number": o.get("awb_number"),
+                "customer_name": _cname(o),
+                "invoice_number": (inv or {}).get("invoice_number") or o.get("invoice_number"),
+                "ref_date": printed_at.isoformat() if printed_at else None,
+                "value": v, "age_days": _age_days(printed_at),
+            })
+        else:
+            # Invoice belum diprint → masuk NY-PO (aging dari tgl reconcile)
+            ref = o.get("reconciled_at") or o.get("invoiced_at")
+            if not _in_month(ref):
+                continue
+            v = _val(o); ny_total += v
+            ny_rows.append({
+                "awb_id": str(o["_id"]), "awb_number": o.get("awb_number"),
+                "customer_name": _cname(o), "origin": o.get("origin"), "destination": o.get("destination"),
+                "ref_date": ref.isoformat() if ref else None, "value": v, "age_days": _age_days(ref),
+                "sub": "Invoice belum diprint",
+            })
+
+    ny_rows.sort(key=lambda r: (r["age_days"] is None, -(r["age_days"] or 0)))
+    inv_rows.sort(key=lambda r: (r["age_days"] is None, -(r["age_days"] or 0)))
+    open_rows.sort(key=lambda r: (r["age_days"] is None, -(r["age_days"] or 0)))
 
     return {
+        "open": open_rows,
         "ny_po": ny_rows,
-        "pymhd": pymhd_rows,
+        "invoiced": inv_rows,
         "summary": {
-            "ny_po_count": len(ny_rows),
-            "ny_po_total": round(ny_total, 2),
-            "pymhd_count": len(pymhd_rows),
-            "pymhd_total": round(pymhd_total, 2),
-            "grand_total": round(ny_total + pymhd_total, 2),
+            "open_count": len(open_rows), "open_total": round(open_total, 2),
+            "ny_po_count": len(ny_rows), "ny_po_total": round(ny_total, 2),
+            "invoiced_count": len(inv_rows), "invoiced_total": round(inv_total, 2),
+            "grand_total": round(open_total + ny_total + inv_total, 2),
         },
         "month": month,
     }
