@@ -12044,6 +12044,126 @@ async def apply_customer_default_ppn(cid: str, dry_run: bool = False, user: dict
         pass
     return {"default_ppn": dflt, "updated_count": len(done), "updated": done, "skipped_paid": skipped_paid, "errors": errors}
 
+# ---------------------------------------------------------------------------
+# Admin: Gabung Customer Duplikat
+# ---------------------------------------------------------------------------
+def _cust_norm(s):
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+def _cust_richness(c):
+    return sum(1 for k in ("attn", "default_ppn_percentage", "address", "npwp", "company_details", "tracking_code") if c.get(k) not in (None, "", 0))
+
+async def _customer_ref_counts(cid):
+    return {
+        "awb": await db.awb_orders.count_documents({"customer_id": cid}),
+        "contract": await db.contracts.count_documents({"customer_id": cid}),
+        "sender": await db.sender_memory.count_documents({"customer_id": cid}),
+    }
+
+@app.get("/api/admin/customers/duplicates")
+async def list_customer_duplicates(user: dict = Depends(require_role("administrator"))):
+    """Deteksi customer kembar (nama sama setelah abaikan huruf besar-kecil/spasi/tanda baca).
+    Sarankan record UTAMA = paling lengkap (punya attn/default_ppn/dll), tie → paling banyak AWB."""
+    custs = await db.customers.find().to_list(20000)
+    groups: dict = {}
+    for c in custs:
+        k = _cust_norm(c.get("name"))
+        if not k:
+            continue
+        groups.setdefault(k, []).append(c)
+    out = []
+    for k, members in groups.items():
+        if len(members) < 2:
+            continue
+        enriched = []
+        for c in members:
+            refs = await _customer_ref_counts(c["_id"])
+            enriched.append({
+                "id": str(c["_id"]),
+                "name": c.get("name"),
+                "attn": c.get("attn"),
+                "default_ppn_percentage": c.get("default_ppn_percentage"),
+                "address": c.get("address"),
+                "npwp": c.get("npwp"),
+                "tracking_code": c.get("tracking_code"),
+                "richness": _cust_richness(c),
+                "awb_count": refs["awb"],
+                "contract_count": refs["contract"],
+                "sender_count": refs["sender"],
+            })
+        canonical = sorted(enriched, key=lambda e: (e["richness"], e["awb_count"]), reverse=True)[0]
+        out.append({
+            "norm_key": k,
+            "count": len(enriched),
+            "suggested_canonical_id": canonical["id"],
+            "members": sorted(enriched, key=lambda e: (e["richness"], e["awb_count"]), reverse=True),
+        })
+    out.sort(key=lambda g: g["count"], reverse=True)
+    return {"groups": out, "total_groups": len(out)}
+
+
+class CustomerMergeIn(BaseModel):
+    canonical_id: str
+    duplicate_ids: List[str]
+
+
+@app.post("/api/admin/customers/merge")
+async def merge_customers(data: CustomerMergeIn, user: dict = Depends(require_role("administrator"))):
+    """Gabungkan customer duplikat ke satu customer utama: pindahkan semua AWB/kontrak/sender
+    ke customer utama, lengkapi field kosong utama dari duplikat, lalu hapus duplikat.
+    Invoice ikut otomatis (link ke customer via AWB)."""
+    canonical = await db.customers.find_one({"_id": _oid(data.canonical_id)})
+    if not canonical:
+        raise HTTPException(404, "Customer utama tidak ditemukan")
+    dup_ids = [_oid(x) for x in data.duplicate_ids if x != data.canonical_id]
+    if not dup_ids:
+        raise HTTPException(400, "Tidak ada customer duplikat dipilih")
+    dups = await db.customers.find({"_id": {"$in": dup_ids}}).to_list(1000)
+    if not dups:
+        raise HTTPException(404, "Customer duplikat tidak ditemukan")
+
+    # Lengkapi field kosong pada customer utama dari duplikat
+    fill = {}
+    for fld in ("attn", "default_ppn_percentage", "address", "npwp", "company_details"):
+        if canonical.get(fld) in (None, "", 0):
+            for d in dups:
+                if d.get(fld) not in (None, "", 0):
+                    fill[fld] = d[fld]
+                    break
+    if fill:
+        await db.customers.update_one({"_id": canonical["_id"]}, {"$set": fill})
+
+    result = {
+        "canonical": canonical.get("name"),
+        "awb_moved": 0, "contract_moved": 0, "sender_moved": 0,
+        "sender_deleted_conflict": 0, "customers_deleted": 0,
+        "filled_fields": list(fill.keys()),
+    }
+    for d in dups:
+        r1 = await db.awb_orders.update_many({"customer_id": d["_id"]}, {"$set": {"customer_id": canonical["_id"]}})
+        result["awb_moved"] += r1.modified_count
+        r2 = await db.contracts.update_many({"customer_id": d["_id"]}, {"$set": {"customer_id": canonical["_id"]}})
+        result["contract_moved"] += r2.modified_count
+        # sender_memory punya unique index (customer_id,name) → tangani konflik
+        for sm in await db.sender_memory.find({"customer_id": d["_id"]}).to_list(20000):
+            exists = await db.sender_memory.find_one({"customer_id": canonical["_id"], "name": sm.get("name")})
+            if exists:
+                await db.sender_memory.delete_one({"_id": sm["_id"]})
+                result["sender_deleted_conflict"] += 1
+            else:
+                await db.sender_memory.update_one({"_id": sm["_id"]}, {"$set": {"customer_id": canonical["_id"]}})
+                result["sender_moved"] += 1
+        await db.customers.delete_one({"_id": d["_id"]})
+        result["customers_deleted"] += 1
+    try:
+        await log_activity(user, "merge", "customer", str(canonical["_id"]),
+                           f"Gabung {result['customers_deleted']} customer duplikat → {canonical.get('name')}", result)
+    except Exception:
+        pass
+    return result
+
+
+
 @app.get("/api/invoices/po-number-template")
 async def invoice_po_number_template(user: dict = Depends(get_current_user)):
     """Excel template untuk bulk import PO Number per Invoice."""
