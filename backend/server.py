@@ -8230,6 +8230,8 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                 existing_awb = await db.awb_orders.find_one({"awb_number": awb_no})
 
                 if existing_awb is None:
+                    _cust_ppn = await db.customers.find_one({"_id": customer_id}, {"default_ppn_percentage": 1}) if customer_id else None
+                    _default_ppn = float((_cust_ppn or {}).get("default_ppn_percentage") or 0)
                     awb_doc = {
                         "awb_number": awb_no,
                         "customer_id": customer_id,
@@ -8253,7 +8255,7 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
                         "total_tariff": 0.0,
                         "tax_amount": 0.0,
                         "grand_total": 0.0,
-                        "tax_percentage": 11.0,
+                        "tax_percentage": _default_ppn,
                         "item_description": item_desc,
                         "goods_content": item_desc,
                         "origin": "JKT",

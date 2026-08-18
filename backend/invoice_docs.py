@@ -79,8 +79,10 @@ def _render_invoice_inner(data, override_date=None):
 
     sub_total = sum(float(a.get("total_tariff") or 0) for a in awbs)
     ppn_amt = sum(float(a.get("tax_amount") or 0) for a in awbs)
-    ppn_pct = float(awb.get("tax_percentage") or 0)
-    pct_label = (f"{ppn_pct:.1f}".rstrip("0").rstrip(".")) if ppn_pct else "0"
+    # PPN % diturunkan dari nominal pajak sebenarnya (bukan tax_percentage yg mungkin ter-hardcode).
+    # Pajak Rp 0 -> 0%; ada pajak -> persen riil sesuai nominal.
+    ppn_pct = round(ppn_amt / sub_total * 100, 2) if (sub_total > 0 and ppn_amt > 0) else 0
+    pct_label = (f"{ppn_pct:.2f}".rstrip("0").rstrip(".")) if ppn_pct else "0"
     sub_after_tax = sub_total + ppn_amt
     asuransi = sum(float(a.get("received_asuransi_amount") or 0) for a in awbs)
     polis = sum(float(a.get("received_polis_amount") or 0) for a in awbs)
