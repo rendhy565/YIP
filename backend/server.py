@@ -8066,10 +8066,27 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
             candidate_sheets = [s for s in wb.sheetnames if s.upper() not in {x.upper() for x in SKIP_SHEETS}]
 
     # Aggregate caches to avoid duplicate inserts within the same run
-    customer_cache: dict = {}   # name -> ObjectId
+    customer_cache: dict = {}   # norm(name) -> ObjectId
     vendor_cache: dict = {}      # name -> ObjectId
     awb_cache: dict = {}          # awb_number -> ObjectId
-    
+
+    def _cnorm(s):
+        return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+    # Preload customer existing → peta ternormalisasi. Bila ada nama kembar,
+    # pilih record TERLENGKAP (punya attn/default_ppn/alamat/npwp) supaya AWB
+    # nyambung ke customer yang sudah di-setup Attn-nya.
+    def _crich(c):
+        return sum(1 for k in ("attn", "default_ppn_percentage", "address", "npwp") if c.get(k) not in (None, "", 0))
+    existing_customers_by_norm: dict = {}
+    for _c in await db.customers.find().to_list(10000):
+        _k = _cnorm(_c.get("name"))
+        if not _k:
+            continue
+        _cur = existing_customers_by_norm.get(_k)
+        if _cur is None or _crich(_c) > _crich(_cur):
+            existing_customers_by_norm[_k] = _c
+
     summary = {
         "sheets_processed": [],
         "customers_created": 0,
@@ -8088,14 +8105,20 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
     async def get_or_create_customer(name: str, short: Optional[str], category: Optional[str], region: Optional[str]) -> Optional[ObjectId]:
         if not name:
             return None
-        if name in customer_cache:
-            return customer_cache[name]
-        existing = await db.customers.find_one({"name": name})
+        name = str(name).strip()
+        ckey = _cnorm(name)
+        if not ckey:
+            return None
+        if ckey in customer_cache:
+            return customer_cache[ckey]
+        # Cocokkan dengan normalisasi (abaikan tanda baca/spasi/huruf besar-kecil) →
+        # hindari buat customer duplikat kosong yang bikin Attn/Default PPN hilang saat import.
+        existing = existing_customers_by_norm.get(ckey)
         if existing:
-            customer_cache[name] = existing["_id"]
+            customer_cache[ckey] = existing["_id"]
             return existing["_id"]
         if dry_run:
-            customer_cache[name] = None
+            customer_cache[ckey] = None
             summary["customers_created"] += 1
             return None
         doc = {
@@ -8109,7 +8132,8 @@ async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_name
             "created_at": datetime.now(timezone.utc),
         }
         r = await db.customers.insert_one(doc)
-        customer_cache[name] = r.inserted_id
+        existing_customers_by_norm[ckey] = {**doc, "_id": r.inserted_id}
+        customer_cache[ckey] = r.inserted_id
         summary["customers_created"] += 1
         return r.inserted_id
 
