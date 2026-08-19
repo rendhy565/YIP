@@ -409,9 +409,6 @@ export default function Attendance() {
           <Button variant="secondary" onClick={downloadTemplate} data-testid="att-download-template">
             <Download size={14}/> Template
           </Button>
-          <Button variant="secondary" onClick={() => setShowImport(true)} data-testid="att-import-btn">
-            <Upload size={14}/> Import
-          </Button>
           <Button variant="secondary" onClick={autoFillAlfa} disabled={autoFilling} data-testid="att-autofill-btn" title="Isi Alfa otomatis untuk hari kerja yang belum ada absen">
             <UserPlus size={14}/> {autoFilling ? "Mengisi..." : "Auto-Isi Alfa"}
           </Button>

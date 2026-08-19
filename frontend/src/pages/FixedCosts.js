@@ -339,11 +339,6 @@ export default function FixedCosts() {
         subtitle="Biaya operasional bulanan. Kategori 'Operation' masuk COGS (mempengaruhi Gross Margin); kategori lain masuk Expense (di bawah Gross Margin)."
         action={
           <div className="flex flex-wrap gap-2">
-            {canImportBkk && (
-              <Button data-testid="import-bkk-btn" variant="secondary" onClick={openImportDialog}>
-                <Upload size={16}/> Import BKK Excel
-              </Button>
-            )}
             {canCreate && (
               <Button data-testid="copy-fixed-cost-btn" variant="secondary" onClick={openCopyDialog}>
                 <Copy size={16}/> Salin ke Bulan Berikutnya

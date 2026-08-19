@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Upload, FileSpreadsheet, CheckCircle2, AlertCircle, Trash2, PlayCircle, Eye, FileWarning } from "lucide-react";
 import { useAuth } from "../lib/auth";
 
-export default function ImportExcel() {
+export default function ImportExcel({ embedded = false }) {
   const { user } = useAuth();
   const [file, setFile] = useState(null);
   const [sheets, setSheets] = useState(null);
@@ -164,7 +164,7 @@ export default function ImportExcel() {
 
   return (
     <div data-testid="import-page">
-      <PageHeader title="Import Data Excel" subtitle="Import REPORT PENJUALAN dari file XLSX. Master Customer & Vendor otomatis dibuat. Jurnal akunting otomatis terposting." />
+      {!embedded && <PageHeader title="Import Data Excel" subtitle="Import REPORT PENJUALAN dari file XLSX. Master Customer & Vendor otomatis dibuat. Jurnal akunting otomatis terposting." />}
 
       {/* Loading overlay — spinner + progress text when import is busy */}
       {busy && (
@@ -301,6 +301,9 @@ export default function ImportExcel() {
 
       {/* IMPORT WIZARD */}
       <Card>
+        <div className="mx-4 mt-4 rounded-lg border-2 border-rose-300 bg-rose-50 px-4 py-3 text-sm text-rose-900" data-testid="import-wizard-warning">
+          <b>⚠ PERHATIAN — Importer ini mode TAMBAH (APPEND).</b> Khusus untuk <b>seed database awal dari nol</b> (buat AWB + revenue + cost + auto-buat Customer/Vendor sekaligus dari REPORT PENJUALAN). <b>JANGAN upload file yang sama dua kali</b> — revenue & cost akan DOBEL karena tidak ada pencocokan/idempotensi. Untuk update harian gunakan <b>"AWB & Revenue (Report)"</b> (aman, insert+update) atau <b>"Rekonsiliasi Massal"</b>.
+        </div>
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
           <FileSpreadsheet size={16} className="text-blue-700"/>
           <h3 className="font-bold">Import Wizard</h3>

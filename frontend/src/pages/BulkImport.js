@@ -30,7 +30,7 @@ function Section({ title, items, render, tone = "slate" }) {
   );
 }
 
-export default function BulkImport() {
+export default function BulkImport({ embedded = false }) {
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);   // { report, items }
   const [result, setResult] = useState(null);
@@ -77,7 +77,7 @@ export default function BulkImport() {
 
   return (
     <div data-testid="bulk-import-page">
-      <PageHeader title="Import Massal AWB" subtitle="Cocokkan data dari Excel (No AWB, DPP, No Invoice, No PO) ke sistem. Dua tahap: pratinjau → konfirmasi → terapkan." />
+      {!embedded && <PageHeader title="Import Massal AWB" subtitle="Cocokkan data dari Excel (No AWB, DPP, No Invoice, No PO) ke sistem. Dua tahap: pratinjau → konfirmasi → terapkan." />}
 
       <Card className="p-4 mb-5">
         <div className="mb-3 flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-900">

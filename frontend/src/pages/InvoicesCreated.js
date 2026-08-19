@@ -342,13 +342,6 @@ export default function InvoicesCreated() {
         subtitle="Filter, print, export, dan import invoice yang sudah dibuat."
         action={
           <div className="flex gap-2 flex-wrap">
-            <Button data-testid="import-qty-tariff-btn" variant="secondary" onClick={() => { setShowQtyImport(true); setQtyFile(null); setQtyPreview(null); setQtyResult(null); }}><Upload size={16}/> Import Qty & Tarif/Kg</Button>
-            {canImportNumbers && (
-              <Button data-testid="import-invoice-no-btn" variant="secondary" onClick={() => { setShowInvNoImport(true); setInvNoFile(null); setInvNoResult(null); }}><Upload size={16}/> Import Invoice No (Mark Status)</Button>
-            )}
-            {canSavePoNumber && (
-              <Button variant="secondary" onClick={() => setShowImport(true)}><Upload size={16}/> Import PO Number</Button>
-            )}
             <Link to="/invoices">
               <Button variant="secondary"><FileText size={16}/> Ke Pembuatan Invoice</Button>
             </Link>
@@ -404,11 +397,6 @@ export default function InvoicesCreated() {
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <h3 className="font-bold inline-flex items-center gap-2"><FileText size={16} className="text-purple-700"/> Daftar Invoice</h3>
           <div className="ml-auto flex gap-2 flex-wrap">
-            {canSavePoNumber && (
-              <Button data-testid="import-po-btn" variant="secondary" onClick={() => setShowImport(true)}>
-                <Upload size={14}/> Import PO Number
-              </Button>
-            )}
             {canExportAr && (
               <Button data-testid="export-report-ar-from-invoices-btn" variant="secondary" onClick={exportReportAr}>
                 <FileSpreadsheet size={14}/> Export REPORT AR (filter)

@@ -76,9 +76,8 @@ const NAV = [
   { type: "section", label: "Administrator", adminOnly: true },
   { to: "/activity-log", label: "Activity Log", icon: Activity, perm: "*", adminOnly: true },
   { to: "/admin/koreksi-tarif", label: "Koreksi Tarif AWB", icon: Coins, perm: "*", adminOnly: true },
-  { to: "/admin/import-massal", label: "Import Massal AWB", icon: Upload, perm: "*", adminOnly: true },
+  { to: "/admin/import-center", label: "Pusat Import", icon: Upload, perm: "*", adminOnly: true },
   { to: "/admin/gabung-customer", label: "Gabung Customer Duplikat", icon: GitMerge, perm: "*", adminOnly: true },
-  { to: "/import", label: "Import Excel", icon: Upload, perm: "*", adminOnly: true },
   { to: "/users", label: "User Management", icon: ShieldCheck, perm: "user_management" },
 ];
 

@@ -6813,7 +6813,7 @@ async def import_attendance(
     file: UploadFile = File(...),
     mode: str = "merge",       # "merge" (pertahankan data lama) | "overwrite" (timpa total)
     dry_run: bool = False,     # True = hanya cek konflik, tidak menulis
-    user: dict = Depends(require_feature("hr")),
+    user: dict = Depends(require_role("administrator")),
 ):
     """
     Import absensi dari Excel/CSV. Auto-detect format:
@@ -11542,7 +11542,7 @@ async def _report_insert_order(row, customer, user):
     return oid, created
 
 @app.post("/api/import/awb-detail/preview")
-async def import_awb_detail_preview(file: UploadFile = File(...), user: dict = Depends(require_role("operation", "finance", "administrator"))):
+async def import_awb_detail_preview(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
     content = await file.read()
     rows = _parse_report_detail(content)
     exact, norm = await _report_build_map()
@@ -11609,7 +11609,7 @@ async def import_awb_detail_preview(file: UploadFile = File(...), user: dict = D
 async def import_awb_detail_apply(
     file: UploadFile = File(...),
     insert_missing: bool = Form(True),
-    user: dict = Depends(require_role("finance", "administrator")),
+    user: dict = Depends(require_role("administrator")),
 ):
     content = await file.read()
     rows = _parse_report_detail(content)
@@ -12264,7 +12264,7 @@ async def _qty_tariff_match(rows):
 
 
 @app.post("/api/import/qty-tariff/preview")
-async def qty_tariff_preview(file: UploadFile = File(...), user: dict = Depends(require_role("operation", "finance", "administrator"))):
+async def qty_tariff_preview(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
     content = await file.read()
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
@@ -12288,7 +12288,7 @@ async def qty_tariff_preview(file: UploadFile = File(...), user: dict = Depends(
 
 
 @app.post("/api/import/qty-tariff/apply")
-async def qty_tariff_apply(file: UploadFile = File(...), user: dict = Depends(require_role("operation", "finance", "administrator"))):
+async def qty_tariff_apply(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
     """Isi HANYA qty_kg & tariff_per_kg pada AWB. total_tariff / tax / grand_total / jurnal TIDAK disentuh."""
     content = await file.read()
     try:
@@ -12433,7 +12433,7 @@ async def _cost_match(rows):
 
 
 @app.post("/api/import/cost/preview")
-async def cost_import_preview(file: UploadFile = File(...), user: dict = Depends(require_role("finance", "administrator"))):
+async def cost_import_preview(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
     content = await file.read()
     rows = _parse_cost_rows(content)
     if not rows:
@@ -12452,7 +12452,7 @@ async def cost_import_preview(file: UploadFile = File(...), user: dict = Depends
 
 
 @app.post("/api/import/cost/apply")
-async def cost_import_apply(file: UploadFile = File(...), user: dict = Depends(require_role("finance", "administrator"))):
+async def cost_import_apply(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
     """TIMPA cost per AWB (hapus cost lama + jurnalnya) lalu insert cost baru + jurnal langsung.
     Revenue & jurnal revenue TIDAK disentuh."""
     content = await file.read()
@@ -12528,7 +12528,7 @@ async def cost_import_apply(file: UploadFile = File(...), user: dict = Depends(r
 
 
 @app.get("/api/import/qty-tariff/template")
-async def qty_tariff_template(user: dict = Depends(require_role("operation", "finance", "administrator"))):
+async def qty_tariff_template(user: dict = Depends(require_role("administrator"))):
     """Template Excel dengan header yang pas untuk Import Qty & Tarif/Kg."""
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -12780,7 +12780,7 @@ async def invoice_po_number_template(user: dict = Depends(get_current_user)):
     )
 
 @app.post("/api/invoices/import-po-numbers")
-async def import_invoice_po_numbers(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+async def import_invoice_po_numbers(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
     """Bulk import PO numbers ke invoice via Excel upload."""
     content = await file.read()
     try:
@@ -12847,7 +12847,7 @@ def _bkk_parse_recipient(desc: str) -> Optional[str]:
 async def import_bkk_excel(
     file: UploadFile = File(...),
     dry_run: bool = False,
-    user: dict = Depends(require_role("operation", "finance", "administrator")),
+    user: dict = Depends(require_role("administrator")),
 ):
     """Import BKK (Bukti Kas Keluar) Excel file.
     Rules:
@@ -13376,7 +13376,7 @@ async def export_open_awb_excel(
 # Item #3: Import Invoice Number → mark AWB as Invoiced / Paid
 # ===========================================================================
 @app.get("/api/invoices/import-numbers-template")
-async def import_invoice_numbers_template(user: dict = Depends(require_role("finance", "operation", "administrator"))):
+async def import_invoice_numbers_template(user: dict = Depends(require_role("administrator"))):
     """Download Excel template untuk Import Invoice Number.
     Kolom: AWB Number | Invoice Number | Status (Invoiced/Paid) | Paid Date (YYYY-MM-DD, opsional)."""
     wb = openpyxl.Workbook()
@@ -13500,7 +13500,7 @@ async def ensure_awb_payment_posted(awb: dict, posted_by: str, cash_code: str = 
 async def import_invoice_numbers(
     file: UploadFile = File(...),
     dry_run: bool = False,
-    user: dict = Depends(require_role("operation", "finance", "administrator")),
+    user: dict = Depends(require_role("administrator")),
 ):
     """Import Excel with columns: Invoice Number, AWB Number, Status (Invoiced/Paid), Paid Date (optional YYYY-MM-DD).
     - Matches AWB by awb_number (case-insensitive)

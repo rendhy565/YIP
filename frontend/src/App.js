@@ -47,6 +47,7 @@ import ImportExcel from "./pages/ImportExcel";
 import TariffCorrection from "./pages/TariffCorrection";
 import BulkImport from "./pages/BulkImport";
 import CustomerMerge from "./pages/CustomerMerge";
+import ImportCenter from "./pages/ImportCenter";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import PanjarKerja from "./pages/PanjarKerja";
 import InvoicesCreated from "./pages/InvoicesCreated";
@@ -148,9 +149,10 @@ export default function App() {
             <Route path="/assets" element={<Protected module="asset"><FeatureGate feature="asset"><Shell><AssetModule /></Shell></FeatureGate></Protected>} />
             <Route path="/bank-recon" element={<Protected module="bank_recon"><FeatureGate feature="bank_recon"><Shell><BankReconciliation /></Shell></FeatureGate></Protected>} />
 
-            <Route path="/import" element={<Protected roles={["administrator"]}><Shell><ImportExcel /></Shell></Protected>} />
+            <Route path="/import" element={<Protected roles={["administrator"]}><Shell><ImportCenter /></Shell></Protected>} />
+            <Route path="/admin/import-center" element={<Protected roles={["administrator"]}><Shell><ImportCenter /></Shell></Protected>} />
             <Route path="/admin/koreksi-tarif" element={<Protected roles={["administrator"]}><Shell><TariffCorrection /></Shell></Protected>} />
-            <Route path="/admin/import-massal" element={<Protected roles={["administrator"]}><Shell><BulkImport /></Shell></Protected>} />
+            <Route path="/admin/import-massal" element={<Protected roles={["administrator"]}><Shell><ImportCenter /></Shell></Protected>} />
             <Route path="/admin/gabung-customer" element={<Protected roles={["administrator"]}><Shell><CustomerMerge /></Shell></Protected>} />
             <Route path="/analytics" element={<Protected module="pnl"><Shell><AnalyticsDashboard /></Shell></Protected>} />
             <Route path="/panjar" element={<Protected module="fixed_costs"><Shell><PanjarKerja /></Shell></Protected>} />
