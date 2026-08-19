@@ -8,7 +8,7 @@ import VendorSelect from "../components/VendorSelect";
 import { errMsg, fmtIDR, fmtDate, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
-import { Plus, Trash2, X, Wallet, Coins, Layers, RefreshCw, CheckSquare, Square } from "lucide-react";
+import { Plus, Trash2, X, Wallet, Coins, Layers, RefreshCw, CheckSquare, Square, Search } from "lucide-react";
 
 export default function Costs() {
   const { user } = useAuth();
@@ -36,6 +36,9 @@ export default function Costs() {
   const [proCandidates, setProCandidates] = useState([]);
   const [proBusy, setProBusy] = useState(false);
   const [groups, setGroups] = useState([]);
+  const [proSearch, setProSearch] = useState("");
+  const [proInclInvoiced, setProInclInvoiced] = useState(false);
+  const [proSelected, setProSelected] = useState({}); // id -> awb detail (persist across search)
 
   const loadGroups = () => api.get("/cost-groups").then((r) => setGroups(r.data || [])).catch(() => {});
   const loadVendors = () => api.get("/vendors").then((r) => setVendors(r.data || [])).catch(() => {});
@@ -57,39 +60,51 @@ export default function Costs() {
   }, [searchParams, canProrata, setSearchParams]);
 
   const loadProCandidates = () => {
-    if (!proForm.period_month) return;
-    api.get("/cost-groups/candidate-awbs", { params: { period_month: proForm.period_month } })
+    const search = proSearch.trim();
+    const params = {};
+    if (search) {
+      params.q = search;
+    } else {
+      if (proForm.period_month) params.period_month = proForm.period_month;
+      if (proInclInvoiced) params.include_invoiced = true;
+    }
+    api.get("/cost-groups/candidate-awbs", { params })
       .then((r) => setProCandidates(r.data || []))
       .catch(() => setProCandidates([]));
   };
-  useEffect(() => { if (proOpen) loadProCandidates(); }, [proOpen, proForm.period_month, loadProCandidates]);
+  // Debounced reload on open / filter / search change
+  useEffect(() => {
+    if (!proOpen) return;
+    const t = setTimeout(loadProCandidates, 300);
+    return () => clearTimeout(t);
+  }, [proOpen, proForm.period_month, proSearch, proInclInvoiced]); // eslint-disable-line
 
+  const selectedList = useMemo(() => Object.values(proSelected), [proSelected]);
   const proTotalSelectedSales = useMemo(() => {
-    return proCandidates
-      .filter((a) => proForm.awb_ids.includes(a.id))
-      .reduce((s, a) => s + (Number(a.grand_total) || 0), 0);
-  }, [proCandidates, proForm.awb_ids]);
+    return selectedList.reduce((s, a) => s + (Number(a.grand_total) || 0), 0);
+  }, [selectedList]);
 
   const proPreview = useMemo(() => {
     const total = Number(proForm.total_amount) || 0;
     if (!total || proTotalSelectedSales <= 0) return [];
-    const selected = proCandidates.filter((a) => proForm.awb_ids.includes(a.id));
     let running = 0;
-    return selected.map((a, i) => {
+    return selectedList.map((a, i) => {
       const share = a.grand_total / proTotalSelectedSales;
-      const amt = i === selected.length - 1
+      const amt = i === selectedList.length - 1
         ? +(total - running).toFixed(2)
         : +(total * share).toFixed(2);
-      if (i !== selected.length - 1) running += amt;
+      if (i !== selectedList.length - 1) running += amt;
       return { ...a, share_pct: +(share * 100).toFixed(2), amount: amt };
     });
-  }, [proForm.total_amount, proForm.awb_ids, proCandidates, proTotalSelectedSales]);
+  }, [proForm.total_amount, selectedList, proTotalSelectedSales]);
 
-  const toggleProAwb = (id) => {
-    setProForm((f) => ({
-      ...f,
-      awb_ids: f.awb_ids.includes(id) ? f.awb_ids.filter((x) => x !== id) : [...f.awb_ids, id],
-    }));
+  const toggleProAwb = (a) => {
+    setProSelected((m) => {
+      const next = { ...m };
+      if (next[a.id]) delete next[a.id]; else next[a.id] = a;
+      setProForm((f) => ({ ...f, awb_ids: Object.keys(next) }));
+      return next;
+    });
   };
 
   const submitProrata = async (e) => {
@@ -109,6 +124,7 @@ export default function Costs() {
       toast.success(`Prorata dibuat — ${r.data.children_created} baris cost di-generate`);
       setProOpen(false);
       setProForm({ vendor_name: "", period_month: currentMonth(), total_amount: "", description: "", awb_ids: [] });
+      setProSelected({}); setProSearch(""); setProInclInvoiced(false);
       load();
     } catch (e2) { toast.error(errMsg(e2)); }
     finally { setProBusy(false); }
@@ -417,18 +433,52 @@ export default function Costs() {
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <Label>Pilih AWB *  (minimal 2)</Label>
-                  <div className="text-[11px] text-slate-500">{proForm.awb_ids.length} dipilih · sales total {fmtIDR(proTotalSelectedSales)}</div>
+                  <div className="text-[11px] text-slate-500">{selectedList.length} dipilih · sales total {fmtIDR(proTotalSelectedSales)}</div>
                 </div>
+
+                {/* Search + toggle */}
+                <div className="flex flex-wrap items-center gap-2 mb-2">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+                    <Input
+                      data-testid="pro-awb-search"
+                      value={proSearch}
+                      onChange={(e) => setProSearch(e.target.value)}
+                      placeholder="Cari No AWB (semua status, termasuk Invoiced/Paid)…"
+                      className="pl-9"
+                    />
+                  </div>
+                  {!proSearch.trim() && (
+                    <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 cursor-pointer select-none">
+                      <input type="checkbox" data-testid="pro-incl-invoiced" checked={proInclInvoiced} onChange={(e) => setProInclInvoiced(e.target.checked)} className="accent-indigo-600"/>
+                      Termasuk Invoiced/Paid
+                    </label>
+                  )}
+                </div>
+
+                {/* Chips of selected AWBs not currently visible in the list */}
+                {selectedList.filter((a) => !proCandidates.some((c) => c.id === a.id)).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {selectedList.filter((a) => !proCandidates.some((c) => c.id === a.id)).map((a) => (
+                      <span key={a.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 text-[11px] font-semibold">
+                        {a.awb_number}
+                        <button type="button" onClick={() => toggleProAwb(a)} className="hover:text-rose-600"><X size={11}/></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <div className="rounded border border-slate-200 max-h-[220px] overflow-y-auto">
-                  {proCandidates.length === 0 && <div className="p-4 text-center text-sm text-slate-400 italic">Tidak ada AWB eligible di periode ini (status Open/Reconciled dengan grand_total &gt; 0).</div>}
+                  {proCandidates.length === 0 && <div className="p-4 text-center text-sm text-slate-400 italic">{proSearch.trim() ? "AWB tidak ditemukan." : "Tidak ada AWB eligible di periode ini (grand_total > 0). Coba centang \"Termasuk Invoiced/Paid\" atau cari No AWB."}</div>}
                   {proCandidates.map((a) => {
-                    const checked = proForm.awb_ids.includes(a.id);
+                    const checked = !!proSelected[a.id];
+                    const stColor = a.status === "Paid" ? "text-emerald-700" : a.status === "Invoiced" ? "text-blue-700" : "text-slate-500";
                     return (
                       <label key={a.id} className={`flex items-center gap-3 px-3 py-2 border-b border-slate-100 last:border-0 cursor-pointer ${checked ? "bg-indigo-50" : "hover:bg-slate-50"}`}>
-                        <input type="checkbox" checked={checked} onChange={() => toggleProAwb(a.id)} data-testid={`pro-awb-${a.awb_number}`} className="accent-indigo-600"/>
+                        <input type="checkbox" checked={checked} onChange={() => toggleProAwb(a)} data-testid={`pro-awb-${a.awb_number}`} className="accent-indigo-600"/>
                         <div className="flex-1 min-w-0">
                           <div className="font-mono font-semibold text-sm">{a.awb_number}</div>
-                          <div className="text-[11px] text-slate-500 truncate">{a.customer_name || "-"} · {a.origin}→{a.destination} · {a.status}</div>
+                          <div className="text-[11px] text-slate-500 truncate">{a.customer_name || "-"} · {a.origin}→{a.destination} · <span className={`font-semibold ${stColor}`}>{a.status}</span></div>
                         </div>
                         <div className="text-right">
                           <div className="text-[10px] uppercase text-slate-500">Sales</div>

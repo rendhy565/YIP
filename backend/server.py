@@ -2908,15 +2908,31 @@ async def delete_cost_group(gid: str, user: dict = Depends(require_role("operati
 
 @app.get("/api/cost-groups/candidate-awbs")
 async def prorata_candidate_awbs(period_month: Optional[str] = None,
+                                 q: Optional[str] = None,
+                                 include_invoiced: bool = False,
                                  user: dict = Depends(require_role("operation", "finance", "administrator"))):
-    """List AWB yang eligible untuk dijadikan target prorata:
-    status Open atau Reconciled, punya grand_total > 0.
-    Filter opsional period_month (YYYY-MM) match created_at."""
-    q = {"status": {"$in": ["Open", "Reconciled"]}}
-    docs = await db.awb_orders.find(q).sort("created_at", -1).to_list(3000)
+    """List AWB target prorata.
+    - Mode BROWSE (default): status Open/Reconciled (+ Invoiced/Paid bila include_invoiced=true),
+      grand_total > 0, filter opsional period_month (match created_at).
+    - Mode SEARCH (q diisi): cari No AWB lintas SEMUA status (termasuk Invoiced/Paid),
+      abaikan filter periode — supaya AWB yang sudah invoiced/paid tetap bisa ditemukan.
+    """
+    q_text = (q or "").strip()
+    if q_text:
+        query = {"awb_number": {"$regex": re.escape(q_text), "$options": "i"}}
+    else:
+        statuses = ["Open", "Reconciled"]
+        if include_invoiced:
+            statuses += ["Invoiced", "Paid"]
+        query = {"status": {"$in": statuses}}
+    docs = await db.awb_orders.find(query).sort("created_at", -1).to_list(3000)
+    # Resolve customer names
+    cust_ids = list({d.get("customer_id") for d in docs if d.get("customer_id")})
+    cmap = {c["_id"]: c.get("name") for c in await db.customers.find({"_id": {"$in": cust_ids}}).to_list(5000)}
     out = []
     for d in docs:
-        if period_month:
+        # Periode hanya berlaku di mode browse (bukan search)
+        if period_month and not q_text:
             ca = d.get("created_at")
             if not ca:
                 continue
@@ -2929,7 +2945,7 @@ async def prorata_candidate_awbs(period_month: Optional[str] = None,
         out.append({
             "id": str(d["_id"]),
             "awb_number": d.get("awb_number"),
-            "customer_name": d.get("customer_name"),
+            "customer_name": cmap.get(d.get("customer_id")) or d.get("customer_name"),
             "origin": d.get("origin"),
             "destination": d.get("destination"),
             "grand_total": gt,
