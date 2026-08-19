@@ -11357,9 +11357,11 @@ def _parse_report_detail(content):
 
     # --- kolom tunggal (single) berdasarkan header atas ---
     single = {
-        "awb": "awb", "tgl pick up": "pickup", "status pengiriman": "status",
+        "awb": "awb", "tgl pick up": "pickup", "tanggal terima": "received_date",
+        "status pengiriman": "status",
         "transport": "transport", "from": "origin", "destination": "destination",
         "no mobil": "nopol", "qty": "qty", "koli": "koli", "penerima": "penerima",
+        "no invoice": "invoice_no",
     }
     col = {}
     amount_col = None
@@ -11423,7 +11425,7 @@ def _parse_report_detail(content):
         if freight < 0:
             freight = amount
         st = (_rep_str(g(col.get("status"))) or "").upper()
-        status = "Project" if st.startswith("PROJ") else ("Reguler" if st.startswith("REG") else None)
+        status = "Project" if st.startswith("PROJ") else ("Reguler" if st.startswith("REG") else (st or None))
         koli = g(col.get("koli"))
         try:
             koli = int(koli) if koli not in (None, "") else None
@@ -11432,6 +11434,8 @@ def _parse_report_detail(content):
         out.append({
             "awb_number": str(awb).strip(),
             "pickup": g(col.get("pickup")),
+            "received_date": g(col.get("received_date")),
+            "invoice_no": _rep_str(g(col.get("invoice_no"))),
             "status_pengiriman": status,
             "transport": _rep_str(g(col.get("transport"))),
             "origin": _rep_str(g(col.get("origin"))),
@@ -11456,17 +11460,117 @@ async def _report_build_map():
         norm.setdefault(_rep_norm_awb(an), a["_id"])
     return exact, norm
 
+def _rep_to_dt(v):
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v
+    try:
+        return datetime.fromisoformat(str(v)[:19]).replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+async def _report_find_emr_customer():
+    """Customer default untuk AWB baru hasil import Report EMR → induk EMR Tbk."""
+    c = await db.customers.find_one({"name": {"$regex": "ekamas mora republik.*tbk", "$options": "i"}})
+    if not c:
+        c = await db.customers.find_one({"name": {"$regex": "ekamas mora republik", "$options": "i"}})
+    return c
+
+def _report_calc_financials(row, pct):
+    freight = round(row["freight"], 2)
+    tax_amt = round(freight * pct / 100, 2)
+    addons = round(row["polis"] + row["insurance"] + row["spsi"] + row["forklift"], 2)
+    gt = round(freight + tax_amt + addons, 2)
+    return freight, tax_amt, addons, gt
+
+async def _report_insert_order(row, customer, user):
+    """Buat AWB order baru dari 1 baris Report EMR + posting jurnal PYMHD (DR1290/CR2390).
+    Return (oid, created_at, financials)."""
+    now = datetime.now(timezone.utc)
+    created = _rep_to_dt(row.get("pickup")) or now
+    pct = float((customer or {}).get("default_ppn_percentage") or 0)
+    freight, tax_amt, addons, gt = _report_calc_financials(row, pct)
+    qty = float(row.get("qty") or 0)
+    doc = {
+        "awb_number": row["awb_number"],
+        "company_name": None,
+        "consignee": row.get("destination"),
+        "customer_id": customer["_id"] if customer else None,
+        "origin": row.get("origin"),
+        "destination": row.get("destination"),
+        "status_pengiriman": row.get("status_pengiriman"),
+        "fleet_type": row.get("transport"),
+        "nopol": row.get("nopol"),
+        "qty_kg": qty,
+        "koli_count": int(row["koli"]) if row.get("koli") is not None else 0,
+        "work_type": row.get("work_type"),
+        "tariff_per_kg": round(freight / qty, 2) if qty > 0 else 0,
+        "total_tariff": freight,
+        "tax_percentage": pct,
+        "tax_amount": tax_amt,
+        "addons_total": addons,
+        "grand_total": gt,
+        "received_polis_enabled": row["polis"] > 0, "received_polis_amount": row["polis"],
+        "received_asuransi_enabled": row["insurance"] > 0, "received_asuransi_amount": row["insurance"],
+        "spsi_enabled": row["spsi"] > 0, "spsi_amount": row["spsi"],
+        "sewa_forklift_enabled": row["forklift"] > 0, "sewa_forklift_amount": row["forklift"],
+        "received_by_name": row.get("penerima"),
+        "status": "Open",
+        "revenue_recognized": False,
+        "created_by": user["id"],
+        "created_at": created,
+        "import_source": "report_emr_insert",
+    }
+    r = await db.awb_orders.insert_one(doc)
+    oid = r.inserted_id
+    if freight > 0:
+        try:
+            await insert_journal_direct(
+                date=created,
+                description=f"PYMHD - Order {row['awb_number']} (import Report EMR)",
+                lines=[
+                    {"account_code": "1290", "debit": freight, "credit": 0, "memo": row["awb_number"]},
+                    {"account_code": "2390", "debit": 0, "credit": freight, "memo": row["awb_number"]},
+                ],
+                reference_type="awb_order_pymhd",
+                reference_id=str(oid),
+                posted_by=user["id"],
+            )
+        except Exception:
+            pass
+    return oid, created
+
 @app.post("/api/import/awb-detail/preview")
 async def import_awb_detail_preview(file: UploadFile = File(...), user: dict = Depends(require_role("operation", "finance", "administrator"))):
     content = await file.read()
     rows = _parse_report_detail(content)
     exact, norm = await _report_build_map()
-    matched, not_found = [], []
+    emr = await _report_find_emr_customer()
+    emr_pct = float((emr or {}).get("default_ppn_percentage") or 0)
+    matched, to_insert = [], []
     inv_changes = 0
+    ins_with_inv = ins_without_inv = 0
+    seen_new = set()
     for row in rows:
         aid = exact.get(row["awb_number"].lower()) or norm.get(_rep_norm_awb(row["awb_number"]))
         if not aid:
-            not_found.append(row["awb_number"])
+            key = _rep_norm_awb(row["awb_number"])
+            if key in seen_new:
+                continue
+            seen_new.add(key)
+            freight, tax_amt, addons, gt = _report_calc_financials(row, emr_pct)
+            if row.get("invoice_no"):
+                ins_with_inv += 1
+            else:
+                ins_without_inv += 1
+            to_insert.append({
+                "awb_number": row["awb_number"],
+                "svc": row["status_pengiriman"], "work_type": row["work_type"],
+                "origin": row["origin"], "destination": row["destination"],
+                "invoice_no": row.get("invoice_no"),
+                "freight": freight, "tax": tax_amt, "addons": addons, "grand_total": gt,
+            })
             continue
         awb = await db.awb_orders.find_one({"_id": aid})
         old_gt = float(awb.get("grand_total") or 0)
@@ -11489,21 +11593,50 @@ async def import_awb_detail_preview(file: UploadFile = File(...), user: dict = D
     return {
         "total_rows": len(rows),
         "matched": len(matched),
-        "not_found": not_found,
+        "to_insert": len(to_insert),
+        "insert_with_invoice": ins_with_inv,
+        "insert_without_invoice": ins_without_inv,
+        "insert_customer": (emr or {}).get("name"),
+        "insert_customer_ppn": emr_pct,
+        "insert_customer_found": bool(emr),
+        "not_found": [r["awb_number"] for r in to_insert],
         "invoice_value_changes": inv_changes,
         "sample": matched[:60],
+        "insert_sample": to_insert[:60],
     }
 
 @app.post("/api/import/awb-detail/apply")
-async def import_awb_detail_apply(file: UploadFile = File(...), user: dict = Depends(require_role("finance", "administrator"))):
+async def import_awb_detail_apply(
+    file: UploadFile = File(...),
+    insert_missing: bool = Form(True),
+    user: dict = Depends(require_role("finance", "administrator")),
+):
     content = await file.read()
     rows = _parse_report_detail(content)
     exact, norm = await _report_build_map()
+    emr = await _report_find_emr_customer()
     updated, not_found, journals = 0, [], 0
+    inserted, insert_skipped_no_customer = 0, 0
+    new_orders = []  # {oid, invoice_no, created_at}
+    seen_new = set()
     for row in rows:
         aid = exact.get(row["awb_number"].lower()) or norm.get(_rep_norm_awb(row["awb_number"]))
         if not aid:
-            not_found.append(row["awb_number"])
+            # === INSERT AWB baru ===
+            if not insert_missing:
+                not_found.append(row["awb_number"])
+                continue
+            if not emr:
+                insert_skipped_no_customer += 1
+                not_found.append(row["awb_number"])
+                continue
+            key = _rep_norm_awb(row["awb_number"])
+            if key in seen_new:
+                continue
+            seen_new.add(key)
+            oid, created = await _report_insert_order(row, emr, user)
+            new_orders.append({"oid": oid, "invoice_no": row.get("invoice_no"), "created_at": created})
+            inserted += 1
             continue
         awb = await db.awb_orders.find_one({"_id": aid})
         tax_pct = float(awb.get("tax_percentage") or 0)
@@ -11554,12 +11687,89 @@ async def import_awb_detail_apply(file: UploadFile = File(...), user: dict = Dep
         except Exception:
             pass
         updated += 1
+
+    # === Untuk AWB baru: akui revenue + buat/gabung invoice + posting AR ===
+    invoices_created = invoices_grouped = 0
+    now = datetime.now(timezone.utc)
+    # 1) recognize revenue utk semua order baru (posting DR2390/CR4101)
+    for it in new_orders:
+        try:
+            await recognize_revenue_for_awb(it["oid"], user["id"], trigger_date=it["created_at"])
+        except Exception:
+            pass
+        # order baru TANPA No Invoice → tandai Reconciled (terkirim, revenue diakui, nunggu invoice)
+        if not it["invoice_no"]:
+            await db.awb_orders.update_one(
+                {"_id": it["oid"]},
+                {"$set": {"status": "Reconciled", "reconciled_at": it["created_at"]}},
+            )
+    # 2) group by No Invoice
+    inv_groups = {}
+    for it in new_orders:
+        if it["invoice_no"]:
+            inv_groups.setdefault(it["invoice_no"], []).append(it)
+    for inv_no, members in inv_groups.items():
+        try:
+            oids = [m["oid"] for m in members]
+            inv_date = next((m["created_at"] for m in members if m["created_at"]), None) or now
+            existing = await db.invoices.find_one({"invoice_number": inv_no})
+            if not existing:
+                for oid in oids:
+                    existing = await db.invoices.find_one({"$or": [{"awb_id": oid}, {"awb_ids": oid}]})
+                    if existing:
+                        break
+            if existing:
+                cur_ids = existing.get("awb_ids") or ([existing.get("awb_id")] if existing.get("awb_id") else [])
+                umap = {str(x): x for x in cur_ids}
+                for oid in oids:
+                    umap[str(oid)] = oid
+                union = list(umap.values())
+                await db.invoices.update_one({"_id": existing["_id"]}, {"$set": {
+                    "awb_ids": union, "awb_id": union[0], "invoice_number": inv_no,
+                    "ar_recognized": True,
+                    "invoice_date": existing.get("invoice_date") or inv_date,
+                    "first_printed_at": existing.get("first_printed_at") or inv_date,
+                }})
+                inv_doc = await db.invoices.find_one({"_id": existing["_id"]})
+                all_oids = union
+                invoices_grouped += 1
+            else:
+                inv_doc = {
+                    "awb_id": oids[0], "awb_ids": oids, "invoice_number": inv_no,
+                    "created_at": now, "invoice_date": inv_date, "first_printed_at": inv_date,
+                    "print_count": 1, "ar_recognized": True, "created_by": user["id"],
+                }
+                r = await db.invoices.insert_one(inv_doc)
+                inv_doc["_id"] = r.inserted_id
+                all_oids = oids
+                invoices_created += 1
+            for oid in all_oids:
+                a = await db.awb_orders.find_one({"_id": oid}, {"status": 1})
+                if (a or {}).get("status") not in ("Paid", "Invoiced"):
+                    await db.awb_orders.update_one({"_id": oid}, {"$set": {"status": "Invoiced", "invoiced_at": now}})
+                await recognize_revenue_for_awb(oid, user["id"], trigger_date=inv_date)
+            await rebuild_invoice_ar_journal(inv_doc, user["id"])
+        except Exception:
+            pass
+
     try:
         await log_activity(user, "import", "awb_order", "-",
-                           f"Import Detail AWB: {updated} di-update, {len(not_found)} tidak ditemukan", {"updated": updated, "not_found": len(not_found)})
+                           f"Import Detail AWB: {updated} di-update, {inserted} di-insert baru, {invoices_created} invoice dibuat",
+                           {"updated": updated, "inserted": inserted, "invoices_created": invoices_created,
+                            "invoices_grouped": invoices_grouped, "not_found": len(not_found)})
     except Exception:
         pass
-    return {"updated": updated, "not_found": not_found, "journals_adjusted": journals}
+    return {
+        "updated": updated,
+        "inserted": inserted,
+        "invoices_created": invoices_created,
+        "invoices_grouped": invoices_grouped,
+        "inserted_without_invoice": inserted - sum(len(m) for m in inv_groups.values()),
+        "insert_skipped_no_customer": insert_skipped_no_customer,
+        "insert_customer": (emr or {}).get("name"),
+        "not_found": not_found,
+        "journals_adjusted": journals,
+    }
 
 
 # ===========================================================================

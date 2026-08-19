@@ -147,13 +147,17 @@ export default function ImportExcel() {
   };
   const detRunApply = async () => {
     if (!detPreview) return;
-    if (!window.confirm(`UPDATE detail untuk ${detPreview.matched} AWB?\n\nKolom detail (Status, Tgl Pickup, Transport, Origin, Destination, Nopol, Qty, Koli) + finansial (Polis/Insurance/SPSI/Forklift) akan ditimpa dari report, lalu jurnal & nilai invoice di-resync otomatis.\n\nInvoice yang berubah nilainya: ${detPreview.invoice_value_changes}.`)) return;
+    const ins = detPreview.to_insert || 0;
+    const insLine = ins > 0
+      ? `\n\n${ins} AWB BARU akan DI-INSERT ke customer "${detPreview.insert_customer || "-"}" (PPN ${detPreview.insert_customer_ppn ?? 0}%): ${detPreview.insert_with_invoice || 0} langsung ter-invoice (pakai No Invoice dari file + posting AR) & ${detPreview.insert_without_invoice || 0} sebagai Reconciled (belum invoice).`
+      : "";
+    if (!window.confirm(`UPDATE detail untuk ${detPreview.matched} AWB + INSERT ${ins} AWB baru?\n\nKolom detail + finansial (Polis/Insurance/SPSI/Forklift) di-timpa dari report, jurnal & nilai invoice di-resync otomatis.\n\nInvoice yang berubah nilainya: ${detPreview.invoice_value_changes}.${insLine}`)) return;
     setDetBusy(true);
     try {
-      const fd = new FormData(); fd.append("file", detFile);
+      const fd = new FormData(); fd.append("file", detFile); fd.append("insert_missing", "true");
       const r = await api.post("/import/awb-detail/apply", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300000 });
       setDetResult(r.data);
-      toast.success(`Selesai — ${r.data.updated} AWB di-update, ${r.data.journals_adjusted} jurnal di-resync`);
+      toast.success(`Selesai — ${r.data.updated} di-update, ${r.data.inserted || 0} di-insert baru`);
     } catch (e) { toast.error(errMsg(e)); }
     finally { setDetBusy(false); }
   };
@@ -423,7 +427,7 @@ export default function ImportExcel() {
       {/* ── Import Detail AWB (Report EMR) ── */}
       <Card className="p-5 mt-6 border-t-4 border-indigo-500" data-testid="import-detail-section">
         <h3 className="font-bold text-lg flex items-center gap-2 mb-1"><FileSpreadsheet size={18} className="text-indigo-600"/> Import Detail AWB (Report)</h3>
-        <p className="text-sm text-slate-500 mb-4">Isi/UPDATE kolom detail tiap AWB dari file Report (Status Pengiriman, Tgl Pick Up, Transport, Origin, Destination, Nopol, Qty, Koli) + finansial (Polis/Insurance/SPSI/Forklift). Cocok berdasarkan No AWB (abaikan nol depan). Jurnal & nilai invoice di-resync otomatis.</p>
+        <p className="text-sm text-slate-500 mb-4">Isi/UPDATE kolom detail tiap AWB dari file Report (Status Pengiriman, Tgl Pick Up, Transport, Origin, Destination, Nopol, Qty, Koli, Penerima) + finansial (Polis/Insurance/SPSI/Forklift). Cocok berdasarkan No AWB (abaikan nol depan). Jurnal & nilai invoice di-resync otomatis. <b>AWB yang belum ada di sistem akan DI-INSERT baru</b> (customer PT. EKAMAS MORA REPUBLIK, Tbk); yang punya No Invoice langsung ter-invoice + posting AR.</p>
 
         <div className="flex flex-wrap items-center gap-3">
           <input type="file" accept=".xlsx,.xls" data-testid="detail-file-input"
@@ -433,8 +437,8 @@ export default function ImportExcel() {
             <Eye size={14}/> {detBusy ? "Memproses..." : "Preview"}
           </Button>
           {detPreview && (
-            <Button data-testid="detail-apply-btn" onClick={detRunApply} disabled={detBusy || detPreview.matched === 0}>
-              <PlayCircle size={14}/> Terapkan ({detPreview.matched})
+            <Button data-testid="detail-apply-btn" onClick={detRunApply} disabled={detBusy || (detPreview.matched === 0 && (detPreview.to_insert || 0) === 0)}>
+              <PlayCircle size={14}/> Terapkan ({detPreview.matched} update{(detPreview.to_insert || 0) > 0 ? ` + ${detPreview.to_insert} insert` : ""})
             </Button>
           )}
         </div>
@@ -443,13 +447,16 @@ export default function ImportExcel() {
           <div className="mt-4">
             <div className="flex flex-wrap gap-4 text-sm mb-3">
               <span>Total baris: <b>{detPreview.total_rows}</b></span>
-              <span className="text-emerald-700">Cocok: <b>{detPreview.matched}</b></span>
-              <span className="text-amber-700">Tidak ditemukan: <b>{detPreview.not_found.length}</b></span>
+              <span className="text-emerald-700">Cocok (update): <b>{detPreview.matched}</b></span>
+              <span className="text-indigo-700">AWB baru (insert): <b>{detPreview.to_insert || 0}</b></span>
               <span className="text-blue-700">Invoice berubah nilai: <b>{detPreview.invoice_value_changes}</b></span>
             </div>
-            {detPreview.not_found.length > 0 && (
-              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-3">
-                AWB tidak ditemukan (akan di-skip): {detPreview.not_found.slice(0, 40).join(", ")}{detPreview.not_found.length > 40 ? " ..." : ""}
+            {(detPreview.to_insert || 0) > 0 && (
+              <div className="text-xs text-indigo-900 bg-indigo-50 border border-indigo-200 rounded px-3 py-2 mb-3">
+                <b>{detPreview.to_insert}</b> AWB baru akan di-insert ke customer <b>{detPreview.insert_customer || "-"}</b> (PPN {detPreview.insert_customer_ppn ?? 0}%):
+                {" "}<b>{detPreview.insert_with_invoice || 0}</b> ter-invoice (pakai No Invoice + posting AR) &amp; <b>{detPreview.insert_without_invoice || 0}</b> Reconciled (belum invoice).
+                {!detPreview.insert_customer_found && <span className="text-rose-700 font-bold"> ⚠ Customer EMR tidak ditemukan — insert akan dilewati!</span>}
+                <div className="font-mono mt-1 text-indigo-700 max-h-20 overflow-auto">{(detPreview.not_found || []).slice(0, 60).join(", ")}{(detPreview.not_found || []).length > 60 ? " ..." : ""}</div>
               </div>
             )}
             <div className="overflow-x-auto border border-slate-200 rounded max-h-[360px]">
@@ -486,8 +493,9 @@ export default function ImportExcel() {
           </div>
         )}
         {detResult && (
-          <div className="mt-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 flex items-center gap-2" data-testid="detail-result">
-            <CheckCircle2 size={16}/> Selesai — {detResult.updated} AWB di-update, {detResult.journals_adjusted} jurnal di-resync{detResult.not_found.length ? `, ${detResult.not_found.length} tidak ditemukan` : ""}.
+          <div className="mt-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 flex items-start gap-2" data-testid="detail-result">
+            <CheckCircle2 size={16} className="mt-0.5"/>
+            <span>Selesai — <b>{detResult.updated}</b> AWB di-update{detResult.inserted ? `, ${detResult.inserted} AWB baru di-insert` : ""}{detResult.invoices_created ? ` (${detResult.invoices_created} invoice dibuat` : ""}{detResult.invoices_grouped ? `, ${detResult.invoices_grouped} digabung ke invoice existing` : ""}{detResult.invoices_created ? ")" : ""}, {detResult.journals_adjusted} jurnal di-resync.{detResult.insert_skipped_no_customer ? ` ⚠ ${detResult.insert_skipped_no_customer} dilewati (customer EMR tidak ada).` : ""}</span>
           </div>
         )}
       </Card>
