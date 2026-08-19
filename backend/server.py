@@ -11302,11 +11302,18 @@ async def set_invoice_number(iid: str, data: InvoiceNumberIn, user: dict = Depen
 # IMPORT DETAIL AWB — dari Report EMR (2-baris header). UPDATE detail + finansial
 # (Polis/Insurance/SPSI/Forklift) lalu rebuild jurnal + nilai invoice via resync.
 # ===========================================================================
-REPORT_GROUPS = {
-    "Kirim Barang":     {"polis": 15, "ins": 16, "spsi": 17, "forklift": 18, "freight": [19, 20, 21, 22, 23]},
-    "Dismantle Barang": {"polis": 24, "ins": 25, "spsi": 26, "forklift": 27, "freight": [28, 29, 30, 31, 32]},
-    "Relokasi Barang":  {"polis": 33, "ins": 34, "spsi": 35, "forklift": 36, "freight": [37, 38, 39, 40, 41]},
+# Nama grup layanan pada baris header atas (top row) laporan EMR.
+_REPORT_GROUP_NAMES = {
+    "kirim barang": "Kirim Barang",
+    "dismantle barang": "Dismantle Barang",
+    "relokasi barang": "Relokasi Barang",
 }
+
+def _rep_hdr(v):
+    """Normalisasi teks header: lowercase + rapatkan whitespace/newline."""
+    if v is None:
+        return ""
+    return " ".join(str(v).strip().lower().split())
 
 def _rep_num(v):
     try:
@@ -11326,50 +11333,113 @@ def _rep_norm_awb(s):
     return (str(s).strip().lstrip("0")) or "0"
 
 def _parse_report_detail(content):
+    """Parse laporan EMR (2-baris header) secara HEADER-AWARE.
+
+    Kolom dideteksi dari NAMA header (bukan posisi tetap), sehingga layout lama
+    (April–Mei) maupun baru (Juli: ada kolom Vendor Name/Penerima/DG + SURCHARGE/
+    UN NUMBER, dan Amount pindah posisi) sama-sama terbaca benar.
+    SURCHARGE & UN NUMBER TIDAK dihitung sebagai add-on (ikut freight, per keputusan user).
+    """
     import io as _io
     import openpyxl as _oxl
     wb = _oxl.load_workbook(_io.BytesIO(content), data_only=True, read_only=True)
     ws = wb[wb.sheetnames[0]]
+    hdr = list(ws.iter_rows(min_row=1, max_row=2, values_only=True))
+    top = list(hdr[0]) if hdr else []
+    sub = list(hdr[1]) if len(hdr) > 1 else []
+    ncol = max(len(top), len(sub))
+
+    def T(i):
+        return _rep_hdr(top[i]) if i < len(top) else ""
+
+    def S(i):
+        return _rep_hdr(sub[i]) if i < len(sub) else ""
+
+    # --- kolom tunggal (single) berdasarkan header atas ---
+    single = {
+        "awb": "awb", "tgl pick up": "pickup", "status pengiriman": "status",
+        "transport": "transport", "from": "origin", "destination": "destination",
+        "no mobil": "nopol", "qty": "qty", "koli": "koli", "penerima": "penerima",
+    }
+    col = {}
+    amount_col = None
+    for i in range(ncol):
+        t = T(i)
+        if t in single and single[t] not in col:
+            col[single[t]] = i
+        if t.startswith("amount") and amount_col is None:
+            amount_col = i
+
+    # --- grup layanan (Kirim/Dismantle/Relokasi): forward-fill nama grup ---
+    groups = {}
+    cur = None
+    for i in range(ncol):
+        t = T(i)
+        if t in _REPORT_GROUP_NAMES:
+            cur = _REPORT_GROUP_NAMES[t]
+            groups[cur] = {"polis": None, "ins": None, "spsi": None, "forklift": None, "others": []}
+        elif t:  # header atas lain yang non-kosong → keluar dari scope grup
+            cur = None
+        if cur is None:
+            continue
+        s = S(i)
+        if not s:
+            continue
+        if s == "polis":
+            groups[cur]["polis"] = i
+        elif s.startswith("insurance"):
+            groups[cur]["ins"] = i
+        elif s == "spsi":
+            groups[cur]["spsi"] = i
+        elif s.startswith("sewa fro") or s.startswith("sewa for"):
+            groups[cur]["forklift"] = i
+        else:
+            # kolom biaya lain dalam grup (Kirim/Loading/Air/Konsul/Trucking/Packing/
+            # SURCHARGE/UN NUMBER) — hanya dipakai deteksi grup aktif, masuk freight.
+            groups[cur]["others"].append(i)
+
     out = []
     for r in ws.iter_rows(min_row=3, values_only=True):
         def g(i):
-            return r[i] if (r and i < len(r)) else None
-        awb = g(4)
+            return r[i] if (r and i is not None and i < len(r)) else None
+        awb = g(col.get("awb"))
         if awb is None or str(awb).strip() in ("", "None"):
             continue
         # deteksi grup layanan aktif (yang ada isinya)
         active, best = None, 0.0
-        for name, cfg in REPORT_GROUPS.items():
-            s = sum(_rep_num(g(cfg[c])) for c in ("polis", "ins", "spsi", "forklift")) + sum(_rep_num(g(i)) for i in cfg["freight"])
+        for name, cfg in groups.items():
+            s = sum(_rep_num(g(cfg[k])) for k in ("polis", "ins", "spsi", "forklift"))
+            s += sum(_rep_num(g(oi)) for oi in cfg["others"])
             if s > best:
                 best, active = s, name
         polis = ins = spsi = forklift = 0.0
         if active:
-            cfg = REPORT_GROUPS[active]
+            cfg = groups[active]
             polis = _rep_num(g(cfg["polis"])); ins = _rep_num(g(cfg["ins"]))
             spsi = _rep_num(g(cfg["spsi"])); forklift = _rep_num(g(cfg["forklift"]))
-        amount = _rep_num(g(42))
+        amount = _rep_num(g(amount_col))
         addons = round(polis + ins + spsi + forklift, 2)
         freight = round(amount - addons, 2)
         if freight < 0:
             freight = amount
-        st = (_rep_str(g(3)) or "").upper()
+        st = (_rep_str(g(col.get("status"))) or "").upper()
         status = "Project" if st.startswith("PROJ") else ("Reguler" if st.startswith("REG") else None)
-        koli = g(10)
+        koli = g(col.get("koli"))
         try:
             koli = int(koli) if koli not in (None, "") else None
         except Exception:
             koli = None
         out.append({
             "awb_number": str(awb).strip(),
-            "pickup": g(1),
+            "pickup": g(col.get("pickup")),
             "status_pengiriman": status,
-            "transport": _rep_str(g(5)),
-            "origin": _rep_str(g(6)),
-            "destination": _rep_str(g(7)),
-            "nopol": _rep_str(g(8)),
-            "qty": _rep_num(g(9)),
+            "transport": _rep_str(g(col.get("transport"))),
+            "origin": _rep_str(g(col.get("origin"))),
+            "destination": _rep_str(g(col.get("destination"))),
+            "nopol": _rep_str(g(col.get("nopol"))),
+            "qty": _rep_num(g(col.get("qty"))),
             "koli": koli,
+            "penerima": _rep_str(g(col.get("penerima"))),
             "work_type": active,
             "polis": polis, "insurance": ins, "spsi": spsi, "forklift": forklift,
             "freight": freight, "amount": amount, "addons": addons,
@@ -11462,6 +11532,8 @@ async def import_awb_detail_apply(file: UploadFile = File(...), user: dict = Dep
             upd["qty_kg"] = row["qty"]
         if row["koli"] is not None:
             upd["koli_count"] = row["koli"]
+        if row.get("penerima"):
+            upd["received_by_name"] = row["penerima"]
         if row["work_type"]:
             upd["work_type"] = row["work_type"]
         # pickup date -> created_at
