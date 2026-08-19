@@ -8019,6 +8019,9 @@ _HEADER_ALIAS = {
     "pph ps 23\npph ps 15/ pp 23 umkm": "vendor1_pph", "pph ps 23": "vendor1_pph",
     "t. tagihan": "vendor1_total",
     "status bayar\n(v1)": "vendor1_status", "status bayar (v1)": "vendor1_status",
+    "status bayar": "vendor1_status", "status vendor": "vendor1_status",
+    "status v1": "vendor1_status", "status bayar v1": "vendor1_status",
+    "status pembayaran vendor": "vendor1_status", "paid status": "vendor1_status",
     "inv vendor2": "vendor2_invoice",
     "ppn4": "vendor2_ppn",
     "pph ps 23\npph ps 15/ pp 23 umkm5": "vendor2_pph",
@@ -8056,6 +8059,17 @@ def _norm(s):
     if s is None:
         return ""
     return str(s).strip().lower()
+
+_PAID_STATUS = {"sudah bayar", "sudah dibayar", "dibayar", "paid", "lunas", "settled", "sudah"}
+
+def _is_paid_status(s) -> bool:
+    """True bila status pembayaran vendor menandakan SUDAH dibayar (settle → Kas 1101)."""
+    n = _norm(s)
+    if not n:
+        return False
+    if n in _PAID_STATUS:
+        return True
+    return n.startswith("sudah bayar") or n == "paid" or n.startswith("lunas")
 
 def _to_float(v):
     if v is None or v == "":
@@ -11885,7 +11899,7 @@ def _parse_cost_rows(content: bytes, sheet_names=None):
         costs = []
         v1 = _to_float(col("vendor1_total")) or _to_float(col("vendor1_invoice"))
         if v1 > 0:
-            costs.append({"category": "Vendor", "amount": round(v1, 2), "vendor_name": _to_str(col("vendor1_name")), "status": _to_str(col("vendor1_status"))})
+            costs.append({"category": "Vendor", "amount": round(v1, 2), "vendor_name": _to_str(col("vendor1_name")), "status": _to_str(col("vendor1_status")) or _to_str(col("vendor_pay_status"))})
         v2 = _to_float(col("vendor2_total")) or _to_float(col("vendor2_invoice"))
         if v2 > 0:
             costs.append({"category": "Vendor", "amount": round(v2, 2), "vendor_name": _to_str(col("vendor2_name")), "status": _to_str(col("vendor2_status"))})
@@ -11985,7 +11999,7 @@ async def cost_import_apply(file: UploadFile = File(...), user: dict = Depends(r
             await db.awb_costs.delete_many({"awb_id": awb_oid})
             old_removed += len(old)
         for c in it["new_costs"]:
-            is_settled = (_norm(c.get("status")) == "sudah bayar")
+            is_settled = _is_paid_status(c.get("status"))
             vendor_id = await get_vendor_id(c.get("vendor_name"), it["armada_type"])
             cost_doc = {
                 "awb_id": awb_oid, "cost_category": c["category"], "amount": c["amount"],
