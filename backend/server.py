@@ -950,6 +950,12 @@ async def seed_data():
     await db.petty_cash.create_index("number")
     await db.purchase_orders.create_index("number")
     await db.sender_memory.create_index([("customer_id", 1), ("name", 1)], unique=True)
+    # Navigasi user non-admin — TTL auto-hapus > 30 hari
+    try:
+        await db.navigation_logs.create_index("timestamp", expireAfterSeconds=30 * 24 * 3600)
+        await db.navigation_logs.create_index("user_id")
+    except Exception:
+        pass
 
     # Seed Chart of Accounts
     for a in DEFAULT_COA:
@@ -1569,7 +1575,7 @@ async def _write_activity_log(scope, body_bytes, status_code, pre_entity_label=N
     if method not in ("POST", "PUT", "PATCH", "DELETE") or not (200 <= status_code < 300):
         return
     path = scope.get("path", "")
-    skip_prefixes = ("/api/auth/", "/api/notifications/", "/api/activity-logs")
+    skip_prefixes = ("/api/auth/", "/api/notifications/", "/api/activity-logs", "/api/navigation-logs")
     if any(path.startswith(p) for p in skip_prefixes):
         return
     headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
@@ -13828,6 +13834,47 @@ async def list_activity_logs(
         except Exception:
             pass
     docs = await db.activity_logs.find(q).sort("timestamp", -1).limit(min(limit, 2000)).to_list(2000)
+    return [serialize(d) for d in docs]
+
+class NavLogIn(BaseModel):
+    path: str
+    label: Optional[str] = None
+
+@app.post("/api/navigation-logs")
+async def log_navigation(payload: NavLogIn, user: dict = Depends(get_current_user)):
+    # Hanya catat navigasi user NON-admin
+    if (user.get("role") or "").lower() == "administrator":
+        return {"logged": False}
+    await db.navigation_logs.insert_one({
+        "user_id": user["id"], "user_name": user.get("username"), "user_role": user.get("role"),
+        "path": (payload.path or "")[:300], "label": (payload.label or "")[:120],
+        "timestamp": datetime.now(timezone.utc),
+    })
+    return {"logged": True}
+
+@app.get("/api/navigation-logs")
+async def list_navigation_logs(
+    user_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 500,
+    user: dict = Depends(require_role("administrator")),
+):
+    q = {}
+    if user_id:
+        q["user_id"] = user_id
+    if start_date and end_date:
+        try:
+            sy, sm, sd = [int(x) for x in start_date.split("-")]
+            ey, em, ed = [int(x) for x in end_date.split("-")]
+            wib = timedelta(hours=7)
+            q["timestamp"] = {
+                "$gte": datetime(sy, sm, sd, tzinfo=timezone.utc) - wib,
+                "$lte": datetime(ey, em, ed, 23, 59, 59, tzinfo=timezone.utc) - wib,
+            }
+        except Exception:
+            pass
+    docs = await db.navigation_logs.find(q).sort("timestamp", -1).limit(min(limit, 3000)).to_list(3000)
     return [serialize(d) for d in docs]
 
 @app.get("/api/notifications")

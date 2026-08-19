@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtDate, parseServerDate } from "../lib/utils";
-import { Activity, ChevronRight, X } from "lucide-react";
+import { Activity, ChevronRight, X, Navigation } from "lucide-react";
 
 const ACTION_COLORS = {
   create: "bg-emerald-50 text-emerald-800 border-emerald-200",
@@ -14,11 +14,14 @@ const ACTION_COLORS = {
 };
 
 export default function ActivityLog() {
+  const [tab, setTab] = useState("actions");
   const [rows, setRows] = useState([]);
+  const [navRows, setNavRows] = useState([]);
+  const [navUser, setNavUser] = useState("");
   const [detailRow, setDetailRow] = useState(null);
   const [filters, setFilters] = useState({
-    start_date: new Date(Date.now() - 7*86400000).toISOString().slice(0,10),
-    end_date: new Date().toISOString().slice(0,10),
+    start_date: new Date(Date.now() + 7*3600000 - 7*86400000).toISOString().slice(0,10),
+    end_date: new Date(Date.now() + 7*3600000).toISOString().slice(0,10),
     target_type: "", action: "",
   });
 
@@ -27,7 +30,15 @@ export default function ActivityLog() {
     Object.keys(filters).forEach((k) => { if (filters[k]) params[k] = filters[k]; });
     api.get("/activity-logs", { params }).then((r) => setRows(r.data));
   };
+  const loadNav = () => {
+    const params = { start_date: filters.start_date, end_date: filters.end_date };
+    if (navUser) params.user_id = navUser;
+    api.get("/navigation-logs", { params }).then((r) => setNavRows(r.data)).catch(() => setNavRows([]));
+  };
   useEffect(() => { load(); }, [filters.start_date, filters.end_date, filters.target_type, filters.action]);
+  useEffect(() => { if (tab === "navigation") loadNav(); }, [tab, filters.start_date, filters.end_date, navUser]);
+
+  const navUserOpts = [...new Map(navRows.filter((r) => r.user_id).map((r) => [r.user_id, r.user_name || r.user_id])).entries()];
 
   // module dropdown: value = raw target_type, label = friendly module_label
   const moduleOpts = [...new Map(rows.filter((r) => r.target_type).map((r) => [r.target_type, r.module_label || r.target_type])).entries()];
@@ -36,7 +47,20 @@ export default function ActivityLog() {
     <div data-testid="activity-log-page">
       <PageHeader title="Activity Log" subtitle="Audit trail semua aksi CRUD yang dilakukan user di sistem — klik baris untuk lihat detail."/>
 
-      <Card className="p-4 mb-5">
+      {/* Tabs */}
+      <div className="flex gap-2 mb-4" data-testid="activity-tabs">
+        <button data-testid="tab-actions" onClick={() => setTab("actions")}
+          className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold border transition-colors ${tab === "actions" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"}`}>
+          <Activity size={15}/> Aksi (CRUD)
+        </button>
+        <button data-testid="tab-navigation" onClick={() => setTab("navigation")}
+          className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold border transition-colors ${tab === "navigation" ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-600 border-slate-200 hover:border-slate-400"}`}>
+          <Navigation size={15}/> Navigasi
+        </button>
+      </div>
+
+      {tab === "actions" && (<>
+        <Card className="p-4 mb-5">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-[140px]"><Label>Dari</Label><Input type="date" value={filters.start_date} onChange={(e) => setFilters({...filters, start_date: e.target.value})}/></div>
           <div className="min-w-[140px]"><Label>Sampai</Label><Input type="date" value={filters.end_date} onChange={(e) => setFilters({...filters, end_date: e.target.value})}/></div>
@@ -95,6 +119,46 @@ export default function ActivityLog() {
           </tbody>
         </Table>
       </Card>
+      </>)}
+
+      {tab === "navigation" && (
+        <>
+          <Card className="p-4 mb-5">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-[140px]"><Label>Dari</Label><Input type="date" value={filters.start_date} onChange={(e) => setFilters({...filters, start_date: e.target.value})}/></div>
+              <div className="min-w-[140px]"><Label>Sampai</Label><Input type="date" value={filters.end_date} onChange={(e) => setFilters({...filters, end_date: e.target.value})}/></div>
+              <div className="min-w-[170px]"><Label>User</Label>
+                <select data-testid="nav-user-filter" value={navUser} onChange={(e) => setNavUser(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+                  <option value="">Semua User</option>
+                  {navUserOpts.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
+                </select>
+              </div>
+              <div className="ml-auto text-right">
+                <div className="text-[10px] uppercase tracking-[0.12em] font-bold text-slate-500">Total Navigasi</div>
+                <div className="font-heading font-black text-2xl text-slate-800">{navRows.length}</div>
+              </div>
+            </div>
+            <p className="text-xs text-slate-400 mt-2">Hanya navigasi user non-admin yang direkam. Log navigasi otomatis terhapus setelah 30 hari.</p>
+          </Card>
+          <Card>
+            <Table>
+              <thead><tr><Th>Waktu</Th><Th>User</Th><Th>Role</Th><Th>Halaman</Th><Th>Path</Th></tr></thead>
+              <tbody>
+                {navRows.map((r) => (
+                  <tr key={r.id} data-testid={`nav-row-${r.id}`} className="hover:bg-slate-50">
+                    <Td className="text-xs font-mono text-slate-700 whitespace-nowrap">{parseServerDate(r.timestamp).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric" })} <span className="text-slate-400">{parseServerDate(r.timestamp).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", second: "2-digit" })} WIB</span></Td>
+                    <Td className="font-semibold">{r.user_name || "—"}</Td>
+                    <Td><span className="text-[10px] uppercase font-bold text-slate-500">{r.user_role || "—"}</span></Td>
+                    <Td className="text-sm font-semibold text-slate-800">{r.label || "—"}</Td>
+                    <Td className="text-xs font-mono text-slate-500">{r.path}</Td>
+                  </tr>
+                ))}
+                {navRows.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-10"><Navigation size={28} className="mx-auto opacity-30 mb-2"/>Belum ada log navigasi.</Td></tr>}
+              </tbody>
+            </Table>
+          </Card>
+        </>
+      )}
 
       {/* Detail modal */}
       {detailRow && (() => {

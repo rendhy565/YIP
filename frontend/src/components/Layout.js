@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { useFeatureFlags } from "../lib/featureFlags";
@@ -158,6 +158,24 @@ export default function Layout({ children }) {
     fetch();
     const iv = setInterval(fetch, 45000); // refresh every 45s
     return () => { mounted = false; clearInterval(iv); };
+  }, [user, loc.pathname]);
+
+  // Rekam navigasi antar halaman (khusus user NON-admin) → Activity Log tab "Navigasi"
+  const lastNavRef = useRef("");
+  useEffect(() => {
+    if (!user || (user.role || "").toLowerCase() === "administrator") return;
+    const path = loc.pathname;
+    if (lastNavRef.current === path) return;
+    lastNavRef.current = path;
+    const exact = NAV.find((i) => i.to === path);
+    const prefix = exact ? null : NAV.filter((i) => i.to && i.to !== "/" && path.startsWith(i.to)).sort((a, b) => b.to.length - a.to.length)[0];
+    const label = (exact || prefix)?.label || path;
+    (async () => {
+      try {
+        const api = (await import("../lib/api")).default;
+        await api.post("/navigation-logs", { path, label });
+      } catch (_e) { /* ignore */ }
+    })();
   }, [user, loc.pathname]);
 
   const SidebarBody = (
