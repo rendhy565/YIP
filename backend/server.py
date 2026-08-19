@@ -11917,6 +11917,18 @@ def _parse_cost_rows(content: bytes, sheet_names=None):
 
 
 async def _cost_match(rows):
+    # Preload semua AWB → peta persis + peta ternormalisasi (abaikan nol depan),
+    # supaya No AWB "63452" tetap cocok dengan yang tersimpan "0063452".
+    exact_map = {}
+    norm_map = {}
+    async for a in db.awb_orders.find({}, {"awb_number": 1}):
+        an = str(a.get("awb_number") or "").strip()
+        if not an:
+            continue
+        exact_map.setdefault(an.lower(), a["_id"])
+        nk = an.lstrip("0") or "0"
+        norm_map.setdefault(nk, a["_id"])
+
     items = []
     not_found = []
     seen = set()
@@ -11924,19 +11936,20 @@ async def _cost_match(rows):
         awbn = r["awb_number"]
         if awbn in seen:
             for it in items:
-                if it["awb_number"] == awbn:
+                if it["awb_number_src"] == awbn:
                     it["new_costs"].extend(r["costs"])
                     it["new_cost_sum"] = round(sum(c["amount"] for c in it["new_costs"]), 2)
                     it["new_cost_count"] = len(it["new_costs"])
             continue
         seen.add(awbn)
-        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
-        if not awb:
+        aid = exact_map.get(awbn.lower()) or norm_map.get(awbn.lstrip("0") or "0")
+        if not aid:
             not_found.append(awbn)
             continue
+        awb = await db.awb_orders.find_one({"_id": aid})
         old = await db.awb_costs.find({"awb_id": awb["_id"]}).to_list(1000)
         items.append({
-            "awb_id": str(awb["_id"]), "awb_number": awb["awb_number"],
+            "awb_id": str(awb["_id"]), "awb_number": awb["awb_number"], "awb_number_src": awbn,
             "armada_type": r["armada_type"], "fleet_type": r["fleet_type"], "pickup_date": r["pickup_date"],
             "old_cost_count": len(old), "old_cost_sum": round(sum(float(c.get("amount") or 0) for c in old), 2),
             "new_costs": list(r["costs"]),
