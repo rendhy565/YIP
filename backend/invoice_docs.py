@@ -149,34 +149,61 @@ def _render_invoice_inner(data, override_date=None):
                f'<td>{_esc(invoice.get("po_number"))}</td></tr>'
                if invoice.get("po_number") else "")
 
-    # Lampiran rows
+    # Lampiran rows (template detail: 15 kolom)
     lamp_rows = ""
-    for a in awbs:
-        g = float(a.get("total_tariff") or 0) + float(a.get("tax_amount") or 0)
+    tot_harga = tot_bongkar = tot_asur = tot_polis = tot_jumlah = 0.0
+    for i, a in enumerate(awbs, 1):
+        harga = float(a.get("total_tariff") or 0)
+        bongkar = (float(a.get("spsi_amount") or 0) if a.get("spsi_enabled") else 0) + \
+                  (float(a.get("sewa_forklift_amount") or 0) if a.get("sewa_forklift_enabled") else 0)
+        asur = float(a.get("received_asuransi_amount") or 0)
+        pol = float(a.get("received_polis_amount") or 0)
+        jumlah = harga + bongkar + asur + pol
+        tot_harga += harga; tot_bongkar += bongkar; tot_asur += asur; tot_polis += pol; tot_jumlah += jumlah
+        koli = a.get("koli_count")
+        awbno = "AR-" + str(a.get("awb_number") or "")
+        _q = a.get("qty_kg")
+        qty_str = str(int(_q)) if isinstance(_q, (int, float)) and float(_q).is_integer() else _esc(_q)
+        c = 'style="border:1px solid #999;padding:2px;font-size:6px;word-break:break-word;"'
+        cr = 'style="border:1px solid #999;padding:2px;font-size:6px;" align="right"'
         lamp_rows += (
             f'<tr>'
-            f'<td width="12%" style="border:1px solid #999;padding:4px;">{_esc(a.get("awb_number"))}</td>'
-            f'<td width="9%" style="border:1px solid #999;padding:4px;">{_id_date(a.get("created_at"))}</td>'
-            f'<td width="10%" style="border:1px solid #999;padding:4px;word-wrap:break-word;">{_esc(a.get("origin"))}</td>'
-            f'<td width="14%" style="border:1px solid #999;padding:4px;word-wrap:break-word;">{_esc(a.get("destination"))}</td>'
-            f'<td width="11%" style="border:1px solid #999;padding:4px;word-wrap:break-word;">{_esc(a.get("goods_content"))}</td>'
-            f'<td width="6%" style="border:1px solid #999;padding:4px;" align="right">{_esc(a.get("qty_kg"))}</td>'
-            f'<td width="9%" style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("tariff_per_kg"))}</td>'
-            f'<td width="10%" style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("total_tariff"))}</td>'
-            f'<td width="9%" style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(a.get("tax_amount"))}</td>'
-            f'<td width="10%" style="border:1px solid #999;padding:4px;" align="right"><b>{_fmt_idr(g)}</b></td>'
+            f'<td width="3%" {cr}>{i}</td>'
+            f'<td width="7%" {c}>{_id_date(a.get("created_at"))}</td>'
+            f'<td width="6%" {c}>{_esc(a.get("status_pengiriman") or "")}</td>'
+            f'<td width="8%" {c}>{_esc(awbno)}</td>'
+            f'<td width="9%" {c}>{_esc(a.get("origin"))}</td>'
+            f'<td width="9%" {c}>{_esc(a.get("destination"))}</td>'
+            f'<td width="9%" {c}>{_esc(a.get("fleet_type") or a.get("mode") or "")}</td>'
+            f'<td width="5%" {cr}>{qty_str}</td>'
+            f'<td width="5%" {cr}>{_esc(koli) if koli not in (None, "") else ""}</td>'
+            f'<td width="9%" {cr}>{_fmt_idr(harga)}</td>'
+            f'<td width="7%" {cr}>{_fmt_idr(bongkar) if bongkar > 0 else "-"}</td>'
+            f'<td width="6%" {cr}>{_fmt_idr(asur) if asur > 0 else "-"}</td>'
+            f'<td width="5%" {cr}>{_fmt_idr(pol) if pol > 0 else "-"}</td>'
+            f'<td width="8%" {cr}><b>{_fmt_idr(jumlah)}</b></td>'
+            f'<td width="4%" {c}>{_esc(a.get("nopol") or "")}</td>'
             f'</tr>'
         )
-    lamp_total = ""
-    if len(awbs) > 1:
-        lamp_total = (
-            f'<tr style="background-color:#EEE;font-weight:bold;">'
-            f'<td colspan="7" style="border:1px solid #999;padding:4px;" align="right">TOTAL ({len(awbs)} AWB)</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(sub_total)}</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(ppn_amt)}</td>'
-            f'<td style="border:1px solid #999;padding:4px;" align="right">{_fmt_idr(grand_total)}</td>'
-            f'</tr>'
-        )
+
+    # Blok total lampiran (kanan bawah)
+    def lrow(label, val, bold=False, grey=False):
+        st = 'font-weight:bold;' if bold else ''
+        bg = 'background-color:#EEE;' if grey else ''
+        return (f'<tr style="{bg}"><td style="padding:2px 6px;{st}">{label}</td>'
+                f'<td style="padding:2px 6px;{st}" width="26">IDR</td>'
+                f'<td style="padding:2px 6px;{st}" align="right">{val}</td></tr>')
+    lamp_totals = (
+        lrow("TOTAL", _fmt_idr(sub_total)) +
+        lrow(f"PPN {pct_label}%", _fmt_idr(ppn_amt)) +
+        lrow("SUB TOTAL", _fmt_idr(sub_after_tax), bold=True) +
+        lrow("MATERAI", "-") +
+        lrow("ASURANSI", _fmt_idr(tot_asur) if tot_asur > 0 else "-") +
+        lrow("POLIS", _fmt_idr(tot_polis) if tot_polis > 0 else "-") +
+        lrow("ADM. LAIN", "-") +
+        lrow("LAIN-LAIN", _fmt_idr(tot_bongkar) if tot_bongkar > 0 else "-") +
+        lrow("GRAND TOTAL", _fmt_idr(grand_total), bold=True, grey=True)
+    )
 
     return f"""
 <!-- PAGE 1: COVER -->
@@ -254,25 +281,52 @@ def _render_invoice_inner(data, override_date=None):
 <!-- PAGE BREAK -->
 <div style="page-break-before: always;"></div>
 
-<!-- PAGE 2: LAMPIRAN -->
+<!-- PAGE 2: LAMPIRAN (detail per template) -->
 <div>
-  <div style="text-align:center;font-size:18px;font-weight:bold;text-transform:uppercase;margin-bottom:14px;">Lampiran Invoice</div>
-  <table width="100%" style="border:1px solid #999;table-layout:fixed;">
+  <table width="100%"><tr>
+    <td width="60%" valign="top">
+      <div style="font-size:9px;color:#555;text-transform:uppercase;font-weight:bold;">Bill To:</div>
+      <div style="font-size:11px;font-weight:bold;">{_esc((customer.get('name') or awb.get('company_name') or '').upper())}</div>
+      <div style="color:#333;">{_esc(customer.get('address') or '')}</div>
+      {f'<div style="color:#333;">NPWP: {_esc(customer.get("npwp"))}</div>' if customer.get('npwp') else ''}
+      <div style="margin-top:4px;">UP: <b>{_esc(customer.get('attn') or awb.get('consignee') or customer.get('pic_name') or '')}</b></div>
+    </td>
+    <td width="40%" valign="top" align="right">
+      {logo_html}
+      <div style="font-size:16px;font-weight:bold;color:#1e3a8a;margin-top:4px;">INVOICE</div>
+      <div style="font-size:10px;font-weight:bold;">{_esc(invoice.get('invoice_number'))}</div>
+    </td>
+  </tr></table>
+
+  <table width="100%" style="margin-top:10px;border:1px solid #999;table-layout:fixed;">
     <thead><tr class="dark">
-      <td width="12%" style="border:1px solid #333;padding:4px;">No. AWB</td>
-      <td width="9%" style="border:1px solid #333;padding:4px;">Tanggal</td>
-      <td width="10%" style="border:1px solid #333;padding:4px;">Origin</td>
-      <td width="14%" style="border:1px solid #333;padding:4px;">Tujuan</td>
-      <td width="11%" style="border:1px solid #333;padding:4px;">Goods</td>
-      <td width="6%" style="border:1px solid #333;padding:4px;" align="right">Qty</td>
-      <td width="9%" style="border:1px solid #333;padding:4px;" align="right">Tarif/Kg</td>
-      <td width="10%" style="border:1px solid #333;padding:4px;" align="right">Subtotal</td>
-      <td width="9%" style="border:1px solid #333;padding:4px;" align="right">PPN</td>
-      <td width="10%" style="border:1px solid #333;padding:4px;" align="right">Grand</td>
+      <td width="3%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">NO.</td>
+      <td width="7%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">PICK UP DATE</td>
+      <td width="6%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">SERVICE</td>
+      <td width="8%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">NO AWB</td>
+      <td width="9%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">ORIGIN</td>
+      <td width="9%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">DESTINATION</td>
+      <td width="9%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">TRANSPORT</td>
+      <td width="5%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;" align="right">QTY</td>
+      <td width="5%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;" align="right">KOLI</td>
+      <td width="9%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;" align="right">HARGA PENGIRIMAN (Rp)</td>
+      <td width="7%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;" align="right">BIAYA BONGKAR MUAT</td>
+      <td width="6%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;" align="right">ASURANSI</td>
+      <td width="5%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;" align="right">POLIS</td>
+      <td width="8%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;" align="right">JUMLAH</td>
+      <td width="4%" style="border:1px solid #333;padding:2px;font-size:5.5px;word-break:break-word;">KET</td>
     </tr></thead>
-    <tbody>{lamp_rows}{lamp_total}</tbody>
+    <tbody>{lamp_rows}</tbody>
   </table>
-  <div style="font-size:8px;color:#777;margin-top:10px;">Lampiran ini merupakan bagian yang tidak terpisahkan dari Invoice No. {_esc(invoice.get('invoice_number'))}.</div>
+
+  <table width="100%" style="margin-top:10px;"><tr>
+    <td width="58%" valign="top">
+      <div style="font-size:8px;color:#777;">Lampiran ini merupakan bagian yang tidak terpisahkan dari Invoice No. {_esc(invoice.get('invoice_number'))}.</div>
+    </td>
+    <td width="42%" valign="top">
+      <table width="100%" style="font-size:9px;">{lamp_totals}</table>
+    </td>
+  </tr></table>
 </div>
 """
 
