@@ -23,6 +23,12 @@ export default function ImportExcel() {
   const [costResult, setCostResult] = useState(null);
   const [costBusy, setCostBusy] = useState(false);
 
+  // ── Import Detail AWB (Report) — update detail + finansial + resync jurnal ──
+  const [detFile, setDetFile] = useState(null);
+  const [detPreview, setDetPreview] = useState(null);
+  const [detResult, setDetResult] = useState(null);
+  const [detBusy, setDetBusy] = useState(false);
+
   if (user?.role !== "administrator") {
     return (
       <div className="p-8 max-w-2xl">
@@ -127,6 +133,29 @@ export default function ImportExcel() {
       toast.success(`Selesai — ${r.data.awbs_updated} AWB, ${r.data.new_costs_created} cost, ${r.data.journals_posted} jurnal`);
     } catch (e) { toast.error(errMsg(e)); }
     finally { setCostBusy(false); }
+  };
+
+  const detRunPreview = async () => {
+    if (!detFile) return toast.error("Pilih file dulu");
+    setDetBusy(true); setDetPreview(null); setDetResult(null);
+    try {
+      const fd = new FormData(); fd.append("file", detFile);
+      const r = await api.post("/import/awb-detail/preview", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 180000 });
+      setDetPreview(r.data);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setDetBusy(false); }
+  };
+  const detRunApply = async () => {
+    if (!detPreview) return;
+    if (!window.confirm(`UPDATE detail untuk ${detPreview.matched} AWB?\n\nKolom detail (Status, Tgl Pickup, Transport, Origin, Destination, Nopol, Qty, Koli) + finansial (Polis/Insurance/SPSI/Forklift) akan ditimpa dari report, lalu jurnal & nilai invoice di-resync otomatis.\n\nInvoice yang berubah nilainya: ${detPreview.invoice_value_changes}.`)) return;
+    setDetBusy(true);
+    try {
+      const fd = new FormData(); fd.append("file", detFile);
+      const r = await api.post("/import/awb-detail/apply", fd, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300000 });
+      setDetResult(r.data);
+      toast.success(`Selesai — ${r.data.updated} AWB di-update, ${r.data.journals_adjusted} jurnal di-resync`);
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setDetBusy(false); }
   };
 
   return (
@@ -387,6 +416,78 @@ export default function ImportExcel() {
             </div>
             <DataQualityPanels data={result}/>
             <p className="text-xs text-slate-600 mt-3">Data sudah masuk. Cek <a className="text-blue-700 underline" href="/orders">Daftar AWB</a>, <a className="text-blue-700 underline" href="/accounting/journal">Jurnal Umum</a>, atau <a className="text-blue-700 underline" href="/accounting/balance-sheet">Neraca</a>.</p>
+          </div>
+        )}
+      </Card>
+
+      {/* ── Import Detail AWB (Report EMR) ── */}
+      <Card className="p-5 mt-6 border-t-4 border-indigo-500" data-testid="import-detail-section">
+        <h3 className="font-bold text-lg flex items-center gap-2 mb-1"><FileSpreadsheet size={18} className="text-indigo-600"/> Import Detail AWB (Report)</h3>
+        <p className="text-sm text-slate-500 mb-4">Isi/UPDATE kolom detail tiap AWB dari file Report (Status Pengiriman, Tgl Pick Up, Transport, Origin, Destination, Nopol, Qty, Koli) + finansial (Polis/Insurance/SPSI/Forklift). Cocok berdasarkan No AWB (abaikan nol depan). Jurnal & nilai invoice di-resync otomatis.</p>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <input type="file" accept=".xlsx,.xls" data-testid="detail-file-input"
+            onChange={(e) => { setDetFile(e.target.files?.[0] || null); setDetPreview(null); setDetResult(null); }}
+            className="text-sm"/>
+          <Button data-testid="detail-preview-btn" variant="secondary" onClick={detRunPreview} disabled={detBusy || !detFile}>
+            <Eye size={14}/> {detBusy ? "Memproses..." : "Preview"}
+          </Button>
+          {detPreview && (
+            <Button data-testid="detail-apply-btn" onClick={detRunApply} disabled={detBusy || detPreview.matched === 0}>
+              <PlayCircle size={14}/> Terapkan ({detPreview.matched})
+            </Button>
+          )}
+        </div>
+
+        {detPreview && (
+          <div className="mt-4">
+            <div className="flex flex-wrap gap-4 text-sm mb-3">
+              <span>Total baris: <b>{detPreview.total_rows}</b></span>
+              <span className="text-emerald-700">Cocok: <b>{detPreview.matched}</b></span>
+              <span className="text-amber-700">Tidak ditemukan: <b>{detPreview.not_found.length}</b></span>
+              <span className="text-blue-700">Invoice berubah nilai: <b>{detPreview.invoice_value_changes}</b></span>
+            </div>
+            {detPreview.not_found.length > 0 && (
+              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-3">
+                AWB tidak ditemukan (akan di-skip): {detPreview.not_found.slice(0, 40).join(", ")}{detPreview.not_found.length > 40 ? " ..." : ""}
+              </div>
+            )}
+            <div className="overflow-x-auto border border-slate-200 rounded max-h-[360px]">
+              <table className="min-w-full text-xs">
+                <thead className="bg-slate-100 sticky top-0"><tr className="text-left">
+                  <th className="py-1.5 px-2">No AWB</th><th className="px-2">Status</th><th className="px-2">SVC</th>
+                  <th className="px-2">Transport</th><th className="px-2">Origin→Dest</th><th className="px-2">Nopol</th>
+                  <th className="px-2 text-right">Qty</th><th className="px-2 text-right">Koli</th>
+                  <th className="px-2 text-right">Freight</th><th className="px-2 text-right">Polis</th><th className="px-2 text-right">Ins</th>
+                  <th className="px-2 text-right">Grand (lama→baru)</th>
+                </tr></thead>
+                <tbody>
+                  {detPreview.sample.map((s, i) => (
+                    <tr key={i} className="border-b border-slate-100 last:border-0">
+                      <td className="py-1 px-2 font-mono font-bold">{s.awb_number}</td>
+                      <td className="px-2">{s.status}</td>
+                      <td className="px-2">{s.svc || "-"}</td>
+                      <td className="px-2">{s.transport || "-"}</td>
+                      <td className="px-2 text-slate-500">{s.origin}→{s.destination}</td>
+                      <td className="px-2">{s.nopol || "-"}</td>
+                      <td className="px-2 text-right">{s.qty || "-"}</td>
+                      <td className="px-2 text-right">{s.koli ?? "-"}</td>
+                      <td className="px-2 text-right font-mono">{fmtIDR(s.freight)}</td>
+                      <td className="px-2 text-right font-mono">{s.polis ? fmtIDR(s.polis) : "-"}</td>
+                      <td className="px-2 text-right font-mono">{s.insurance ? fmtIDR(s.insurance) : "-"}</td>
+                      <td className={`px-2 text-right font-mono ${Math.abs(s.new_grand_total - s.old_grand_total) > 1 ? "text-rose-700 font-bold" : "text-slate-500"}`}>
+                        {fmtIDR(s.old_grand_total)}→{fmtIDR(s.new_grand_total)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {detResult && (
+          <div className="mt-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-3 py-2 flex items-center gap-2" data-testid="detail-result">
+            <CheckCircle2 size={16}/> Selesai — {detResult.updated} AWB di-update, {detResult.journals_adjusted} jurnal di-resync{detResult.not_found.length ? `, ${detResult.not_found.length} tidak ditemukan` : ""}.
           </div>
         )}
       </Card>

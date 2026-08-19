@@ -11299,6 +11299,198 @@ async def set_invoice_number(iid: str, data: InvoiceNumberIn, user: dict = Depen
     return serialize(await db.invoices.find_one({"_id": _oid(iid)}))
 
 # ===========================================================================
+# IMPORT DETAIL AWB — dari Report EMR (2-baris header). UPDATE detail + finansial
+# (Polis/Insurance/SPSI/Forklift) lalu rebuild jurnal + nilai invoice via resync.
+# ===========================================================================
+REPORT_GROUPS = {
+    "Kirim Barang":     {"polis": 15, "ins": 16, "spsi": 17, "forklift": 18, "freight": [19, 20, 21, 22, 23]},
+    "Dismantle Barang": {"polis": 24, "ins": 25, "spsi": 26, "forklift": 27, "freight": [28, 29, 30, 31, 32]},
+    "Relokasi Barang":  {"polis": 33, "ins": 34, "spsi": 35, "forklift": 36, "freight": [37, 38, 39, 40, 41]},
+}
+
+def _rep_num(v):
+    try:
+        if v is None:
+            return 0.0
+        return float(str(v).replace(",", "").strip())
+    except Exception:
+        return 0.0
+
+def _rep_str(v):
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+def _rep_norm_awb(s):
+    return (str(s).strip().lstrip("0")) or "0"
+
+def _parse_report_detail(content):
+    import io as _io
+    import openpyxl as _oxl
+    wb = _oxl.load_workbook(_io.BytesIO(content), data_only=True, read_only=True)
+    ws = wb[wb.sheetnames[0]]
+    out = []
+    for r in ws.iter_rows(min_row=3, values_only=True):
+        def g(i):
+            return r[i] if (r and i < len(r)) else None
+        awb = g(4)
+        if awb is None or str(awb).strip() in ("", "None"):
+            continue
+        # deteksi grup layanan aktif (yang ada isinya)
+        active, best = None, 0.0
+        for name, cfg in REPORT_GROUPS.items():
+            s = sum(_rep_num(g(cfg[c])) for c in ("polis", "ins", "spsi", "forklift")) + sum(_rep_num(g(i)) for i in cfg["freight"])
+            if s > best:
+                best, active = s, name
+        polis = ins = spsi = forklift = 0.0
+        if active:
+            cfg = REPORT_GROUPS[active]
+            polis = _rep_num(g(cfg["polis"])); ins = _rep_num(g(cfg["ins"]))
+            spsi = _rep_num(g(cfg["spsi"])); forklift = _rep_num(g(cfg["forklift"]))
+        amount = _rep_num(g(42))
+        addons = round(polis + ins + spsi + forklift, 2)
+        freight = round(amount - addons, 2)
+        if freight < 0:
+            freight = amount
+        st = (_rep_str(g(3)) or "").upper()
+        status = "Project" if st.startswith("PROJ") else ("Reguler" if st.startswith("REG") else None)
+        koli = g(10)
+        try:
+            koli = int(koli) if koli not in (None, "") else None
+        except Exception:
+            koli = None
+        out.append({
+            "awb_number": str(awb).strip(),
+            "pickup": g(1),
+            "status_pengiriman": status,
+            "transport": _rep_str(g(5)),
+            "origin": _rep_str(g(6)),
+            "destination": _rep_str(g(7)),
+            "nopol": _rep_str(g(8)),
+            "qty": _rep_num(g(9)),
+            "koli": koli,
+            "work_type": active,
+            "polis": polis, "insurance": ins, "spsi": spsi, "forklift": forklift,
+            "freight": freight, "amount": amount, "addons": addons,
+        })
+    return out
+
+async def _report_build_map():
+    exact, norm = {}, {}
+    async for a in db.awb_orders.find({}, {"awb_number": 1}):
+        an = str(a.get("awb_number") or "").strip()
+        if not an:
+            continue
+        exact.setdefault(an.lower(), a["_id"])
+        norm.setdefault(_rep_norm_awb(an), a["_id"])
+    return exact, norm
+
+@app.post("/api/import/awb-detail/preview")
+async def import_awb_detail_preview(file: UploadFile = File(...), user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    content = await file.read()
+    rows = _parse_report_detail(content)
+    exact, norm = await _report_build_map()
+    matched, not_found = [], []
+    inv_changes = 0
+    for row in rows:
+        aid = exact.get(row["awb_number"].lower()) or norm.get(_rep_norm_awb(row["awb_number"]))
+        if not aid:
+            not_found.append(row["awb_number"])
+            continue
+        awb = await db.awb_orders.find_one({"_id": aid})
+        old_gt = float(awb.get("grand_total") or 0)
+        tax_pct = float(awb.get("tax_percentage") or 0)
+        new_tax = round(row["freight"] * tax_pct / 100, 2)
+        new_gt = round(row["freight"] + new_tax + row["addons"], 2)
+        if abs(new_gt - old_gt) > 1:
+            inv_changes += 1
+        matched.append({
+            "awb_number": awb.get("awb_number"),
+            "status": awb.get("status"),
+            "work_type": row["work_type"],
+            "svc": row["status_pengiriman"], "transport": row["transport"],
+            "origin": row["origin"], "destination": row["destination"], "nopol": row["nopol"],
+            "qty": row["qty"], "koli": row["koli"],
+            "freight": row["freight"], "polis": row["polis"], "insurance": row["insurance"],
+            "spsi": row["spsi"], "forklift": row["forklift"],
+            "old_grand_total": old_gt, "new_grand_total": new_gt,
+        })
+    return {
+        "total_rows": len(rows),
+        "matched": len(matched),
+        "not_found": not_found,
+        "invoice_value_changes": inv_changes,
+        "sample": matched[:60],
+    }
+
+@app.post("/api/import/awb-detail/apply")
+async def import_awb_detail_apply(file: UploadFile = File(...), user: dict = Depends(require_role("finance", "administrator"))):
+    content = await file.read()
+    rows = _parse_report_detail(content)
+    exact, norm = await _report_build_map()
+    updated, not_found, journals = 0, [], 0
+    for row in rows:
+        aid = exact.get(row["awb_number"].lower()) or norm.get(_rep_norm_awb(row["awb_number"]))
+        if not aid:
+            not_found.append(row["awb_number"])
+            continue
+        awb = await db.awb_orders.find_one({"_id": aid})
+        tax_pct = float(awb.get("tax_percentage") or 0)
+        new_tax = round(row["freight"] * tax_pct / 100, 2)
+        addons_total = round(row["polis"] + row["insurance"] + row["spsi"] + row["forklift"], 2)
+        new_gt = round(row["freight"] + new_tax + addons_total, 2)
+        upd = {
+            "total_tariff": row["freight"], "tax_amount": new_tax,
+            "addons_total": addons_total, "grand_total": new_gt,
+            "received_polis_amount": row["polis"], "received_asuransi_amount": row["insurance"],
+            "spsi_enabled": row["spsi"] > 0, "spsi_amount": row["spsi"],
+            "sewa_forklift_enabled": row["forklift"] > 0, "sewa_forklift_amount": row["forklift"],
+            "updated_at": datetime.now(timezone.utc), "updated_by": user["id"],
+        }
+        if row["status_pengiriman"]:
+            upd["status_pengiriman"] = row["status_pengiriman"]
+        if row["transport"]:
+            upd["fleet_type"] = row["transport"]
+        if row["origin"]:
+            upd["origin"] = row["origin"]
+        if row["destination"]:
+            upd["destination"] = row["destination"]
+        if row["nopol"]:
+            upd["nopol"] = row["nopol"]
+        if row["qty"]:
+            upd["qty_kg"] = row["qty"]
+        if row["koli"] is not None:
+            upd["koli_count"] = row["koli"]
+        if row["work_type"]:
+            upd["work_type"] = row["work_type"]
+        # pickup date -> created_at
+        pk = row["pickup"]
+        if pk:
+            try:
+                if isinstance(pk, datetime):
+                    upd["created_at"] = pk.replace(tzinfo=timezone.utc)
+                else:
+                    upd["created_at"] = datetime.fromisoformat(str(pk)[:19]).replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+        await db.awb_orders.update_one({"_id": aid}, {"$set": upd})
+        awb2 = await db.awb_orders.find_one({"_id": aid})
+        try:
+            sync = await resync_awb_tariff_journals(awb2)
+            journals += len(sync.get("adjusted", []))
+        except Exception:
+            pass
+        updated += 1
+    try:
+        await log_activity(user, "import", "awb_order", "-",
+                           f"Import Detail AWB: {updated} di-update, {len(not_found)} tidak ditemukan", {"updated": updated, "not_found": len(not_found)})
+    except Exception:
+        pass
+    return {"updated": updated, "not_found": not_found, "journals_adjusted": journals}
+
+
+# ===========================================================================
 # ADMIN — Koreksi Tarif AWB (super admin only). Ubah total_tariff + auto-sync jurnal.
 # ===========================================================================
 class TariffCorrectionIn(BaseModel):
