@@ -2236,8 +2236,289 @@ async def resync_awb_tariff_journals(awb) -> dict:
     return {"adjusted": adjusted}
 
 
-@app.post("/api/orders")
-async def create_order(data: OrderIn, user: dict = Depends(require_role("operation"))):
+# ---------------------------------------------------------------------------
+# SUPER EDIT (Administrator) — edit apa pun via No AWB, jurnal/neraca dihitung ulang
+# ---------------------------------------------------------------------------
+_SE_DETAIL_FIELDS = [
+    "awb_number", "consignee", "sender_name", "reff_no", "company_name",
+    "origin", "destination", "nopol", "status_pengiriman", "work_type",
+    "item_description", "goods_content", "received_by_name",
+]
+_SE_ADDON_FIELDS = ["received_polis_amount", "received_asuransi_amount", "spsi_amount", "sewa_forklift_amount"]
+
+def _se_compute_financials(o, ch):
+    """Hitung total_tariff/tax/addons/grand_total dari (o + changes). Override eksplisit menang."""
+    g = lambda k, d=None: ch[k] if k in ch else o.get(k, d)
+    is_charter = bool(g("is_charter", False))
+    if "total_tariff" in ch:
+        total = float(ch["total_tariff"] or 0)
+    elif is_charter:
+        total = round(float(g("charter_amount", 0) or 0), 2)
+    else:
+        total = round(float(g("tariff_per_kg", 0) or 0) * float(g("qty_kg", 0) or 0), 2)
+    pct = float(g("tax_percentage", 0) or 0)
+    tax = float(ch["tax_amount"]) if "tax_amount" in ch else round(total * pct / 100, 2)
+    if "addons_total" in ch:
+        addons = float(ch["addons_total"] or 0)
+    else:
+        addons = round(sum(float(g(k, 0) or 0) for k in _SE_ADDON_FIELDS), 2)
+    gt = float(ch["grand_total"]) if "grand_total" in ch else round(total + tax + addons, 2)
+    return round(total, 2), round(tax, 2), round(addons, 2), round(gt, 2)
+
+def _se_canonical_contrib(dpp, tax, gt, status, has_ar, group_dpp, group_tax, cash_acct):
+    """Kontribusi net (debit-credit) per akun untuk state final AWB — cocok dg jurnal yg dibangun apply."""
+    d = {}
+    def add(a, v): d[a] = round(d.get(a, 0) + v, 2)
+    add("1290", dpp); add("2390", -dpp)                       # PYMHD
+    if status in ("Reconciled", "Invoiced", "Paid"):
+        add("2390", dpp); add("4101", -dpp)                   # Revenue recognition
+    if has_ar:
+        gross = round(group_dpp + group_tax, 2)
+        add("1201", gross); add("1290", -group_dpp)
+        if group_tax > 0:
+            add("2210", -group_tax)                           # Invoice / AR + PPN
+    if status == "Paid":
+        add(cash_acct, gt); add("1201", -gt)                  # Payment
+    return d
+
+async def _se_refs_contrib(refs):
+    d = {}
+    for rt, rid in refs:
+        async for j in db.journal_entries.find({"reference_type": rt, "reference_id": rid}):
+            for l in j.get("lines", []):
+                a = l["account_code"]
+                d[a] = round(d.get(a, 0) + float(l.get("debit") or 0) - float(l.get("credit") or 0), 2)
+    return d
+
+async def _se_context(o, ch):
+    """Kumpulkan konteks utk preview & apply: field final, status, invoice group, kontribusi lama/baru."""
+    oid = o["_id"]
+    total, tax, addons, gt = _se_compute_financials(o, ch)
+    target_status = ch.get("status") or o.get("status") or "Open"
+    inv = await db.invoices.find_one({"$or": [{"awb_id": oid}, {"awb_ids": oid}]})
+    inv_number = ch.get("invoice_number")
+    will_have_invoice = bool(inv) or bool(inv_number)
+    has_ar = will_have_invoice and target_status in ("Invoiced", "Paid")
+    # group dpp/tax dengan nilai AWB ini diganti ke NEW
+    group_dpp, group_tax = total, tax
+    if inv:
+        ids = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+        others = await db.awb_orders.find({"_id": {"$in": [i for i in ids if i != oid]}}).to_list(200)
+        group_dpp = round(total + sum(float(a.get("total_tariff") or 0) for a in others), 2)
+        group_tax = round(tax + sum(float(a.get("tax_amount") or 0) for a in others), 2)
+    cash_acct = ch.get("cash_account_code") or o.get("cash_account_code") or "1101"
+    # OLD contrib = jurnal AWB ini (PYMHD/revenue/payment) + jurnal AR invoice group
+    refs = [("awb_order_pymhd", str(oid)), ("awb_revenue_recognition", str(oid)), ("payment", str(oid))]
+    if inv:
+        refs.append(("invoice", str(inv["_id"])))
+    old = await _se_refs_contrib(refs)
+    new = _se_canonical_contrib(total, tax, gt, target_status, has_ar, group_dpp, group_tax, cash_acct)
+    return {
+        "total": total, "tax": tax, "addons": addons, "grand_total": gt,
+        "target_status": target_status, "inv": inv, "inv_number": inv_number,
+        "has_ar": has_ar, "group_dpp": group_dpp, "group_tax": group_tax,
+        "cash_acct": cash_acct, "old": old, "new": new,
+    }
+
+async def _se_neraca_diff(ctx):
+    now = datetime.now(timezone.utc)
+    sums = await _balance_until(now)
+    accts = await db.chart_of_accounts.find({}).to_list(500)
+    name_of = {a["code"]: a.get("name", a["code"]) for a in accts}
+    codes = set(list(ctx["old"].keys()) + list(ctx["new"].keys()))
+    rows = []
+    for c in sorted(codes):
+        delta = round(ctx["new"].get(c, 0) - ctx["old"].get(c, 0), 2)
+        if abs(delta) < 0.005:
+            continue
+        s = sums.get(c, {"debit": 0, "credit": 0})
+        before = round(s["debit"] - s["credit"], 2)
+        rows.append({"code": c, "name": name_of.get(c, c),
+                     "before": before, "after": round(before + delta, 2), "delta": delta})
+    return rows
+
+
+@app.get("/api/admin/super-edit/lookup")
+async def super_edit_lookup(awb: str, user: dict = Depends(require_role("administrator"))):
+    o = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awb.strip())}$", "$options": "i"}})
+    if not o:
+        raise HTTPException(404, f"AWB '{awb}' tidak ditemukan")
+    oid = o["_id"]
+    inv = await db.invoices.find_one({"$or": [{"awb_id": oid}, {"awb_ids": oid}]})
+    inv_group = []
+    if inv:
+        ids = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+        for a in await db.awb_orders.find({"_id": {"$in": ids}}).to_list(200):
+            inv_group.append({"id": str(a["_id"]), "awb_number": a.get("awb_number"),
+                              "total_tariff": a.get("total_tariff"), "grand_total": a.get("grand_total"),
+                              "status": a.get("status")})
+    journals = []
+    async for j in db.journal_entries.find({"reference_id": str(oid)}).sort("date", 1):
+        journals.append({"date": (j.get("date").isoformat() if j.get("date") else None),
+                         "type": j.get("reference_type"), "description": j.get("description"),
+                         "lines": [{"code": l["account_code"], "name": l.get("account_name"),
+                                    "debit": l.get("debit"), "credit": l.get("credit")} for l in j.get("lines", [])]})
+    cust = await db.customers.find_one({"_id": o.get("customer_id")}) if o.get("customer_id") else None
+    return {
+        "awb": serialize(o),
+        "customer_name": (cust or {}).get("name"),
+        "invoice": serialize(inv) if inv else None,
+        "invoice_group": inv_group,
+        "journals": journals,
+    }
+
+
+@app.post("/api/admin/super-edit/preview")
+async def super_edit_preview(payload: dict, user: dict = Depends(require_role("administrator"))):
+    o = await db.awb_orders.find_one({"_id": _oid(payload.get("awb_id"))})
+    if not o:
+        raise HTTPException(404, "AWB tidak ditemukan")
+    ch = payload.get("changes") or {}
+    ctx = await _se_context(o, ch)
+    diff = await _se_neraca_diff(ctx)
+    return {
+        "new_financials": {"total_tariff": ctx["total"], "tax_amount": ctx["tax"],
+                           "addons_total": ctx["addons"], "grand_total": ctx["grand_total"]},
+        "target_status": ctx["target_status"],
+        "neraca_changes": diff,
+        "neraca_will_change": len(diff) > 0,
+    }
+
+
+@app.post("/api/admin/super-edit/apply")
+async def super_edit_apply(payload: dict, user: dict = Depends(require_role("administrator"))):
+    o = await db.awb_orders.find_one({"_id": _oid(payload.get("awb_id"))})
+    if not o:
+        raise HTTPException(404, "AWB tidak ditemukan")
+    ch = payload.get("changes") or {}
+    oid = o["_id"]
+    ctx = await _se_context(o, ch)
+    now = datetime.now(timezone.utc)
+    # 1) susun field AWB final
+    upd = {}
+    for k in _SE_DETAIL_FIELDS + _SE_ADDON_FIELDS + ["tariff_per_kg", "qty_kg", "tax_percentage", "charter_amount", "is_charter", "cash_account_code"]:
+        if k in ch:
+            upd[k] = ch[k]
+    if "awb_number" in upd and upd["awb_number"] and upd["awb_number"] != o.get("awb_number"):
+        if await db.awb_orders.find_one({"awb_number": upd["awb_number"], "_id": {"$ne": oid}}):
+            raise HTTPException(400, f"Nomor AWB '{upd['awb_number']}' sudah dipakai")
+    if "pickup_date" in ch and ch["pickup_date"]:
+        try:
+            y, m, d = [int(x) for x in ch["pickup_date"].split("-")]
+            upd["created_at"] = datetime(y, m, d, tzinfo=timezone.utc)
+        except Exception:
+            raise HTTPException(400, "pickup_date harus YYYY-MM-DD")
+    upd["total_tariff"] = ctx["total"]; upd["tax_amount"] = ctx["tax"]
+    upd["addons_total"] = ctx["addons"]; upd["grand_total"] = ctx["grand_total"]
+    target = ctx["target_status"]
+    upd["status"] = target
+    upd["revenue_recognized"] = target in ("Reconciled", "Invoiced", "Paid")
+    upd["updated_at"] = now; upd["updated_by"] = user["id"]
+    await db.awb_orders.update_one({"_id": oid}, {"$set": upd})
+
+    # 2) invoice handling
+    inv = ctx["inv"]
+    inv_number = ch.get("invoice_number")
+    if inv_number:
+        if inv:
+            await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"invoice_number": inv_number}})
+        else:
+            newinv = {"awb_id": oid, "awb_ids": [oid], "invoice_number": inv_number,
+                      "created_at": now, "invoice_date": None, "ar_recognized": False, "created_by": user["id"]}
+            r = await db.invoices.insert_one(newinv)
+            inv = await db.invoices.find_one({"_id": r.inserted_id})
+    if inv:
+        inv_date = None
+        if ch.get("invoice_date"):
+            try:
+                y, m, d = [int(x) for x in ch["invoice_date"].split("-")]
+                inv_date = datetime(y, m, d, tzinfo=timezone.utc)
+            except Exception:
+                pass
+        ar_on = target in ("Invoiced", "Paid")
+        setv = {"ar_recognized": ar_on}
+        if ar_on:
+            setv["invoice_date"] = inv_date or inv.get("invoice_date") or o.get("created_at") or now
+            setv["first_printed_at"] = inv.get("first_printed_at") or setv["invoice_date"]
+        await db.invoices.update_one({"_id": inv["_id"]}, {"$set": setv})
+        inv = await db.invoices.find_one({"_id": inv["_id"]})
+
+    # 3) rebuild jurnal AWB ini secara deterministik
+    for rt in ("awb_order_pymhd", "awb_revenue_recognition", "payment"):
+        await db.journal_entries.delete_many({"reference_type": rt, "reference_id": str(oid)})
+    created = o.get("created_at") or now
+    if ctx["total"] > 0:
+        await insert_journal_direct(date=created, description=f"PYMHD (super-edit) - {upd.get('awb_number', o['awb_number'])}",
+            lines=[{"account_code": "1290", "debit": ctx["total"], "credit": 0},
+                   {"account_code": "2390", "debit": 0, "credit": ctx["total"]}],
+            reference_type="awb_order_pymhd", reference_id=str(oid), posted_by=user["id"])
+    if target in ("Reconciled", "Invoiced", "Paid") and ctx["total"] > 0:
+        await insert_journal_direct(date=created, description=f"Revenue (super-edit) - {upd.get('awb_number', o['awb_number'])}",
+            lines=[{"account_code": "2390", "debit": ctx["total"], "credit": 0},
+                   {"account_code": "4101", "debit": 0, "credit": ctx["total"]}],
+            reference_type="awb_revenue_recognition", reference_id=str(oid), posted_by=user["id"])
+    # invoice AR (group)
+    if inv:
+        if inv.get("ar_recognized"):
+            await rebuild_invoice_ar_journal(inv, user["id"])
+        else:
+            await db.journal_entries.delete_many({"reference_type": "invoice", "reference_id": str(inv["_id"])})
+    # payment
+    if target == "Paid" and ctx["grand_total"] > 0:
+        await insert_journal_direct(date=(inv.get("invoice_date") if inv else None) or created,
+            description=f"Payment (super-edit) - {upd.get('awb_number', o['awb_number'])}",
+            lines=[{"account_code": ctx["cash_acct"], "debit": ctx["grand_total"], "credit": 0},
+                   {"account_code": "1201", "debit": 0, "credit": ctx["grand_total"]}],
+            reference_type="payment", reference_id=str(oid), posted_by=user["id"])
+        await db.awb_orders.update_one({"_id": oid}, {"$set": {"paid_at": now, "cash_account_code": ctx["cash_acct"]}})
+
+    fresh = await db.awb_orders.find_one({"_id": oid})
+    return {"ok": True, "awb": serialize(fresh),
+            "new_financials": {"total_tariff": ctx["total"], "tax_amount": ctx["tax"],
+                               "addons_total": ctx["addons"], "grand_total": ctx["grand_total"]},
+            "status": target}
+
+
+@app.post("/api/admin/super-edit/split-invoice")
+async def super_edit_split_invoice(payload: dict, user: dict = Depends(require_role("administrator"))):
+    """Pecah 1 AWB keluar dari invoice gabungan → invoice sendiri (atau un-invoice bila nomor kosong)."""
+    inv = await db.invoices.find_one({"_id": _oid(payload.get("invoice_id"))})
+    if not inv:
+        raise HTTPException(404, "Invoice tidak ditemukan")
+    oid = _oid(payload.get("awb_id"))
+    ids = inv.get("awb_ids") or ([inv["awb_id"]] if inv.get("awb_id") else [])
+    if oid not in ids:
+        raise HTTPException(400, "AWB tidak ada di invoice ini")
+    if len(ids) <= 1:
+        raise HTTPException(400, "Invoice hanya berisi 1 AWB — tidak ada yang bisa dipecah")
+    remaining = [i for i in ids if i != oid]
+    new_number = (payload.get("new_invoice_number") or "").strip()
+    now = datetime.now(timezone.utc)
+    # 1) update invoice induk (sisa AWB) + rebuild AR
+    await db.invoices.update_one({"_id": inv["_id"]}, {"$set": {"awb_ids": remaining, "awb_id": remaining[0]}})
+    inv = await db.invoices.find_one({"_id": inv["_id"]})
+    if inv.get("ar_recognized"):
+        await rebuild_invoice_ar_journal(inv, user["id"])
+    # 2) AWB yang dipecah → invoice sendiri (bila ada nomor) atau un-invoice
+    awb = await db.awb_orders.find_one({"_id": oid})
+    if new_number:
+        if await db.invoices.find_one({"invoice_number": new_number}):
+            raise HTTPException(400, f"Nomor invoice '{new_number}' sudah dipakai")
+        newinv = {"awb_id": oid, "awb_ids": [oid], "invoice_number": new_number, "created_at": now,
+                  "invoice_date": inv.get("invoice_date"), "first_printed_at": inv.get("first_printed_at"),
+                  "ar_recognized": bool(inv.get("ar_recognized")), "created_by": user["id"]}
+        r = await db.invoices.insert_one(newinv)
+        newinv = await db.invoices.find_one({"_id": r.inserted_id})
+        if newinv.get("ar_recognized"):
+            await rebuild_invoice_ar_journal(newinv, user["id"])
+        return {"ok": True, "parent_invoice": inv.get("invoice_number"), "split_invoice": new_number}
+    else:
+        # un-invoice AWB yg dipecah: hapus AR share-nya via resync (dia tak lagi di invoice mana pun)
+        await db.awb_orders.update_one({"_id": oid}, {"$set": {"status": "Reconciled"}})
+        await resync_awb_tariff_journals(await db.awb_orders.find_one({"_id": oid}))
+        return {"ok": True, "parent_invoice": inv.get("invoice_number"), "split_invoice": None, "unlinked": True}
+
+
     # Koli mandatory
     if data.koli_count is None or int(data.koli_count) <= 0:
         raise HTTPException(400, "Koli wajib diisi (lebih dari 0)")
