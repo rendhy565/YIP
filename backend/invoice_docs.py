@@ -64,7 +64,7 @@ def _esc(s):
     return _html.escape(str(s)) if s is not None else ""
 
 
-def _render_invoice_inner(data, override_date=None):
+def _render_invoice_inner(data, override_date=None, only=None):
     invoice = data["invoice"]
     awb = data.get("awb") or {}
     awbs = data.get("awbs") or ([awb] if awb else [])
@@ -205,7 +205,7 @@ def _render_invoice_inner(data, override_date=None):
         lrow("GRAND TOTAL", _fmt_idr(grand_total), bold=True, grey=True)
     )
 
-    return f"""
+    page1 = f"""
 <!-- PAGE 1: COVER -->
 <div>
   <table width="100%"><tr>
@@ -276,11 +276,9 @@ def _render_invoice_inner(data, override_date=None):
       </div>
     </td>
   </tr></table>
-</div>
+</div>"""
 
-<!-- PAGE BREAK -->
-<div style="page-break-before: always;"></div>
-
+    page2 = f"""
 <!-- PAGE 2: LAMPIRAN (detail per template) -->
 <div>
   <table width="100%"><tr>
@@ -327,8 +325,13 @@ def _render_invoice_inner(data, override_date=None):
       <table width="100%" style="font-size:9px;">{lamp_totals}</table>
     </td>
   </tr></table>
-</div>
-"""
+</div>"""
+
+    if only == "lampiran":
+        return page2
+    if only == "cover":
+        return page1
+    return page1 + '\n<div style="page-break-before: always;"></div>\n' + page2
 
 
 _STYLE = """<style>
@@ -340,8 +343,8 @@ table { border-collapse: collapse; }
 </style>"""
 
 
-def render_invoice_html(data, override_date=None):
-    return f'<html><head><meta charset="utf-8"/>{_STYLE}</head><body>{_render_invoice_inner(data, override_date)}</body></html>'
+def render_invoice_html(data, override_date=None, only=None):
+    return f'<html><head><meta charset="utf-8"/>{_STYLE}</head><body>{_render_invoice_inner(data, override_date, only=only)}</body></html>'
 
 
 def render_invoice_pdf(data, override_date=None):
@@ -350,6 +353,17 @@ def render_invoice_pdf(data, override_date=None):
     result = pisa.CreatePDF(src=html, dest=buf, encoding="utf-8")
     if result.err:
         raise RuntimeError("Gagal render PDF invoice")
+    buf.seek(0)
+    return buf.read()
+
+
+def render_lampiran_pdf(data, override_date=None):
+    """Render HANYA halaman Lampiran (page 2) invoice — tanpa cover."""
+    html = render_invoice_html(data, override_date=override_date, only="lampiran")
+    buf = io.BytesIO()
+    result = pisa.CreatePDF(src=html, dest=buf, encoding="utf-8")
+    if result.err:
+        raise RuntimeError("Gagal render PDF lampiran")
     buf.seek(0)
     return buf.read()
 

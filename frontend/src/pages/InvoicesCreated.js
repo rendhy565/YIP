@@ -33,6 +33,7 @@ export default function InvoicesCreated() {
   const [bulkChecking, setBulkChecking] = useState(false);
   const [bulkValidation, setBulkValidation] = useState(null);
   const [bulkDownloading, setBulkDownloading] = useState(false);
+  const [bulkMode, setBulkMode] = useState("full"); // "full" = cover+lampiran (mark tercetak) | "lampiran" = lampiran saja (tidak mark)
   const [poEdit, setPoEdit] = useState({}); // { invoice_id: po_number_string }
   const [savingPo, setSavingPo] = useState({});
   const [showImport, setShowImport] = useState(false);
@@ -302,12 +303,13 @@ export default function InvoicesCreated() {
     finally { setPrinting(false); }
   };
 
-  const openBulkDl = () => {
+  const openBulkDl = (mode = "full") => {
     const ids = selected.size > 0 ? Array.from(selected) : [];
     const nums = invoices.filter((i) => ids.includes(i.id)).map((i) => i.invoice_number);
     setBulkText(nums.join("\n"));
     setBulkValidation(null);
     setBulkDlDate(toYMD());
+    setBulkMode(mode);
     setShowBulkDl(true);
   };
   const checkBulk = async () => {
@@ -331,6 +333,19 @@ export default function InvoicesCreated() {
       toast.success(`${found} invoice didownload (ZIP) — tanggal cetak diupdate`);
       setShowBulkDl(false);
       load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setBulkDownloading(false); }
+  };
+  const downloadBulkLampiran = async () => {
+    setBulkDownloading(true);
+    try {
+      const r = await api.post("/invoices/bulk-download-lampiran", { invoice_numbers: [bulkText] }, { responseType: "blob" });
+      const found = r.headers["x-found-count"] || "";
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement("a"); a.href = url; a.download = `Lampiran_${found}.zip`;
+      document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+      toast.success(`${found} lampiran didownload (ZIP) — status invoice TIDAK diubah`);
+      setShowBulkDl(false);
     } catch (e) { toast.error(errMsg(e)); }
     finally { setBulkDownloading(false); }
   };
@@ -412,8 +427,11 @@ export default function InvoicesCreated() {
               <Button data-testid="bulk-print-pdf-btn" variant="secondary" onClick={bulkPrint}>
                 <Printer size={14}/> Print to PDF ({selected.size || filtered.length})
               </Button>
-              <Button data-testid="bulk-download-zip-btn" variant="secondary" onClick={openBulkDl} className="!bg-purple-50 !text-purple-800 hover:!bg-purple-100 !border-purple-300">
+              <Button data-testid="bulk-download-zip-btn" variant="secondary" onClick={() => openBulkDl("full")} className="!bg-purple-50 !text-purple-800 hover:!bg-purple-100 !border-purple-300">
                 <Download size={14}/> Bulk Download ZIP
+              </Button>
+              <Button data-testid="bulk-download-lampiran-btn" variant="secondary" onClick={() => openBulkDl("lampiran")} className="!bg-teal-50 !text-teal-800 hover:!bg-teal-100 !border-teal-300">
+                <Download size={14}/> Bulk Download Lampiran (ZIP)
               </Button>
               </>
             )}
@@ -730,10 +748,12 @@ export default function InvoicesCreated() {
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="bulk-download-modal">
           <Card className="w-full max-w-lg p-6">
             <div className="flex items-start justify-between mb-4">
-              <h3 className="font-heading font-bold text-xl"><Download className="inline mr-2" size={18}/>Bulk Download Invoice (ZIP)</h3>
+              <h3 className="font-heading font-bold text-xl"><Download className="inline mr-2" size={18}/>{bulkMode === "lampiran" ? "Bulk Download Lampiran (ZIP)" : "Bulk Download Invoice (ZIP)"}</h3>
               <button onClick={() => setShowBulkDl(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
-            <p className="text-xs text-slate-500 mb-2">Tempel nomor-nomor invoice yang mau di-download. Pemisah bebas (baris baru, koma, titik-koma, spasi). Hasil: 1 file PDF per invoice (cover + lampiran, 2 halaman), diberi nama = nomor invoice, semua dibungkus dalam 1 ZIP.</p>
+            <p className="text-xs text-slate-500 mb-2">{bulkMode === "lampiran"
+              ? "Tempel nomor-nomor invoice. Hasil: 1 PDF LAMPIRAN saja (halaman detail) per invoice, dibungkus 1 ZIP. Status invoice TIDAK diubah (tidak ditandai tercetak/invoiced, tidak posting jurnal)."
+              : "Tempel nomor-nomor invoice yang mau di-download. Pemisah bebas (baris baru, koma, titik-koma, spasi). Hasil: 1 file PDF per invoice (cover + lampiran, 2 halaman), diberi nama = nomor invoice, semua dibungkus dalam 1 ZIP."}</p>
             <textarea
               data-testid="bulk-download-textarea"
               value={bulkText}
@@ -742,6 +762,7 @@ export default function InvoicesCreated() {
               className="w-full border border-slate-300 rounded p-2 text-sm font-mono"
               placeholder={"INV/AR-EMR/0526/00859\nINV/AR-EMR/0526/00860\n..."}
             />
+            {bulkMode !== "lampiran" && (
             <div className="mt-3">
               <Label>Tanggal Invoice (dipakai di PDF & jurnal) *</Label>
               <Input
@@ -752,6 +773,7 @@ export default function InvoicesCreated() {
               />
               <p className="text-[11px] text-slate-500 mt-1">Tanggal ini di-set ke tiap invoice yang didownload (Date & Due Date +30 hari) <strong>dan</strong> disinkronkan ke tanggal jurnal Piutang/PPN.</p>
             </div>
+            )}
             {bulkValidation && (
               <div className="mt-3 text-sm space-y-2" data-testid="bulk-download-validation">
                 <div className="rounded bg-emerald-50 border border-emerald-200 px-3 py-2 text-emerald-900">
@@ -769,6 +791,10 @@ export default function InvoicesCreated() {
               {!bulkValidation || bulkValidation.found.length === 0 ? (
                 <Button data-testid="bulk-download-check-btn" onClick={checkBulk} disabled={bulkChecking || !bulkText.trim()}>
                   <Search size={14}/> {bulkChecking ? "Mengecek..." : "Cek Nomor Invoice"}
+                </Button>
+              ) : bulkMode === "lampiran" ? (
+                <Button data-testid="bulk-download-lampiran-confirm-btn" onClick={downloadBulkLampiran} disabled={bulkDownloading}>
+                  <Download size={14}/> {bulkDownloading ? "Menyiapkan ZIP..." : `Download ${bulkValidation.found.length} Lampiran`}
                 </Button>
               ) : (
                 <Button data-testid="bulk-download-confirm-btn" onClick={downloadBulk} disabled={bulkDownloading || !bulkDlDate}>

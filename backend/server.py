@@ -3379,6 +3379,46 @@ async def bulk_invoice_download(data: BulkInvoiceDownloadIn, user: dict = Depend
     }
     return StreamingResponse(zip_buf, media_type="application/zip", headers=headers)
 
+
+@app.post("/api/invoices/bulk-download-lampiran")
+async def bulk_invoice_download_lampiran(data: BulkInvoiceDownloadIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Download HANYA lampiran (page 2) tiap invoice sebagai ZIP.
+    TIDAK menandai invoiced/tercetak & TIDAK memposting jurnal (print_date diabaikan)."""
+    import zipfile
+    import invoice_docs
+    nums = _parse_invoice_numbers(data.invoice_numbers)
+    if not nums:
+        raise HTTPException(400, "Tidak ada nomor invoice")
+    zip_buf = io.BytesIO()
+    found = 0
+    missing = []
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for num in nums:
+            inv = await db.invoices.find_one({"invoice_number": {"$regex": f"^{re.escape(num)}$", "$options": "i"}})
+            if not inv:
+                missing.append(num)
+                continue
+            # sengaja TIDAK memanggil _apply_invoice_print → tidak mengubah status/jurnal
+            full = await build_invoice_full(inv)
+            try:
+                pdf = invoice_docs.render_lampiran_pdf(full)
+            except Exception:
+                missing.append(f"{num} (gagal render)")
+                continue
+            safe = re.sub(r'[\\/:*?"<>|]+', "_", inv["invoice_number"]) + "_Lampiran.pdf"
+            zf.writestr(safe, pdf)
+            found += 1
+    if found == 0:
+        raise HTTPException(404, f"Tidak ada invoice ditemukan. {', '.join(missing[:20])}")
+    zip_buf.seek(0)
+    headers = {
+        "Content-Disposition": f'attachment; filename="Lampiran_{found}.zip"',
+        "X-Found-Count": str(found),
+        "X-Missing": ", ".join(missing[:50]),
+        "Access-Control-Expose-Headers": "X-Found-Count, X-Missing, Content-Disposition",
+    }
+    return StreamingResponse(zip_buf, media_type="application/zip", headers=headers)
+
 async def _apply_invoice_print(inv, print_date, use_old_date, posted_by):
     """Set invoice_date + print bookkeeping. On FIRST print → post AR journal.
     On RE-print dengan tanggal baru → re-date jurnal AR (rebuild) agar akuntansi ikut berubah.
