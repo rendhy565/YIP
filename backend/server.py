@@ -232,6 +232,18 @@ def require_role(*roles: str):
         return user
     return dep
 
+def require_feature_perm(module_key: str, feature_key: str):
+    """Gate endpoint by granular permission: user.permission_actions[module][feature] == True.
+    Administrator selalu diizinkan (permission_actions admin auto-seeded semua True)."""
+    async def dep(user: dict = Depends(get_current_user)) -> dict:
+        if user.get("role") == "administrator":
+            return user
+        pa = user.get("permission_actions") or {}
+        if not (isinstance(pa.get(module_key), dict) and pa[module_key].get(feature_key)):
+            raise HTTPException(status_code=403, detail="Akses ditolak: Anda tidak punya izin untuk aksi ini")
+        return user
+    return dep
+
 # Master katalog modul + default permissions per role
 MODULES = [
     {"key": "orders_input", "label": "Input Order", "default_roles": ["operation"]},
@@ -251,6 +263,7 @@ MODULES = [
     {"key": "purchase_orders", "label": "PO / Surat Perintah Vendor", "default_roles": ["operation", "finance"]},
     {"key": "user_management", "label": "User Management", "default_roles": []},
     {"key": "dashboard", "label": "Dashboard", "default_roles": ["operation", "finance"]},
+    {"key": "approval", "label": "Approval", "default_roles": []},
     # ---- Optional modules (toggled globally via feature flags). Permission per-user is still required. ----
     {"key": "accounting", "label": "Akunting (PSAK)", "default_roles": ["finance"], "is_feature": True},
     {"key": "hr", "label": "HR & Payroll", "default_roles": [], "is_feature": True},
@@ -364,6 +377,11 @@ MODULE_FEATURES: dict = {
         ("delete", "Hapus User"),
         ("change_password", "Ubah Password User"),
         ("edit_permissions", "Edit Permission User"),
+    ],
+    "approval": [
+        ("view", "Lihat & Akses Modul Approval"),
+        ("approve", "Setujui Dokumen"),
+        ("reject", "Tolak Dokumen"),
     ],
     "accounting": [
         ("view_journal", "Lihat Jurnal"),
@@ -7554,7 +7572,7 @@ async def list_approvals(
     scope: Optional[str] = None,  # "pending_for_me" | "mine" | "all"
     document_type: Optional[str] = None,
     status_v: Optional[str] = None,  # Pending / Approved / Rejected
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_feature_perm("approval", "view")),
 ):
     q: dict = {}
     if document_type:
@@ -7582,6 +7600,11 @@ async def list_approvals(
 
 @app.get("/api/approvals/pending-count")
 async def approvals_pending_count(user: dict = Depends(get_current_user)):
+    # Badge di sidebar dipoll semua user login — kembalikan 0 (tanpa error) bila tak punya izin Approval
+    if user.get("role") != "administrator":
+        pa = user.get("permission_actions") or {}
+        if not (isinstance(pa.get("approval"), dict) and pa["approval"].get("view")):
+            return {"count": 0}
     docs = await db.approvals.find({"status": "Pending"}).to_list(2000)
     n = 0
     for d in docs:
@@ -7594,7 +7617,7 @@ async def approvals_pending_count(user: dict = Depends(get_current_user)):
     return {"count": n}
 
 @app.get("/api/approvals/{aid}")
-async def get_approval(aid: str, user: dict = Depends(get_current_user)):
+async def get_approval(aid: str, user: dict = Depends(require_feature_perm("approval", "view"))):
     doc = await db.approvals.find_one({"_id": _oid(aid)})
     if not doc:
         raise HTTPException(404, "Approval not found")
@@ -7647,11 +7670,11 @@ async def _apply_approval_action(aid: str, user: dict, action: str, note: Option
     return serialize(await db.approvals.find_one({"_id": _oid(aid)}))
 
 @app.post("/api/approvals/{aid}/approve")
-async def approve_action(aid: str, data: ApprovalActionIn, user: dict = Depends(get_current_user)):
+async def approve_action(aid: str, data: ApprovalActionIn, user: dict = Depends(require_feature_perm("approval", "approve"))):
     return await _apply_approval_action(aid, user, "approve", data.note)
 
 @app.post("/api/approvals/{aid}/reject")
-async def reject_action(aid: str, data: ApprovalActionIn, user: dict = Depends(get_current_user)):
+async def reject_action(aid: str, data: ApprovalActionIn, user: dict = Depends(require_feature_perm("approval", "reject"))):
     return await _apply_approval_action(aid, user, "reject", data.note)
 
 

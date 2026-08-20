@@ -31,7 +31,7 @@ const NAV = [
   { to: "/fixed-costs", label: "Expense", icon: Banknote, perm: "fixed_costs" },
 
   { type: "section", label: "Approval" },
-  { to: "/approvals", label: "Approval", icon: ClipboardCheck, perm: "*", badge: "approval_pending" },
+  { to: "/approvals", label: "Approval", icon: ClipboardCheck, perm: "approval", badge: "approval_pending" },
   { to: "/approvals/config", label: "Konfigurasi Approval", icon: SettingsIcon, perm: "*", adminOnly: true },
 
   { type: "section", label: "Master & Laporan" },
