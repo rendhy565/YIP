@@ -1593,7 +1593,7 @@ async def _write_activity_log(scope, body_bytes, status_code, pre_entity_label=N
     if method not in ("POST", "PUT", "PATCH", "DELETE") or not (200 <= status_code < 300):
         return
     path = scope.get("path", "")
-    skip_prefixes = ("/api/auth/", "/api/notifications/", "/api/activity-logs", "/api/navigation-logs")
+    skip_prefixes = ("/api/auth/", "/api/notifications/", "/api/activity-logs", "/api/navigation-logs", "/api/admin/super-edit")
     if any(path.startswith(p) for p in skip_prefixes):
         return
     headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}

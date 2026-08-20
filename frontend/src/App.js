@@ -46,6 +46,7 @@ import BankReconciliation from "./pages/BankReconciliation";
 import ImportExcel from "./pages/ImportExcel";
 import TariffCorrection from "./pages/TariffCorrection";
 import BulkImport from "./pages/BulkImport";
+import SuperEdit from "./pages/SuperEdit";
 import CustomerMerge from "./pages/CustomerMerge";
 import ImportCenter from "./pages/ImportCenter";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
@@ -153,6 +154,7 @@ export default function App() {
             <Route path="/admin/import-center" element={<Protected roles={["administrator"]}><Shell><ImportCenter /></Shell></Protected>} />
             <Route path="/admin/koreksi-tarif" element={<Protected roles={["administrator"]}><Shell><TariffCorrection /></Shell></Protected>} />
             <Route path="/admin/import-massal" element={<Protected roles={["administrator"]}><Shell><ImportCenter /></Shell></Protected>} />
+            <Route path="/admin/super-edit" element={<Protected roles={["administrator"]}><Shell><SuperEdit /></Shell></Protected>} />
             <Route path="/admin/gabung-customer" element={<Protected roles={["administrator"]}><Shell><CustomerMerge /></Shell></Protected>} />
             <Route path="/analytics" element={<Protected module="pnl"><Shell><AnalyticsDashboard /></Shell></Protected>} />
             <Route path="/panjar" element={<Protected module="fixed_costs"><Shell><PanjarKerja /></Shell></Protected>} />

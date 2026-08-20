@@ -1,5 +1,18 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Super Edit AWB (Administrator, override tak terbatas + auto-sync jurnal) (Jun 2026)
+- **Kebutuhan user:** admin bisa edit APA PUN di AWB/Invoice tanpa batas; jurnal double-entry & neraca dihitung ulang otomatis; tampilkan peringatan selisih Trial Balance sebelum commit; auto-cascade status (mis. paksa ke Invoiced/Paid → recognize revenue + posting AR/payment); bisa pecah AWB dari invoice gabungan; **TIDAK dicatat di Activity Log**.
+- **Backend** (`server.py` ~2240-2520): helper `_se_compute_financials` (hitung total/tax/addons/grand dari driver fields, override eksplisit menang), `_se_canonical_contrib` (kontribusi net per akun utk state final), `_se_refs_contrib` (kontribusi jurnal lama), `_se_context`, `_se_neraca_diff` (before/after/delta per akun vs `_balance_until`). Endpoint (semua `require_role("administrator")`):
+  - `GET /api/admin/super-edit/lookup?awb=` → awb full, customer, invoice, invoice_group[], journals[].
+  - `POST /api/admin/super-edit/preview` {awb_id, changes} → new_financials, target_status, neraca_changes[], neraca_will_change.
+  - `POST /api/admin/super-edit/apply` {awb_id, changes} → set field AWB, handle invoice (buat/update + ar_recognized bila Invoiced/Paid), rebuild jurnal deterministik (PYMHD/revenue/payment by reference_id=oid + AR via `rebuild_invoice_ar_journal`), set paid_at bila Paid.
+  - `POST /api/admin/super-edit/split-invoice` {invoice_id, awb_id, new_invoice_number} → pecah 1 AWB keluar dari invoice gabungan ke invoice sendiri (atau lepas jadi Reconciled bila nomor kosong), rebuild AR kedua invoice.
+- **Skip Activity Log:** `/api/admin/super-edit` ditambahkan ke `skip_prefixes` middleware `_write_activity_log` → aksi super-edit tidak masuk log.
+- **Frontend** (`pages/SuperEdit.js`, route `/admin/super-edit`, menu Administrator → "Super Edit AWB" icon Wand2): cari No AWB → form semua field (teks umum/rute, status dropdown, tgl AWB & invoice, No Invoice, nilai driver tariff_per_kg/qty/PPN%/charter + addon + akun kas, override langsung total/tax/addon/grand) → Pratinjau (panel new_financials + tabel selisih Neraca before/after/delta) → Terapkan. Panel "Invoice Gabungan" (bila >1 AWB) dengan tombol Pecah per AWB (prompt No Invoice baru). `changes` = diff form vs snapshot awal (override hanya dikirim bila diisi).
+- **Verifikasi (curl/python, testing agent DILARANG user):** (1) AWB 201189 (invoice punya AR journal): apply +111.111 lalu revert → TB balance & **delta baseline 0.0**, tariff restore persis, activity count TIDAK bertambah. (2) AWB 201934: apply meng-heal AR journal yg hilang (data gap lama) → tetap balance. (3) Split sintetis 2-AWB: parent tahan 1 AWB, invoice baru dapat AWB satunya, masing2 1 jurnal AR, TB balance delta 0, cleanup penuh. UI diverifikasi via screenshot (form load + placeholder override + toast "belum ada perubahan"). Perlu deploy backend+frontend.
+
+
+
 ## Import COST (Update Cost / Timpa + Jurnal) (Jun 2026)
 - **Kebutuhan:** importer "Import Data Excel" lama bersifat ADD/append (push item revenue + inc total + insert cost tiap kali; baris Selling<=0 di-skip) → tidak aman untuk upload ulang / update cost bertahap (revenue dobel, atau cost-only ter-skip). Solusi: importer COST terpisah. Pilihan user: jurnal langsung + timpa.
 - **Backend** (`server.py`): `_pick_cost_sheet` (pilih sheet DATA ALL BASE (2)/(...) via `_find_header_row`), `_parse_cost_rows` (baca AWB + Vendor1/2 total/status, Biaya Ops→Operational, Uang Jalan→Lintas), `_cost_match` (cocokkan by awb_number, gabung baris duplikat, hitung old vs new). Endpoint:
