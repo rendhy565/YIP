@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../compon
 import { fmtIDR, fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Save, PlayCircle, X } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 export default function AssetModule() {
   const [tab, setTab] = useState("assets");
@@ -60,8 +61,8 @@ export default function AssetModule() {
                 <div><Label>Kategori</Label><Input value={form.category} onChange={(e) => setForm({...form, category: e.target.value})} placeholder="Kendaraan / Komputer / dll"/></div>
                 <div><Label>Tgl Perolehan</Label><Input type="date" value={form.acquisition_date} onChange={(e) => setForm({...form, acquisition_date: e.target.value})}/></div>
                 <div><Label>Umur (bulan)</Label><Input type="number" value={form.useful_life_months} onChange={(e) => setForm({...form, useful_life_months: e.target.value})}/></div>
-                <div><Label>Harga Perolehan</Label><Input type="number" value={form.cost} onChange={(e) => setForm({...form, cost: e.target.value})}/></div>
-                <div><Label>Nilai Residu</Label><Input type="number" value={form.salvage_value} onChange={(e) => setForm({...form, salvage_value: e.target.value})}/></div>
+                <div><Label>Harga Perolehan</Label><NumberInput value={form.cost} onChange={(e) => setForm({...form, cost: e.target.value})}/></div>
+                <div><Label>Nilai Residu</Label><NumberInput value={form.salvage_value} onChange={(e) => setForm({...form, salvage_value: e.target.value})}/></div>
                 <div className="md:col-span-2"><Label>Catatan</Label><Input value={form.notes} onChange={(e) => setForm({...form, notes: e.target.value})}/></div>
               </div>
               <div className="flex justify-end gap-2 mt-3">

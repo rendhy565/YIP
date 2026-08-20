@@ -7,6 +7,7 @@ import { BadgeDollarSign, CheckCircle2, CheckSquare, Square, X, Search, Plus, Tr
 import { useCan } from "../lib/useCan";
 import FilterPresets from "../components/FilterPresets";
 import Pagination, { usePagination } from "../components/Pagination";
+import NumberInput from "../components/NumberInput";
 
 function todayStr() {
   const d = new Date();
@@ -366,7 +367,7 @@ export default function Payments() {
               <div className="text-xs font-bold mb-2 text-slate-700">Tambah Pembayaran Baru</div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div><Label className="!text-[10px]">Tanggal *</Label><Input data-testid="mp-date" type="date" value={newPay.payment_date} onChange={(e) => setNewPay({...newPay, payment_date: e.target.value})}/></div>
-                <div><Label className="!text-[10px]">Nominal (IDR) *</Label><Input data-testid="mp-amount" type="number" value={newPay.amount} onChange={(e) => setNewPay({...newPay, amount: e.target.value})} placeholder="0"/></div>
+                <div><Label className="!text-[10px]">Nominal (IDR) *</Label><NumberInput data-testid="mp-amount" value={newPay.amount} onChange={(e) => setNewPay({...newPay, amount: e.target.value})} placeholder="0"/></div>
                 <div><Label className="!text-[10px]">Metode</Label>
                   <select data-testid="mp-method" value={newPay.payment_method} onChange={(e) => setNewPay({...newPay, payment_method: e.target.value})} className="w-full px-2 py-2 border border-slate-300 rounded text-sm">
                     <option>Transfer</option><option>Cash</option><option>Cek</option><option>Giro</option><option>Lainnya</option>

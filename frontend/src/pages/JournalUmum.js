@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Save, X, BookOpen } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import NumberInput from "../components/NumberInput";
 
 export default function JournalUmum() {
   const { user } = useAuth();
@@ -116,8 +117,8 @@ export default function JournalUmum() {
                     </Select>
                   </Td>
                   <Td><Input value={l.memo || ""} onChange={(e) => updLine(i, "memo", e.target.value)}/></Td>
-                  <Td><Input type="number" className="text-right" value={l.debit} onChange={(e) => updLine(i, "debit", e.target.value)}/></Td>
-                  <Td><Input type="number" className="text-right" value={l.credit} onChange={(e) => updLine(i, "credit", e.target.value)}/></Td>
+                  <Td><NumberInput className="text-right" value={l.debit} onChange={(e) => updLine(i, "debit", e.target.value)}/></Td>
+                  <Td><NumberInput className="text-right" value={l.credit} onChange={(e) => updLine(i, "credit", e.target.value)}/></Td>
                   <Td><Button variant="ghost" onClick={() => removeLine(i)}><X size={14}/></Button></Td>
                 </tr>
               ))}

@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Plus, X, Trash2, FileSignature, MessageCircle, Edit2, ChevronDown, ChevronRight } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
+import NumberInput from "../components/NumberInput";
 
 function todayStr() {
   const d = new Date();
@@ -326,13 +327,13 @@ export default function PurchaseOrders() {
                         </div>
                         <div>
                           <Label className="!text-[10px] !mb-1">Qty</Label>
-                          <Input data-testid={`po-item-qty-${idx}`} type="number" step="0.01" value={it.qty} onChange={(e) => updateItemRow(idx, "qty", e.target.value)} placeholder="Mis. 320"/>
+                          <NumberInput decimal data-testid={`po-item-qty-${idx}`} value={it.qty} onChange={(e) => updateItemRow(idx, "qty", e.target.value)} placeholder="Mis. 320"/>
                         </div>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                         <div>
                           <Label className="!text-[10px] !mb-1">Harga (IDR) <span className="text-slate-400">(boleh kosong, diisi nanti)</span></Label>
-                          <Input data-testid={`po-item-harga-${idx}`} type="number" step="0.01" value={it.harga} onChange={(e) => updateItemRow(idx, "harga", e.target.value)} placeholder="Boleh kosong"/>
+                          <NumberInput data-testid={`po-item-harga-${idx}`} value={it.harga} onChange={(e) => updateItemRow(idx, "harga", e.target.value)} placeholder="Boleh kosong"/>
                         </div>
                         <div>
                           <Label className="!text-[10px] !mb-1">AWB <span className="text-slate-400">(boleh kosong)</span></Label>
@@ -388,8 +389,8 @@ export default function PurchaseOrders() {
                 <div><Label>Isi Barang</Label><Input data-testid="edit-item-desc" value={editItem.item.item_description || ""} onChange={(e) => setEditItem({ ...editItem, item: { ...editItem.item, item_description: e.target.value } })}/></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>Qty</Label><Input data-testid="edit-item-qty" type="number" step="0.01" value={editItem.item.qty || ""} onChange={(e) => setEditItem({ ...editItem, item: { ...editItem.item, qty: e.target.value } })}/></div>
-                <div><Label>Harga (IDR)</Label><Input data-testid="edit-item-harga" type="number" step="0.01" value={editItem.item.harga || ""} onChange={(e) => setEditItem({ ...editItem, item: { ...editItem.item, harga: e.target.value } })}/></div>
+                <div><Label>Qty</Label><NumberInput decimal data-testid="edit-item-qty" value={editItem.item.qty || ""} onChange={(e) => setEditItem({ ...editItem, item: { ...editItem.item, qty: e.target.value } })}/></div>
+                <div><Label>Harga (IDR)</Label><NumberInput data-testid="edit-item-harga" value={editItem.item.harga || ""} onChange={(e) => setEditItem({ ...editItem, item: { ...editItem.item, harga: e.target.value } })}/></div>
               </div>
               <div>
                 <Label>AWB</Label>

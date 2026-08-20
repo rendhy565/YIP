@@ -4,6 +4,7 @@ import { Card, PageHeader, Button, Input, Label, Table, Th, Td, StatusBadge } fr
 import { fmtIDR, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Search, Coins, X, Save, AlertTriangle } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 export default function TariffCorrection() {
   const [q, setQ] = useState("");
@@ -159,9 +160,8 @@ export default function TariffCorrection() {
 
             <div>
               <Label>Tarif Baru (DPP, tanpa PPN) *</Label>
-              <Input
+              <NumberInput
                 data-testid="tariff-new-input"
-                type="number"
                 value={newTariff}
                 onChange={(e) => setNewTariff(e.target.value)}
                 autoFocus

@@ -10,6 +10,7 @@ import Pagination, { usePagination } from "../components/Pagination";
 import CostListModal from "../components/CostListModal";
 import VendorSelect from "../components/VendorSelect";
 import { useCan } from "../lib/useCan";
+import NumberInput from "../components/NumberInput";
 
 function todayStr() {
   const d = new Date();
@@ -589,13 +590,13 @@ export default function Recap() {
                 </div>
                 {editForm.is_charter ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div><Label>Selling Total (IDR) *</Label><Input data-testid="edit-charter-amount" type="number" step="0.01" value={editForm.charter_amount} onChange={(e) => setEditForm({ ...editForm, charter_amount: e.target.value })} placeholder="contoh: 28000"/></div>
+                    <div><Label>Selling Total (IDR) *</Label><NumberInput data-testid="edit-charter-amount" value={editForm.charter_amount} onChange={(e) => setEditForm({ ...editForm, charter_amount: e.target.value })} placeholder="contoh: 28000"/></div>
                     <div><Label>PPN %</Label><Input type="number" step="0.01" value={editForm.tax_percentage} onChange={(e) => setEditForm({ ...editForm, tax_percentage: e.target.value })}/></div>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div><Label>Tarif/Kg *</Label><Input data-testid="edit-tariff" type="number" step="0.01" value={editForm.tariff_per_kg} onChange={(e) => setEditForm({ ...editForm, tariff_per_kg: e.target.value })}/></div>
-                    <div><Label>Qty (Kg) *</Label><Input data-testid="edit-qty" type="number" step="0.01" value={editForm.qty_kg} onChange={(e) => setEditForm({ ...editForm, qty_kg: e.target.value })}/></div>
+                    <div><Label>Tarif/Kg *</Label><NumberInput data-testid="edit-tariff" value={editForm.tariff_per_kg} onChange={(e) => setEditForm({ ...editForm, tariff_per_kg: e.target.value })}/></div>
+                    <div><Label>Qty (Kg) *</Label><NumberInput decimal data-testid="edit-qty" value={editForm.qty_kg} onChange={(e) => setEditForm({ ...editForm, qty_kg: e.target.value })}/></div>
                     <div><Label>PPN %</Label><Input type="number" step="0.01" value={editForm.tax_percentage} onChange={(e) => setEditForm({ ...editForm, tax_percentage: e.target.value })}/></div>
                   </div>
                 )}
@@ -617,8 +618,8 @@ export default function Recap() {
                 </div>
                 {editForm.insurance_enabled && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div><Label>Nilai Polis (IDR)</Label><Input data-testid="edit-polis-amount" type="number" step="0.01" value={editForm.polis_amount} onChange={(e) => setEditForm({ ...editForm, polis_amount: e.target.value })} placeholder="0"/></div>
-                    <div><Label>Nilai Asuransi (IDR)</Label><Input data-testid="edit-insurance-amount" type="number" step="0.01" value={editForm.insurance_amount} onChange={(e) => setEditForm({ ...editForm, insurance_amount: e.target.value })} placeholder="0"/></div>
+                    <div><Label>Nilai Polis (IDR)</Label><NumberInput data-testid="edit-polis-amount" value={editForm.polis_amount} onChange={(e) => setEditForm({ ...editForm, polis_amount: e.target.value })} placeholder="0"/></div>
+                    <div><Label>Nilai Asuransi (IDR)</Label><NumberInput data-testid="edit-insurance-amount" value={editForm.insurance_amount} onChange={(e) => setEditForm({ ...editForm, insurance_amount: e.target.value })} placeholder="0"/></div>
                   </div>
                 )}
               </div>
@@ -672,7 +673,7 @@ export default function Recap() {
                   />
                 </div>
               )}
-              <div><Label>Jumlah</Label><Input type="number" step="0.01" value={costForm.amount} onChange={(e) => setCostForm({ ...costForm, amount: e.target.value })} required /></div>
+              <div><Label>Jumlah</Label><NumberInput value={costForm.amount} onChange={(e) => setCostForm({ ...costForm, amount: e.target.value })} required /></div>
               <div><Label>Deskripsi</Label><Input value={costForm.description} onChange={(e) => setCostForm({ ...costForm, description: e.target.value })}/></div>
               <p className="text-[11px] text-slate-500">Tip: Buka <Link to="/costs" className="underline text-blue-700">Plotting Biaya</Link> untuk batch input.</p>
             </div>

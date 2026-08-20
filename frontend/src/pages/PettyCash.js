@@ -5,6 +5,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, X, Trash2, Wallet } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import NumberInput from "../components/NumberInput";
 
 const CATEGORIES = ["Operational", "Lintas", "Umum", "Kantor", "Lainnya"];
 
@@ -122,7 +123,7 @@ export default function PettyCash() {
                 <p className="text-[10px] text-slate-500 mt-1">Semua kategori → masuk ke <strong>5102 Beban Operasional Pengiriman</strong> (HPP / Direct Cost)</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>Nominal (IDR) *</Label><Input data-testid="petty-amount" type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required/></div>
+                <div><Label>Nominal (IDR) *</Label><NumberInput data-testid="petty-amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required/></div>
                 <div><Label>Tanggal</Label><Input data-testid="petty-date" type="date" value={form.expense_date} onChange={(e) => setForm({ ...form, expense_date: e.target.value })}/></div>
               </div>
               <div>

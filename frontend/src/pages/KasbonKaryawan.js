@@ -6,6 +6,7 @@ import MonthPicker from "../components/MonthPicker";
 import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Wallet, Plus, X, CheckCircle2, Trash2, ChevronDown, ChevronRight } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 const STATUS_BADGE = {
   active: "bg-blue-50 text-blue-800 border-blue-200",
@@ -193,7 +194,7 @@ export default function KasbonKaryawan() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <Label>Jumlah Pinjaman (Rp)</Label>
-                  <Input type="number" min="0" value={form.principal} onChange={(e) => setForm({ ...form, principal: e.target.value })} placeholder="10000000" data-testid="kasbon-form-principal" />
+                  <NumberInput value={form.principal} onChange={(e) => setForm({ ...form, principal: e.target.value })} placeholder="10000000" data-testid="kasbon-form-principal" />
                 </div>
                 <div>
                   <Label>Jumlah Cicilan (bulan)</Label>

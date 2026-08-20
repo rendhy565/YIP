@@ -5,6 +5,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { FileSignature, Printer, Plus, Pencil, Trash2, X, ChevronDown, ChevronRight } from "lucide-react";
 import ContractPrint from "../components/ContractPrint";
+import NumberInput from "../components/NumberInput";
 
 // Terbilang Rupiah (Indonesian number-to-words) — hasil bisa diedit user
 function terbilang(n) {
@@ -294,9 +295,9 @@ export default function KontrakKerja() {
               {/* Upah */}
               <Section title="Upah & Tunjangan (Pasal 4)">
                 <Grid>
-                  <Field label="Gaji Pokok (Rp / bulan)"><Input data-testid="c-gaji" type="number" value={form.gaji_pokok} onChange={(e) => onGajiChange(e.target.value)} /></Field>
+                  <Field label="Gaji Pokok (Rp / bulan)"><NumberInput data-testid="c-gaji" value={form.gaji_pokok} onChange={(e) => onGajiChange(e.target.value)} /></Field>
                   <Field label="Terbilang Gaji Pokok" full><Input value={form.gaji_pokok_words} onChange={(e) => setF("gaji_pokok_words", e.target.value)} /></Field>
-                  <Field label="Uang Makan (Rp / hari hadir)"><Input type="number" value={form.uang_makan} onChange={(e) => onMakanChange(e.target.value)} /></Field>
+                  <Field label="Uang Makan (Rp / hari hadir)"><NumberInput value={form.uang_makan} onChange={(e) => onMakanChange(e.target.value)} /></Field>
                   <Field label="Terbilang Uang Makan" full><Input value={form.uang_makan_words} onChange={(e) => setF("uang_makan_words", e.target.value)} /></Field>
                 </Grid>
               </Section>

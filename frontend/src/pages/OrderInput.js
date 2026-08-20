@@ -535,7 +535,7 @@ export default function OrderInput() {
               </div>
               <div>
                 <Label>Qty (Kg) *</Label>
-                <Input data-testid="order-qty-input" type="number" step="0.01" value={form.qty_kg} onChange={(e) => setForm({ ...form, qty_kg: e.target.value })} required />
+                <NumberInput decimal data-testid="order-qty-input" value={form.qty_kg} onChange={(e) => setForm({ ...form, qty_kg: e.target.value })} required />
               </div>
               <div>
                 <Label>PPN *</Label>

@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from ".
 import { fmtIDR, fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X, FileMinus } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 const PPH_TYPES = ["PPh21", "PPh23", "PPh25", "PPh4(2)", "PPh22"];
 
@@ -170,7 +171,7 @@ export default function TaxModule() {
             <div className="flex items-end gap-2 flex-wrap">
               <div><Label>Tipe</Label><Select value={form.pph_type} onChange={(e) => setForm({...form, pph_type: e.target.value})} className="w-32">{PPH_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</Select></div>
               <div><Label>Deskripsi</Label><Input value={form.description} onChange={(e) => setForm({...form, description: e.target.value})} className="w-48"/></div>
-              <div><Label>Jumlah</Label><Input type="number" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} className="w-32"/></div>
+              <div><Label>Jumlah</Label><NumberInput value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} className="w-32"/></div>
               <Button variant="success" onClick={submit}><Plus size={13}/> Tambah</Button>
             </div>
           </div>
@@ -215,7 +216,7 @@ export default function TaxModule() {
               </div>
               <div><Label>Nama Supplier *</Label><Input data-testid="masukan-supplier" value={masukanForm.supplier_name} onChange={(e) => setMasukanForm({...masukanForm, supplier_name: e.target.value})} required/></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>DPP (Dasar Pengenaan Pajak) *</Label><Input data-testid="masukan-dpp" type="number" step="0.01" value={masukanForm.dpp} onChange={(e) => setMasukanForm({...masukanForm, dpp: e.target.value})} required/></div>
+                <div><Label>DPP (Dasar Pengenaan Pajak) *</Label><NumberInput data-testid="masukan-dpp" value={masukanForm.dpp} onChange={(e) => setMasukanForm({...masukanForm, dpp: e.target.value})} required/></div>
                 <div>
                   <Label>PPN %</Label>
                   <Select data-testid="masukan-ppn-pct" value={masukanForm.ppn_pct} onChange={(e) => setMasukanForm({...masukanForm, ppn_pct: e.target.value})}>

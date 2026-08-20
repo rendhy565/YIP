@@ -9,6 +9,7 @@ import { errMsg, fmtIDR, fmtDate, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
 import { Plus, Trash2, X, Wallet, Coins, Layers, RefreshCw, CheckSquare, Square, Search } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 export default function Costs() {
   const { user } = useAuth();
@@ -321,7 +322,7 @@ export default function Costs() {
               )}
               <div>
                 <Label>Jumlah (IDR) *</Label>
-                <Input data-testid="cost-amount-input" type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+                <NumberInput data-testid="cost-amount-input" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
               </div>
               <div>
                 <Label>Deskripsi</Label>
@@ -422,7 +423,7 @@ export default function Costs() {
                 </div>
                 <div>
                   <Label>Total Tagihan (IDR) *</Label>
-                  <Input data-testid="pro-total-amount" type="number" step="0.01" value={proForm.total_amount} onChange={(e) => setProForm({ ...proForm, total_amount: e.target.value })} required placeholder="10000000"/>
+                  <NumberInput data-testid="pro-total-amount" value={proForm.total_amount} onChange={(e) => setProForm({ ...proForm, total_amount: e.target.value })} required placeholder="10000000"/>
                 </div>
               </div>
               <div>

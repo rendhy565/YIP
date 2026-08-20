@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Lock, Unlock, Plus, X, Save, ShieldAlert } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import NumberInput from "../components/NumberInput";
 
 export default function SaldoAwal() {
   const { user } = useAuth();
@@ -76,8 +77,8 @@ export default function SaldoAwal() {
                 {form.lines.map((l, i) => (
                   <tr key={i}>
                     <Td><Select value={l.account_code} onChange={(e) => updLine(i, "account_code", e.target.value)}><option value="">— pilih —</option>{accounts.map((a) => <option key={a.code} value={a.code}>{a.code} - {a.name}</option>)}</Select></Td>
-                    <Td><Input type="number" className="text-right" value={l.debit} onChange={(e) => updLine(i, "debit", e.target.value)}/></Td>
-                    <Td><Input type="number" className="text-right" value={l.credit} onChange={(e) => updLine(i, "credit", e.target.value)}/></Td>
+                    <Td><NumberInput className="text-right" value={l.debit} onChange={(e) => updLine(i, "debit", e.target.value)}/></Td>
+                    <Td><NumberInput className="text-right" value={l.credit} onChange={(e) => updLine(i, "credit", e.target.value)}/></Td>
                     <Td><Input value={l.memo || ""} onChange={(e) => updLine(i, "memo", e.target.value)}/></Td>
                     <Td><Button variant="ghost" onClick={() => removeLine(i)}><X size={13}/></Button></Td>
                   </tr>

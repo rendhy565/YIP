@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../compo
 import { fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon, Edit2, UserPlus } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 const STATUS_OPTIONS = ["Hadir", "Sakit", "Izin", "Alfa", "Libur", "Off"];
 const STATUS_COLORS = {
@@ -565,7 +566,7 @@ export default function Attendance() {
                       </div>
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1">Tarif per Jam (IDR)</label>
-                        <Input type="number" min="0" value={form.overtime_rate} onChange={(e) => setForm({ ...form, overtime_rate: e.target.value })} placeholder="Mis. 30000" data-testid="add-ot-rate"/>
+                        <NumberInput value={form.overtime_rate} onChange={(e) => setForm({ ...form, overtime_rate: e.target.value })} placeholder="Mis. 30000" data-testid="add-ot-rate"/>
                       </div>
                     </div>
                     <p className="text-[10px] text-slate-500 mt-1">Total lembur = jam × tarif. Diinput manual per hari.</p>

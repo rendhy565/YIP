@@ -4,6 +4,7 @@ import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../compo
 import { errMsg, fmtIDR } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 const empty = { customer_id: "", origin: "", destination: "", price_per_kg: 0, via: "", minimum_kg: "" };
 
@@ -111,12 +112,12 @@ export default function Contracts() {
                 </div>
                 <div>
                   <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Harga per Kg (IDR) *</label>
-                  <Input data-testid="contract-price-input" type="number" step="0.01" value={form.price_per_kg} onChange={(e) => setForm({ ...form, price_per_kg: e.target.value })} required />
+                  <NumberInput data-testid="contract-price-input" value={form.price_per_kg} onChange={(e) => setForm({ ...form, price_per_kg: e.target.value })} required />
                 </div>
               </div>
               <div>
                 <label className="block text-[11px] uppercase tracking-[0.08em] font-bold text-slate-500 mb-1.5">Minimum Berat (Kg) — opsional</label>
-                <Input data-testid="contract-min-kg-input" type="number" step="0.01" min="0" value={form.minimum_kg} onChange={(e) => setForm({ ...form, minimum_kg: e.target.value })} placeholder="Mis. 50 (artinya order < 50kg tetap ditagih 50kg)"/>
+                <NumberInput decimal data-testid="contract-min-kg-input" value={form.minimum_kg} onChange={(e) => setForm({ ...form, minimum_kg: e.target.value })} placeholder="Mis. 50 (artinya order < 50kg tetap ditagih 50kg)"/>
               </div>
               <div className="flex justify-end gap-2 pt-2">
                 <Button variant="secondary" type="button" onClick={() => setOpen(false)}>Batal</Button>

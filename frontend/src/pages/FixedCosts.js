@@ -8,6 +8,7 @@ import { fmtIDR, fmtDate, currentMonth, monthStart, monthEnd, errMsg } from "../
 import { toast } from "sonner";
 import { Plus, Trash2, X, Banknote, Receipt, Copy, ChevronDown, Check, Search, Upload, FileSpreadsheet, AlertCircle } from "lucide-react";
 import { useCan } from "../lib/useCan";
+import NumberInput from "../components/NumberInput";
 
 const POSTING_BADGE = {
   cogs:    { label: "COGS",    cls: "text-emerald-700 bg-emerald-50 border-emerald-200" },
@@ -473,7 +474,7 @@ export default function FixedCosts() {
               </div>
               <div>
                 <Label>Jumlah (IDR) *</Label>
-                <Input data-testid="fixed-cost-amount-input" type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
+                <NumberInput data-testid="fixed-cost-amount-input" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required />
               </div>
               <div>
                 <Label>Deskripsi</Label>

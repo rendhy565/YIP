@@ -9,6 +9,7 @@ import { Plus, Trash2, Save, X, Edit2, PlayCircle, User, Users, Settings, Eye, F
 import PayslipPrint from "../components/PayslipPrint";
 import { useAuth } from "../lib/auth";
 import { useNavigate } from "react-router-dom";
+import NumberInput from "../components/NumberInput";
 
 const EMPTY_EMP = {
   employee_no: "",
@@ -622,9 +623,9 @@ export default function HrPayroll() {
                     </label>
                   </div>
                   <div><Label>Tanggal Bergabung</Label><Input type="date" value={form.join_date} onChange={(e) => setForm({ ...form, join_date: e.target.value })}/></div>
-                  <div><Label>Gaji Pokok (IDR)</Label><Input type="number" value={form.base_salary} onChange={(e) => setForm({ ...form, base_salary: e.target.value })}/></div>
-                  <div><Label>Uang Makan / Hari (IDR)</Label><Input type="number" value={form.meal_allowance} onChange={(e) => setForm({ ...form, meal_allowance: e.target.value })} placeholder="Mis. 25000"/></div>
-                  <div><Label>Tunjangan Lain (IDR)</Label><Input type="number" value={form.allowance} onChange={(e) => setForm({ ...form, allowance: e.target.value })}/></div>
+                  <div><Label>Gaji Pokok (IDR)</Label><NumberInput value={form.base_salary} onChange={(e) => setForm({ ...form, base_salary: e.target.value })}/></div>
+                  <div><Label>Uang Makan / Hari (IDR)</Label><NumberInput value={form.meal_allowance} onChange={(e) => setForm({ ...form, meal_allowance: e.target.value })} placeholder="Mis. 25000"/></div>
+                  <div><Label>Tunjangan Lain (IDR)</Label><NumberInput value={form.allowance} onChange={(e) => setForm({ ...form, allowance: e.target.value })}/></div>
                   <div><Label>Status</Label>
                     <Select value={form.active ? "1" : "0"} onChange={(e) => setForm({ ...form, active: e.target.value === "1" })}>
                       <option value="1">Aktif</option>

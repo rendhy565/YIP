@@ -11,6 +11,7 @@ import Pagination, { usePagination } from "../components/Pagination";
 import CostListModal from "../components/CostListModal";
 import TrackingModal from "../components/TrackingModal";
 import AwbDetailModal from "../components/AwbDetailModal";
+import NumberInput from "../components/NumberInput";
 
 function todayStr() {
   const d = new Date();
@@ -490,7 +491,7 @@ export default function OrdersList() {
                     <span className="font-semibold">Polis</span>
                   </label>
                   {recvForm.polis_enabled && (
-                    <Input data-testid="receive-polis-amount" type="number" step="0.01" placeholder="Nilai Polis (IDR)" value={recvForm.polis_amount} onChange={(e) => setRecvForm({ ...recvForm, polis_amount: e.target.value })} className="flex-1"/>
+                    <NumberInput data-testid="receive-polis-amount" placeholder="Nilai Polis (IDR)" value={recvForm.polis_amount} onChange={(e) => setRecvForm({ ...recvForm, polis_amount: e.target.value })} className="flex-1"/>
                   )}
                 </div>
                 {/* Asuransi */}
@@ -500,7 +501,7 @@ export default function OrdersList() {
                     <span className="font-semibold">Asuransi</span>
                   </label>
                   {recvForm.asuransi_enabled && (
-                    <Input data-testid="receive-asuransi" type="number" step="0.01" placeholder="Nilai Asuransi (IDR)" value={recvForm.asuransi_amount} onChange={(e) => setRecvForm({ ...recvForm, asuransi_amount: e.target.value })} className="flex-1"/>
+                    <NumberInput data-testid="receive-asuransi" placeholder="Nilai Asuransi (IDR)" value={recvForm.asuransi_amount} onChange={(e) => setRecvForm({ ...recvForm, asuransi_amount: e.target.value })} className="flex-1"/>
                   )}
                 </div>
                 {/* SPSI */}
@@ -510,7 +511,7 @@ export default function OrdersList() {
                     <span className="font-semibold">SPSI</span>
                   </label>
                   {recvForm.spsi_enabled && (
-                    <Input data-testid="receive-spsi-amount" type="number" step="0.01" placeholder="Nilai SPSI (IDR)" value={recvForm.spsi_amount} onChange={(e) => setRecvForm({ ...recvForm, spsi_amount: e.target.value })} className="flex-1"/>
+                    <NumberInput data-testid="receive-spsi-amount" placeholder="Nilai SPSI (IDR)" value={recvForm.spsi_amount} onChange={(e) => setRecvForm({ ...recvForm, spsi_amount: e.target.value })} className="flex-1"/>
                   )}
                 </div>
                 {/* Sewa Forklift */}
@@ -520,7 +521,7 @@ export default function OrdersList() {
                     <span className="font-semibold">Sewa Forklift</span>
                   </label>
                   {recvForm.sewa_forklift_enabled && (
-                    <Input data-testid="receive-forklift-amount" type="number" step="0.01" placeholder="Nilai Sewa Forklift (IDR)" value={recvForm.sewa_forklift_amount} onChange={(e) => setRecvForm({ ...recvForm, sewa_forklift_amount: e.target.value })} className="flex-1"/>
+                    <NumberInput data-testid="receive-forklift-amount" placeholder="Nilai Sewa Forklift (IDR)" value={recvForm.sewa_forklift_amount} onChange={(e) => setRecvForm({ ...recvForm, sewa_forklift_amount: e.target.value })} className="flex-1"/>
                   )}
                 </div>
               </div>

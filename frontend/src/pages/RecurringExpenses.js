@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../compon
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X, Repeat, AlertCircle, Pause, Play, Edit2 } from "lucide-react";
+import NumberInput from "../components/NumberInput";
 
 export default function RecurringExpenses() {
   const [rows, setRows] = useState([]);
@@ -161,7 +162,7 @@ export default function RecurringExpenses() {
                     {categories.map((c) => <option key={c.id} value={c.name}>{c.name} ({c.posting_type})</option>)}
                   </select>
                 </div>
-                <div><Label>Jumlah (IDR) *</Label><Input type="number" step="0.01" value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} required/></div>
+                <div><Label>Jumlah (IDR) *</Label><NumberInput value={form.amount} onChange={(e) => setForm({...form, amount: e.target.value})} required/></div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <div><Label>Frekuensi *</Label>

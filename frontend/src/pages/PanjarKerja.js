@@ -8,6 +8,7 @@ import { Plus, X, Wallet, CheckCircle2, Trash2, History, Printer } from "lucide-
 import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
 import BPVPrintTemplate from "../components/BPVPrintTemplate";
+import NumberInput from "../components/NumberInput";
 
 function todayStr() {
   const d = new Date();
@@ -538,9 +539,9 @@ export default function PanjarKerja() {
               </div>
 
               <div className="grid grid-cols-4 gap-3">
-                <div><Label>Nilai (IDR) *</Label><Input data-testid="panjar-amount" type="number" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required/></div>
-                <div><Label>PPN (IDR)</Label><Input data-testid="panjar-ppn" type="number" step="0.01" value={form.ppn_amount} onChange={(e) => setForm({ ...form, ppn_amount: e.target.value })} placeholder="0"/></div>
-                <div><Label>PPH (IDR)</Label><Input data-testid="panjar-pph" type="number" step="0.01" value={form.pph_amount} onChange={(e) => setForm({ ...form, pph_amount: e.target.value })} placeholder="0"/></div>
+                <div><Label>Nilai (IDR) *</Label><NumberInput data-testid="panjar-amount" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required/></div>
+                <div><Label>PPN (IDR)</Label><NumberInput data-testid="panjar-ppn" value={form.ppn_amount} onChange={(e) => setForm({ ...form, ppn_amount: e.target.value })} placeholder="0"/></div>
+                <div><Label>PPH (IDR)</Label><NumberInput data-testid="panjar-pph" value={form.pph_amount} onChange={(e) => setForm({ ...form, pph_amount: e.target.value })} placeholder="0"/></div>
                 <div><Label>Tanggal</Label><Input data-testid="panjar-date" type="date" value={form.advance_date} onChange={(e) => setForm({ ...form, advance_date: e.target.value })}/></div>
               </div>
 
@@ -829,7 +830,7 @@ export default function PanjarKerja() {
                           />
                         </div>
                         <div className="col-span-2">
-                          <Input data-testid={`breakdown-amount-${i}`} type="number" step="0.01" placeholder="Nominal" value={b.amount} onChange={(e) => updateRow(i, "amount", e.target.value)}/>
+                          <NumberInput data-testid={`breakdown-amount-${i}`} placeholder="Nominal" value={b.amount} onChange={(e) => updateRow(i, "amount", e.target.value)}/>
                         </div>
                         <div className="col-span-2">
                           <Input data-testid={`breakdown-desc-${i}`} placeholder="Deskripsi" value={b.description} onChange={(e) => updateRow(i, "description", e.target.value)}/>
@@ -849,7 +850,7 @@ export default function PanjarKerja() {
               </div>
 
               <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-200">
-                <div><Label>Refund (Sisa Dikembalikan Tunai)</Label><Input data-testid="panjar-refund" type="number" step="0.01" value={settleForm.refund_amount} onChange={(e) => setSettleForm({ ...settleForm, refund_amount: e.target.value })}/></div>
+                <div><Label>Refund (Sisa Dikembalikan Tunai)</Label><NumberInput data-testid="panjar-refund" value={settleForm.refund_amount} onChange={(e) => setSettleForm({ ...settleForm, refund_amount: e.target.value })}/></div>
                 <div><Label>Tanggal Settle</Label><Input data-testid="panjar-settle-date" type="date" value={settleForm.settle_date} onChange={(e) => setSettleForm({ ...settleForm, settle_date: e.target.value })}/></div>
               </div>
               <div><Label>Catatan</Label><Input value={settleForm.notes} onChange={(e) => setSettleForm({ ...settleForm, notes: e.target.value })}/></div>
