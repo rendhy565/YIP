@@ -62,7 +62,7 @@ const VIA_OPTIONS = [
   { value: "L", label: "Laut" },
   { value: "U", label: "Udara" },
 ];
-const STATUS_PENGIRIMAN = ["", "Reguler", "Project"];
+const STATUS_PENGIRIMAN = ["", "Reguler", "Project", "FWA"];
 
 function todayStr() {
   const d = new Date();
