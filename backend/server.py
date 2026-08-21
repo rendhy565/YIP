@@ -498,7 +498,7 @@ class OrderIn(BaseModel):
     charter_amount: Optional[float] = None  # total rupiah jika is_charter
     sender_name: Optional[str] = None  # Pengirim (freetext with memory)
     via: Optional[Literal["D", "L", "U"]] = None
-    status_pengiriman: Optional[Literal["Reguler", "Project", ""]] = None
+    status_pengiriman: Optional[Literal["Reguler", "Project", "FWA", ""]] = None
     koli_count: Optional[int] = None
     koli_qty_per: Optional[str] = None
     armada: Optional[str] = None
@@ -2519,6 +2519,8 @@ async def super_edit_split_invoice(payload: dict, user: dict = Depends(require_r
         return {"ok": True, "parent_invoice": inv.get("invoice_number"), "split_invoice": None, "unlinked": True}
 
 
+@app.post("/api/orders")
+async def create_order(data: OrderIn, user: dict = Depends(require_role("operation"))):
     # Koli mandatory
     if data.koli_count is None or int(data.koli_count) <= 0:
         raise HTTPException(400, "Koli wajib diisi (lebih dari 0)")
