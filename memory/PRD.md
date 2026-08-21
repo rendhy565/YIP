@@ -1,5 +1,27 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Gabung Customer — Mode Pilih Manual (semua customer) (Jun 2026)
+- **Kebutuhan user:** fitur Gabung Customer harus bisa menampilkan SELURUH customer (bukan hanya yang mirip/auto-detect), agar user memilih sendiri mana yang digabung (mis. "PT. EKAMAS MORA REPUBLIK - CILEGON/GARUT/KUDUS" yang namanya beda).
+- **Backend** (`server.py`): endpoint baru `GET /api/admin/customers/all` (require_role administrator) → semua customer + enriched (attn, default_ppn, address, npwp, richness, awb_count, contract_count, sender_count), diurut nama. Endpoint merge lama `POST /api/admin/customers/merge` dipakai ulang (generic canonical_id + duplicate_ids).
+- **Frontend** (`pages/CustomerMerge.js`): 2 tab — "Pilih Manual (Semua Customer)" (default) & "Deteksi Duplikat Otomatis" (lama). Mode manual: search (nama/attn/npwp), checkbox pilih banyak, radio pilih Utama (aktif hanya bila tercentang), tombol "Gabung Terpilih (n)". 37 customer diverifikasi tampil + seleksi + screenshot OK.
+
+## Fix: Route POST /api/orders hilang + dukungan status_pengiriman "FWA" (Jun 2026)
+- **Bug (P0):** menyimpan Order Input → HTTP 405. Akar masalah: dekorator `@app.post("/api/orders")` + signature `async def create_order(...)` terhapus (tersenggol saat blok Super Edit disisipkan sesi lalu), body create_order jadi dead-code di ekor `super_edit_split_invoice`. Route dikembalikan → `@app.post("/api/orders")` + `async def create_order(data: OrderIn, user=Depends(require_role("operation")))`.
+- **FWA:** frontend `OrderInput.js` STATUS_PENGIRIMAN → `["", "Reguler", "Project", "FWA"]` DAN backend `OrderIn.status_pengiriman` Literal ditambah "FWA" (frontend-only tidak cukup → 422). Diuji: POST order dgn status_pengiriman=FWA → 200 + jurnal terbentuk (data test dibersihkan).
+
+## Investigasi Double Input (dump produksi baru arc_db, restore ke tms_db) (Jun 2026)
+- User restore dump baru & lapor Juli "harusnya 2,3M tapi 2,8M". Temuan (READ-ONLY, belum ada mutasi data):
+  - **Masalah 1 — duplikat ORDER (basis laporan Laba Rugi Order Juli):** order sama diinput ulang dgn nomor AWB diberi nol depan (mis. `59353`↔`0059353`) → 19 duplikat pasti (18 Juli+1 Agu, Rp 480.395.500, mostly status Open→masuk bucket "belum tercatat"). Plus ~108 grup isi-identik (customer+consignee+tujuan+tarif) yg butuh review manual (bisa jadi kiriman asli).
+  - **Masalah 2 — jurnal ganda AKUNTING:** 104 revenue + 103 PYMHD + 3 payment jurnal ganda dari koreksi tarif 13-Agu yg tak menghapus jurnal lama (nilai lama 2x, koreksi ditambahkan tanpa hapus lama) → revenue akunting Mei/Jun/Agu menggelembung ~Rp 1,5M.
+  - Excel laporan dibuat: `/app/frontend/public/potensi_double_input.xlsx` (3 sheet: nol-depan pasti, isi-sama cek, jurnal ganda) — link publik `{REACT_APP_BACKEND_URL}/potensi_double_input.xlsx`.
+- **PENDING keputusan user:** (a) hapus duplikat order mana, (b) bereskan jurnal ganda atau tidak. Belum dieksekusi.
+
+## PENDING (belum dikerjakan, menunggu konfirmasi user)
+- RBAC: izinkan role **operation** input biaya Cash Operational/Lintas (skrng hanya Finance/Admin di `POST /api/costs` ~baris 2678). Menunggu scope (termasuk Marketing?).
+- Eksekusi pembersihan double input (order + jurnal ganda) setelah user memilih dari Excel.
+
+
+
 ## Super Edit AWB (Administrator, override tak terbatas + auto-sync jurnal) (Jun 2026)
 - **Kebutuhan user:** admin bisa edit APA PUN di AWB/Invoice tanpa batas; jurnal double-entry & neraca dihitung ulang otomatis; tampilkan peringatan selisih Trial Balance sebelum commit; auto-cascade status (mis. paksa ke Invoiced/Paid → recognize revenue + posting AR/payment); bisa pecah AWB dari invoice gabungan; **TIDAK dicatat di Activity Log**.
 - **Backend** (`server.py` ~2240-2520): helper `_se_compute_financials` (hitung total/tax/addons/grand dari driver fields, override eksplisit menang), `_se_canonical_contrib` (kontribusi net per akun utk state final), `_se_refs_contrib` (kontribusi jurnal lama), `_se_context`, `_se_neraca_diff` (before/after/delta per akun vs `_balance_until`). Endpoint (semua `require_role("administrator")`):

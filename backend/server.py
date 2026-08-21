@@ -12975,6 +12975,30 @@ async def _customer_ref_counts(cid):
         "sender": await db.sender_memory.count_documents({"customer_id": cid}),
     }
 
+@app.get("/api/admin/customers/all")
+async def list_all_customers_enriched(user: dict = Depends(require_role("administrator"))):
+    """Semua customer + info ref (AWB/kontrak/sender) untuk mode pilih-manual penggabungan."""
+    custs = await db.customers.find().to_list(20000)
+    out = []
+    for c in custs:
+        refs = await _customer_ref_counts(c["_id"])
+        out.append({
+            "id": str(c["_id"]),
+            "name": c.get("name"),
+            "attn": c.get("attn"),
+            "default_ppn_percentage": c.get("default_ppn_percentage"),
+            "address": c.get("address"),
+            "npwp": c.get("npwp"),
+            "tracking_code": c.get("tracking_code"),
+            "richness": _cust_richness(c),
+            "awb_count": refs["awb"],
+            "contract_count": refs["contract"],
+            "sender_count": refs["sender"],
+        })
+    out.sort(key=lambda e: (e["name"] or "").lower())
+    return {"customers": out, "total": len(out)}
+
+
 @app.get("/api/admin/customers/duplicates")
 async def list_customer_duplicates(user: dict = Depends(require_role("administrator"))):
     """Deteksi customer kembar (nama sama setelah abaikan huruf besar-kecil/spasi/tanda baca).
