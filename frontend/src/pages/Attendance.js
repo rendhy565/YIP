@@ -316,6 +316,25 @@ export default function Attendance() {
 
   const resetImport = () => { setImportResult(null); setPreview(null); setPendingFile(null); };
 
+  // Export rekap absensi ke Excel (server-side, ditandai Minggu/tanggal merah)
+  const [exporting, setExporting] = useState(false);
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const res = await api.get("/hr/attendance/export", { params: { month }, responseType: "blob" });
+      const url = URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `Rekap_Absensi_${month}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success("File Excel rekap absensi ter-download");
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setExporting(false); }
+  };
+
   // Step 1: pilih file → dry-run untuk preview konflik
   const handleFilePick = async (e) => {
     const file = e.target.files?.[0];
@@ -439,6 +458,9 @@ export default function Attendance() {
           <div className="flex-1"/>
           <Button onClick={() => { setShowCombined(true); resetCombined(); }} data-testid="att-combined-import-btn" title="Upload file mesin absen + rekap lembur sekaligus">
             <Upload size={14}/> Import Absen + Lembur
+          </Button>
+          <Button variant="secondary" onClick={exportExcel} disabled={exporting} data-testid="att-export-btn" title="Export rekap absensi semua karyawan ke Excel">
+            <FileSpreadsheet size={14}/> {exporting ? "Menyiapkan..." : "Export Excel"}
           </Button>
           <Button variant="secondary" onClick={openSettings} data-testid="att-settings-btn">
             <SettingsIcon size={14}/> Setting

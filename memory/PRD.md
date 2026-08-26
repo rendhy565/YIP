@@ -1,5 +1,12 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Export Excel Rekap Absensi (Jun 2026)
+- **Kebutuhan user:** di menu Absensi ada tombol Export Excel — semua karyawan, kehadiran/alfa/telat per hari per karyawan; tandai bila hari itu tanggal merah atau Minggu.
+- **Backend** (`server.py`): endpoint baru `GET /api/hr/attendance/export?month=YYYY-MM` (require_feature hr) → build .xlsx via openpyxl (matriks Karyawan × Tanggal). Rentang periode pakai `_cutoff_period_range` (konsisten dg payroll). Tiap sel = kode status (H/S/I/A/L/O) + `•` bila telat; sel Alfa merah, telat kuning, hadir hijau, sakit/izin biru. Kolom tanggal **Minggu/tanggal merah** di-shade merah muda + `★` utk libur; hari tanpa record di hari libur → "L". Kolom ringkasan per karyawan: Hadir/Sakit/Izin/Alfa/Telat/Lembur(jam). Freeze panes di kolom Nama. Return `Response` blob (Content-Disposition attachment).
+- **Frontend** (`pages/Attendance.js`): tombol **"Export Excel"** (`att-export-btn`) di toolbar → GET blob (responseType blob) → download `Rekap_Absensi_YYYY-MM.xlsx`.
+- **Verifikasi (curl):** export periode 2026-08 (cutoff 25) → header "Agu 2026 (26-07-2026 s/d 25-08-2026)", kolom Minggu (26,2) ter-tandai + isi "L", telat "H•", Alfa "A". Frontend compile bersih. (Testing agent di-skip; user test di VPS.) Butuh deploy backend+frontend.
+
+
 ## Import Payroll Gabungan — Absen Mesin + Rekap Lembur (Jun 2026)
 - **Kebutuhan user:** tiap periode payroll punya 2 file (tarikan mesin absen + rekap lembur). Mau tinggal upload keduanya → otomatis terisi ke absensi ARC → tinggal proses payroll. Cocokkan by NAMA; tarif lembur bisa manual satu untuk semua.
 - **Format file (dari contoh user):**

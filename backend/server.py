@@ -6682,6 +6682,191 @@ async def list_attendance(
     docs = await db.attendance.find(q).sort("date", -1).to_list(50000)
     return [serialize(d) for d in docs]
 
+@app.get("/api/hr/attendance/export")
+async def export_attendance(month: str, user: dict = Depends(require_feature("hr"))):
+    """Export Excel rekap absensi: matriks Karyawan × Tanggal (H/S/I/A + tanda Telat),
+    kolom tanggal ditandai bila Minggu / tanggal merah, plus ringkasan per karyawan."""
+    import io, calendar as _cal
+    from datetime import date as _date
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from fastapi.responses import Response
+
+    cfg = await _get_attendance_config()
+    cutoff = int(cfg.get("payroll_cutoff_day") or 0)
+    start_s, end_s = _cutoff_period_range(month, cutoff)
+    sy, sm, sd = map(int, start_s.split("-"))
+    ey, em, ed = map(int, end_s.split("-"))
+    d0, d1 = _date(sy, sm, sd), _date(ey, em, ed)
+
+    # Daftar tanggal dalam periode
+    dates = []
+    cur = d0
+    while cur <= d1:
+        dates.append(cur)
+        cur = cur + timedelta(days=1)
+
+    # Employees (urutan sama dgn list_employees: sort_priority asc, null terakhir)
+    emps = await db.employees.find().to_list(2000)
+    emps.sort(key=lambda d: (d.get("sort_priority") is None, d.get("sort_priority") if d.get("sort_priority") is not None else 0, (d.get("full_name") or "").lower()))
+
+    # Attendance map (emp_id, date_str) -> doc
+    att_docs = await db.attendance.find({"date": {"$gte": start_s, "$lte": end_s}}).to_list(100000)
+    att_map = {(a["employee_id"], a["date"]): a for a in att_docs}
+
+    # Holidays map
+    hol_docs = await db.public_holidays.find({"date": {"$gte": start_s, "$lte": end_s}}).to_list(5000)
+    hol_map = {h["date"]: h.get("name") or "Libur" for h in hol_docs}
+
+    MONTH_ID = ["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"]
+    DOW_ID = ["Sen","Sel","Rab","Kam","Jum","Sab","Min"]
+
+    STATUS_CODE = {"Hadir": "H", "Sakit": "S", "Izin": "I", "Alfa": "A", "Libur": "L", "Off": "O", "Cuti": "C"}
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Rekap Absensi"
+
+    # Warna
+    C_HDR = "FF1E3A8A"     # biru tua header
+    C_SUN = "FFFFE0E0"     # merah muda kolom Minggu/libur
+    C_ALFA = "FFFCA5A5"    # merah alfa
+    C_LATE = "FFFDE68A"    # kuning telat
+    C_HADIR = "FFDCFCE7"   # hijau muda hadir
+    C_LEAVE = "FFDBEAFE"   # biru muda sakit/izin
+    thin = Side(style="thin", color="FFBBBBBB")
+    border = Border(top=thin, bottom=thin, left=thin, right=thin)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # Judul
+    n_date_cols = len(dates)
+    total_cols = 2 + n_date_cols + 6   # No, Nama, dates, Hadir,Sakit,Izin,Alfa,Telat,Lembur
+    ws.cell(1, 1, "REKAP ABSENSI KARYAWAN")
+    ws.cell(1, 1).font = Font(bold=True, size=14)
+    ws.cell(2, 1, f"Periode {MONTH_ID[int(month.split('-')[1])-1]} {month.split('-')[0]}  ({d0.strftime('%d-%m-%Y')} s/d {d1.strftime('%d-%m-%Y')})")
+    ws.cell(2, 1).font = Font(size=10, italic=True)
+    ws.cell(3, 1, "Keterangan: H=Hadir  S=Sakit  I=Izin  A=Alfa  L=Libur  O=Off  •=Telat  |  kolom merah muda = Minggu / tanggal merah")
+    ws.cell(3, 1).font = Font(size=9, color="FF666666")
+
+    hrow = 5
+    # Header baris tanggal (baris hrow = tanggal, hrow+... single). Kita pakai 1 baris header dgn wrap.
+    ws.cell(hrow, 1, "No")
+    ws.cell(hrow, 2, "Nama")
+    for i, dt in enumerate(dates):
+        c = 3 + i
+        is_sun = dt.weekday() == 6
+        is_hol = dt.strftime("%Y-%m-%d") in hol_map
+        lbl = f"{dt.day}\n{DOW_ID[dt.weekday()]}"
+        if is_hol:
+            lbl += "\n★"
+        cell = ws.cell(hrow, c, lbl)
+        cell.alignment = center
+        cell.border = border
+        if is_sun or is_hol:
+            cell.fill = PatternFill("solid", fgColor=C_SUN)
+            cell.font = Font(bold=True, size=8, color="FFB91C1C")
+        else:
+            cell.fill = PatternFill("solid", fgColor=C_HDR)
+            cell.font = Font(bold=True, size=8, color="FFFFFFFF")
+        ws.column_dimensions[cell.column_letter].width = 4.2
+    summ_labels = ["Hadir", "Sakit", "Izin", "Alfa", "Telat", "Lembur(j)"]
+    for j, sl in enumerate(summ_labels):
+        c = 3 + n_date_cols + j
+        cell = ws.cell(hrow, c, sl)
+        cell.alignment = center
+        cell.border = border
+        cell.fill = PatternFill("solid", fgColor=C_HDR)
+        cell.font = Font(bold=True, size=9, color="FFFFFFFF")
+        ws.column_dimensions[cell.column_letter].width = 8
+    for c in (1, 2):
+        cell = ws.cell(hrow, c)
+        cell.alignment = center
+        cell.border = border
+        cell.fill = PatternFill("solid", fgColor=C_HDR)
+        cell.font = Font(bold=True, size=10, color="FFFFFFFF")
+    ws.column_dimensions["A"].width = 4
+    ws.column_dimensions["B"].width = 26
+    ws.row_dimensions[hrow].height = 30
+
+    # Data rows
+    r = hrow + 1
+    for idx, emp in enumerate(emps):
+        eid = str(emp["_id"])
+        ws.cell(r, 1, idx + 1).alignment = center
+        ws.cell(r, 1).border = border
+        nm = ws.cell(r, 2, emp.get("full_name") or "-")
+        nm.font = Font(bold=True, size=9)
+        nm.border = border
+        nm.alignment = Alignment(vertical="center")
+        cnt = {"Hadir": 0, "Sakit": 0, "Izin": 0, "Alfa": 0}
+        late = 0
+        ot_hours = 0.0
+        for i, dt in enumerate(dates):
+            c = 3 + i
+            ds = dt.strftime("%Y-%m-%d")
+            is_sun = dt.weekday() == 6
+            is_hol = ds in hol_map
+            a = att_map.get((eid, ds))
+            cell = ws.cell(r, c)
+            cell.alignment = center
+            cell.border = border
+            cell.font = Font(size=9)
+            if a:
+                st = a.get("status") or ""
+                code = STATUS_CODE.get(st, (st[:1].upper() if st else ""))
+                is_late = bool(a.get("is_late"))
+                cell.value = code + ("•" if is_late else "")
+                if st in cnt:
+                    cnt[st] += 1
+                if is_late:
+                    late += 1
+                ot_hours += float(a.get("overtime_hours") or 0)
+                if st == "Alfa":
+                    cell.fill = PatternFill("solid", fgColor=C_ALFA)
+                elif is_late:
+                    cell.fill = PatternFill("solid", fgColor=C_LATE)
+                elif st == "Hadir":
+                    cell.fill = PatternFill("solid", fgColor=C_HADIR)
+                elif st in ("Sakit", "Izin", "Cuti"):
+                    cell.fill = PatternFill("solid", fgColor=C_LEAVE)
+                elif (is_sun or is_hol):
+                    cell.fill = PatternFill("solid", fgColor=C_SUN)
+            else:
+                # tak ada record
+                if is_sun or is_hol:
+                    cell.value = "L"
+                    cell.fill = PatternFill("solid", fgColor=C_SUN)
+                    cell.font = Font(size=8, color="FFB91C1C")
+                else:
+                    cell.value = "-"
+                    cell.font = Font(size=9, color="FFBBBBBB")
+        # Summary
+        vals = [cnt["Hadir"], cnt["Sakit"], cnt["Izin"], cnt["Alfa"], late, round(ot_hours, 1)]
+        for j, v in enumerate(vals):
+            c = 3 + n_date_cols + j
+            cell = ws.cell(r, c, v)
+            cell.alignment = center
+            cell.border = border
+            cell.font = Font(size=9, bold=(j in (3, 4)))
+            if j == 3 and v > 0:
+                cell.fill = PatternFill("solid", fgColor=C_ALFA)
+            elif j == 4 and v > 0:
+                cell.fill = PatternFill("solid", fgColor=C_LATE)
+        r += 1
+
+    ws.freeze_panes = ws.cell(hrow + 1, 3)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"Rekap_Absensi_{month}.xlsx"
+    return Response(
+        content=buf.read(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @app.post("/api/hr/attendance")
 async def create_attendance(data: AttendanceIn, user: dict = Depends(require_feature("hr"))):
     if data.status not in ALLOWED_ATT_STATUS:
