@@ -7198,6 +7198,13 @@ async def import_attendance(
     else:
         raise HTTPException(400, "Format file tidak didukung. Pakai .xlsx atau .csv")
 
+    return await _run_attendance_import(rows, mode, dry_run, user)
+
+
+async def _run_attendance_import(rows, mode, dry_run, user):
+    """Proses list baris absensi ternormalisasi (dipakai import single-file & combined).
+    Tiap baris = dict dengan salah satu dari: employee_id/employee_no/nik/nama, tanggal,
+    check_in/jam_masuk, check_out/jam_pulang, status, overtime_hours, overtime_rate, note."""
     # Normalize field names
     def _get(r, *keys):
         for k in keys:
@@ -7417,6 +7424,316 @@ async def import_attendance(
         "auto_detected_weekend": auto_detected_weekend,
         "auto_detected_holiday": auto_detected_holiday,
     }
+
+# ===========================================================================
+# COMBINED PAYROLL IMPORT — Absensi (mesin) + Rekap Lembur → auto-isi attendance
+# ===========================================================================
+
+def _norm_name(s):
+    """Normalisasi nama untuk pencocokan: uppercase, hapus titik, rapikan spasi."""
+    if not s:
+        return ""
+    s = str(s).upper().replace(".", " ")
+    return " ".join(s.split())
+
+
+def _match_employee_by_name(raw_name, employees):
+    """Cocokkan nama bebas ke master karyawan (toleran).
+    Return (emp_doc | None, ambiguous: bool)."""
+    target = _norm_name(raw_name)
+    if not target:
+        return None, False
+    ttoks = set(target.split())
+    # 1) exact
+    exact = [e for e in employees if _norm_name(e.get("full_name")) == target]
+    if len(exact) == 1:
+        return exact[0], False
+    if len(exact) > 1:
+        return None, True
+    # 2) token subset (salah satu nama adalah himpunan bagian dari yang lain)
+    cands = []
+    for e in employees:
+        etoks = set(_norm_name(e.get("full_name")).split())
+        if not etoks:
+            continue
+        if ttoks and (ttoks.issubset(etoks) or etoks.issubset(ttoks)):
+            cands.append(e)
+    if len(cands) == 1:
+        return cands[0], False
+    if len(cands) > 1:
+        # pilih yang overlap token terbanyak; kalau seri → ambiguous
+        best = sorted(cands, key=lambda e: len(ttoks & set(_norm_name(e.get("full_name")).split())), reverse=True)
+        top = len(ttoks & set(_norm_name(best[0].get("full_name")).split()))
+        second = len(ttoks & set(_norm_name(best[1].get("full_name")).split())) if len(best) > 1 else -1
+        if top > second:
+            return best[0], False
+        return None, True
+    return None, False
+
+
+def _norm_time_cell(v):
+    """Ubah nilai sel jam (time/datetime/str/'-') → 'HH:MM' atau None."""
+    if v is None:
+        return None
+    from datetime import time as _t, datetime as _d
+    if isinstance(v, _t):
+        return f"{v.hour:02d}:{v.minute:02d}"
+    if isinstance(v, _d):
+        return f"{v.hour:02d}:{v.minute:02d}"
+    s = str(v).strip()
+    if not s or s == "-":
+        return None
+    # buang detik kalau ada (HH:MM:SS → HH:MM)
+    parts = s.split(":")
+    if len(parts) >= 2 and parts[0].isdigit():
+        try:
+            return f"{int(parts[0]):02d}:{int(parts[1]):02d}"
+        except Exception:
+            return s
+    return s
+
+
+def _norm_date_cell(v):
+    """Ubah nilai sel tanggal → 'YYYY-MM-DD' atau None. Terima datetime & string DD-MM-YYYY dll."""
+    if v is None:
+        return None
+    from datetime import datetime as _d, date as _date
+    if isinstance(v, _d):
+        return v.strftime("%Y-%m-%d")
+    if isinstance(v, _date):
+        return v.strftime("%Y-%m-%d")
+    s = str(v).strip().split(" ")[0]
+    if not s or s == "-":
+        return None
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d", "%m/%d/%Y"):
+        try:
+            return _d.strptime(s, fmt).strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    return None
+
+
+def _parse_absensi_rekap(content):
+    """Parse file tarikan mesin absen (hasil convert). Cari sheet dgn header
+    Tanggal/Nama/Jam Masuk/Jam Pulang. Return list {nama, tanggal, check_in, check_out}."""
+    import io, openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    out = []
+    for ws in wb.worksheets:
+        # temukan baris header
+        header_row = None
+        col = {}
+        for r in range(1, min(ws.max_row, 15) + 1):
+            vals = [str(ws.cell(r, c).value or "").strip().lower() for c in range(1, ws.max_column + 1)]
+            joined = " ".join(vals)
+            if "nama" in vals and ("tanggal" in vals or "tgl" in vals) and ("jam masuk" in joined or "masuk" in vals):
+                header_row = r
+                for c in range(1, ws.max_column + 1):
+                    h = str(ws.cell(r, c).value or "").strip().lower()
+                    if h in ("tanggal", "tgl"):
+                        col["date"] = c
+                    elif h == "nama":
+                        col["name"] = c
+                    elif "masuk" in h or h in ("in", "jam masuk"):
+                        col["in"] = c
+                    elif "pulang" in h or "keluar" in h or h in ("out", "jam pulang"):
+                        col["out"] = c
+                break
+        if not header_row or "name" not in col or "date" not in col:
+            continue
+        for r in range(header_row + 1, ws.max_row + 1):
+            name = ws.cell(r, col["name"]).value
+            date_v = ws.cell(r, col["date"]).value
+            if not name or not date_v:
+                continue
+            date_s = _norm_date_cell(date_v)
+            if not date_s:
+                continue
+            out.append({
+                "nama": str(name).strip(),
+                "tanggal": date_s,
+                "check_in": _norm_time_cell(ws.cell(r, col["in"]).value) if "in" in col else None,
+                "check_out": _norm_time_cell(ws.cell(r, col["out"]).value) if "out" in col else None,
+            })
+        if out:
+            break   # pakai sheet pertama yg cocok (Rekap Harian)
+    return out
+
+
+def _parse_lembur_workbook(content):
+    """Parse file rekap lembur (1 sheet per karyawan). Return list agregat per (nama, tanggal):
+    {nama, tanggal, minutes, nominal, ket}. Skip sheet REKAP & baris TOTAL."""
+    import io, openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    agg = {}   # (name, date) -> {minutes, nominal, ket}
+    for ws in wb.worksheets:
+        if ws.title.strip().upper() in ("REKAP", "SUMMARY", "TOTAL"):
+            continue
+        # Nama karyawan (cari sel berlabel NAMA)
+        emp_name = None
+        for r in range(1, 8):
+            a = str(ws.cell(r, 1).value or "").strip().upper()
+            if a == "NAMA":
+                emp_name = ws.cell(r, 2).value
+                break
+        # header tabel (baris dgn kolom NO + TANGGAL)
+        hdr = None
+        cmap = {}
+        for r in range(1, 12):
+            row_vals = [str(ws.cell(r, c).value or "").strip().upper() for c in range(1, ws.max_column + 1)]
+            if "NO" in row_vals and "TANGGAL" in row_vals:
+                hdr = r
+                for c in range(1, ws.max_column + 1):
+                    h = str(ws.cell(r, c).value or "").strip().upper()
+                    if h == "TANGGAL":
+                        cmap["date"] = c
+                    elif "MENIT" in h:
+                        cmap["min"] = c
+                    elif "HARIAN" in h or "NOMINAL" in h:
+                        cmap["nom"] = c
+                    elif h == "KET" or "KETERANGAN" in h:
+                        cmap["ket"] = c
+                    elif h == "NO":
+                        cmap["no"] = c
+                break
+        if not hdr or not emp_name or "date" not in cmap:
+            continue
+        last_date = None
+        for r in range(hdr + 1, ws.max_row + 1):
+            first = str(ws.cell(r, 1).value or "").strip().upper()
+            if first.startswith("TOTAL"):
+                continue
+            date_v = ws.cell(r, cmap["date"]).value
+            date_s = _norm_date_cell(date_v) if date_v else None
+            if date_s:
+                last_date = date_s
+            eff_date = date_s or last_date   # carry-forward utk baris lanjutan tanpa tanggal
+            minutes = ws.cell(r, cmap["min"]).value if "min" in cmap else None
+            nominal = ws.cell(r, cmap["nom"]).value if "nom" in cmap else None
+            ket = ws.cell(r, cmap["ket"]).value if "ket" in cmap else None
+            try:
+                minutes = float(minutes) if minutes not in (None, "") else 0.0
+            except Exception:
+                minutes = 0.0
+            try:
+                nominal = float(nominal) if nominal not in (None, "") else 0.0
+            except Exception:
+                nominal = 0.0
+            if not eff_date or (minutes <= 0 and nominal <= 0):
+                continue
+            key = (str(emp_name).strip(), eff_date)
+            cur = agg.setdefault(key, {"nama": str(emp_name).strip(), "tanggal": eff_date, "minutes": 0.0, "nominal": 0.0, "ket": []})
+            cur["minutes"] += minutes
+            cur["nominal"] += nominal
+            if ket:
+                cur["ket"].append(str(ket).strip())
+    result = []
+    for v in agg.values():
+        v["ket"] = "; ".join([k for k in v["ket"] if k])
+        result.append(v)
+    return result
+
+
+@app.post("/api/hr/payroll/import-combined")
+async def import_payroll_combined(
+    absensi_file: Optional[UploadFile] = File(None),
+    lembur_file: Optional[UploadFile] = File(None),
+    mode: str = "merge",
+    dry_run: bool = False,
+    overtime_rate_override: float = 0,
+    user: dict = Depends(require_role("administrator")),
+):
+    """Import gabungan: file tarikan mesin absen + file rekap lembur → auto-isi attendance.
+    - Cocokkan karyawan by NAMA (toleran).
+    - Lembur diagregasi per (karyawan, tanggal); nominal diambil dari file (kolom LEMBUR HARIAN).
+      overtime_hours = menit/60, overtime_rate = nominal/jam (sehingga jam×tarif = nominal file).
+    - overtime_rate_override > 0 → pakai tarif itu utk semua (nominal = jam × override).
+    """
+    if not absensi_file and not lembur_file:
+        raise HTTPException(400, "Minimal salah satu file (absensi atau lembur) harus diupload")
+
+    abs_rows = []
+    if absensi_file:
+        try:
+            abs_rows = _parse_absensi_rekap(await absensi_file.read())
+        except Exception as e:
+            raise HTTPException(400, f"Gagal membaca file absensi: {e}")
+    lem_rows = []
+    if lembur_file:
+        try:
+            lem_rows = _parse_lembur_workbook(await lembur_file.read())
+        except Exception as e:
+            raise HTTPException(400, f"Gagal membaca file lembur: {e}")
+
+    employees = await db.employees.find({}).to_list(5000)
+
+    # Resolusi nama → employee (cache per raw name)
+    name_cache = {}
+    unmatched = set()
+    ambiguous = set()
+
+    def resolve(raw):
+        if raw in name_cache:
+            return name_cache[raw]
+        emp, amb = _match_employee_by_name(raw, employees)
+        name_cache[raw] = emp
+        if emp is None:
+            (ambiguous if amb else unmatched).add(raw)
+        return emp
+
+    # Merge per (employee_id, date)
+    merged = {}   # (emp_id, date) -> row dict for _run_attendance_import
+    ot_summary = {}  # emp_id -> {name, days, minutes, nominal}
+
+    for a in abs_rows:
+        emp = resolve(a["nama"])
+        if not emp:
+            continue
+        eid = str(emp["_id"])
+        key = (eid, a["tanggal"])
+        row = merged.setdefault(key, {"employee_id": eid, "tanggal": a["tanggal"]})
+        if a.get("check_in"):
+            row["check_in"] = a["check_in"]
+        if a.get("check_out"):
+            row["check_out"] = a["check_out"]
+
+    for l in lem_rows:
+        emp = resolve(l["nama"])
+        if not emp:
+            continue
+        eid = str(emp["_id"])
+        minutes = float(l.get("minutes") or 0)
+        nominal = float(l.get("nominal") or 0)
+        hours = round(minutes / 60.0, 4)
+        if overtime_rate_override and overtime_rate_override > 0:
+            rate = float(overtime_rate_override)
+        else:
+            rate = round(nominal / hours, 2) if hours > 0 else 0.0
+        key = (eid, l["tanggal"])
+        row = merged.setdefault(key, {"employee_id": eid, "tanggal": l["tanggal"]})
+        row["overtime_hours"] = hours
+        row["overtime_rate"] = rate
+        if l.get("ket"):
+            row["note"] = l["ket"]
+        s = ot_summary.setdefault(eid, {"employee_name": emp.get("full_name"), "days": 0, "hours": 0.0, "nominal": 0.0})
+        s["days"] += 1
+        s["hours"] += hours
+        s["nominal"] += (hours * rate) if (overtime_rate_override and overtime_rate_override > 0) else nominal
+
+    rows = list(merged.values())
+    result = await _run_attendance_import(rows, mode, dry_run, user)
+
+    result["overtime_summary"] = sorted(ot_summary.values(), key=lambda x: x["employee_name"] or "")
+    result["overtime_total_nominal"] = round(sum(s["nominal"] for s in ot_summary.values()), 2)
+    result["overtime_employee_count"] = len(ot_summary)
+    result["unmatched_names"] = sorted(unmatched)
+    result["ambiguous_names"] = sorted(ambiguous)
+    result["absensi_rows"] = len(abs_rows)
+    result["lembur_rows"] = len(lem_rows)
+    result["merged_rows"] = len(rows)
+    return result
+
+
 
 # ===========================================================================
 # TAX MODULE  (toggle: tax)

@@ -4,7 +4,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../components/ui";
 import { fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
-import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon, Edit2, UserPlus } from "lucide-react";
+import { Upload, Plus, Trash2, Save, X, Download, FileSpreadsheet, Calendar as CalIcon, Settings as SettingsIcon, Edit2, UserPlus, Eye } from "lucide-react";
 import NumberInput from "../components/NumberInput";
 
 const STATUS_OPTIONS = ["Hadir", "Sakit", "Izin", "Alfa", "Libur", "Off"];
@@ -76,6 +76,39 @@ export default function Attendance() {
   // Selection for bulk delete
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
+
+  // ---- Combined Import (Absen mesin + Rekap Lembur) ----
+  const [showCombined, setShowCombined] = useState(false);
+  const [cAbsFile, setCAbsFile] = useState(null);
+  const [cLemFile, setCLemFile] = useState(null);
+  const [cRate, setCRate] = useState("");            // override tarif/jam (opsional)
+  const [cMode, setCMode] = useState("merge");
+  const [cPreview, setCPreview] = useState(null);
+  const [cResult, setCResult] = useState(null);
+  const [cLoading, setCLoading] = useState(false);
+  const resetCombined = () => { setCPreview(null); setCResult(null); };
+  const runCombined = async (dry) => {
+    if (!cAbsFile && !cLemFile) { toast.error("Pilih minimal 1 file (absensi atau lembur)"); return; }
+    setCLoading(true);
+    if (dry) setCPreview(null);
+    try {
+      const fd = new FormData();
+      if (cAbsFile) fd.append("absensi_file", cAbsFile);
+      if (cLemFile) fd.append("lembur_file", cLemFile);
+      const params = new URLSearchParams({ mode: cMode, dry_run: dry ? "true" : "false" });
+      if (cRate && Number(cRate) > 0) params.set("overtime_rate_override", String(Number(cRate)));
+      const { data } = await api.post(`/hr/payroll/import-combined?${params.toString()}`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+      if (dry) {
+        setCPreview(data);
+      } else {
+        setCResult(data);
+        setCPreview(null);
+        toast.success(`${data.imported} hari absensi terisi ke ARC`);
+        load();
+      }
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setCLoading(false); }
+  };
 
   // ---- Attendance config + Public holidays ----
   const [showSettings, setShowSettings] = useState(false);
@@ -404,6 +437,9 @@ export default function Attendance() {
             </Select>
           </div>
           <div className="flex-1"/>
+          <Button onClick={() => { setShowCombined(true); resetCombined(); }} data-testid="att-combined-import-btn" title="Upload file mesin absen + rekap lembur sekaligus">
+            <Upload size={14}/> Import Absen + Lembur
+          </Button>
           <Button variant="secondary" onClick={openSettings} data-testid="att-settings-btn">
             <SettingsIcon size={14}/> Setting
           </Button>
@@ -700,6 +736,155 @@ export default function Attendance() {
                 )}
                 <div className="flex justify-end gap-2 pt-3 border-t">
                   <Button onClick={() => { setShowImport(false); resetImport(); }}>Selesai</Button>
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* ===== Combined Import Modal (Absen mesin + Rekap Lembur) ===== */}
+      {showCombined && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4" data-testid="combined-import-modal">
+          <Card className="w-full max-w-2xl p-5 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-heading font-bold text-lg">Import Absen + Lembur</h3>
+                <p className="text-xs text-slate-500">Upload file tarikan mesin absen & rekap lembur — otomatis terisi ke absensi ARC.</p>
+              </div>
+              <button onClick={() => { setShowCombined(false); resetCombined(); }} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
+            </div>
+
+            {!cResult && (
+              <>
+                {/* File pickers */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">1. File Mesin Absen</label>
+                    <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-4 cursor-pointer ${cAbsFile ? "border-emerald-400 bg-emerald-50" : "border-slate-300 hover:bg-slate-50"}`}>
+                      <FileSpreadsheet size={24} className={cAbsFile ? "text-emerald-500" : "text-slate-400"}/>
+                      <span className="text-xs font-semibold mt-1 text-center break-all">{cAbsFile ? cAbsFile.name : "Pilih file (.xlsx/.csv)"}</span>
+                      <input type="file" className="hidden" accept=".xlsx,.xls,.csv" data-testid="combined-abs-file" onChange={(e) => { setCAbsFile(e.target.files?.[0] || null); resetCombined(); e.target.value=""; }}/>
+                    </label>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">2. File Rekap Lembur</label>
+                    <label className={`flex flex-col items-center justify-center border-2 border-dashed rounded-lg p-4 cursor-pointer ${cLemFile ? "border-emerald-400 bg-emerald-50" : "border-slate-300 hover:bg-slate-50"}`}>
+                      <FileSpreadsheet size={24} className={cLemFile ? "text-emerald-500" : "text-slate-400"}/>
+                      <span className="text-xs font-semibold mt-1 text-center break-all">{cLemFile ? cLemFile.name : "Pilih file (.xlsx)"}</span>
+                      <input type="file" className="hidden" accept=".xlsx,.xls" data-testid="combined-lem-file" onChange={(e) => { setCLemFile(e.target.files?.[0] || null); resetCombined(); e.target.value=""; }}/>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Options */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">Tarif Lembur / Jam (opsional)</label>
+                    <NumberInput value={cRate} onChange={(e) => { setCRate(e.target.value); resetCombined(); }} placeholder="Kosong = pakai nominal dari file" data-testid="combined-rate"/>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Kosongkan untuk memakai nominal lembur yang sudah ada di file. Isi untuk memaksa 1 tarif/jam ke semua.</p>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">Mode</label>
+                    <Select value={cMode} onChange={(e) => { setCMode(e.target.value); resetCombined(); }} data-testid="combined-mode">
+                      <option value="merge">Merge (aman — pertahankan data lama)</option>
+                      <option value="overwrite">Timpa Total</option>
+                    </Select>
+                  </div>
+                </div>
+
+                {!cPreview && (
+                  <div className="flex justify-end gap-2 pt-3 border-t">
+                    <Button variant="secondary" onClick={() => { setShowCombined(false); resetCombined(); }}>Batal</Button>
+                    <Button onClick={() => runCombined(true)} disabled={cLoading || (!cAbsFile && !cLemFile)} data-testid="combined-preview-btn">
+                      <Eye size={14}/> {cLoading ? "Menganalisa..." : "Preview"}
+                    </Button>
+                  </div>
+                )}
+
+                {/* PREVIEW */}
+                {cPreview && (
+                  <div className="space-y-3" data-testid="combined-preview">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <div className="p-2 rounded border bg-slate-50 text-center"><div className="text-lg font-bold text-slate-800">{cPreview.imported}</div><div className="text-[10px] text-slate-500">Hari absensi</div></div>
+                      <div className="p-2 rounded border bg-blue-50 text-center"><div className="text-lg font-bold text-blue-800">{cPreview.overtime_employee_count}</div><div className="text-[10px] text-slate-500">Karyawan lembur</div></div>
+                      <div className="p-2 rounded border bg-emerald-50 text-center"><div className="text-sm font-bold text-emerald-800">Rp {(cPreview.overtime_total_nominal || 0).toLocaleString("id-ID")}</div><div className="text-[10px] text-slate-500">Total lembur</div></div>
+                      <div className="p-2 rounded border bg-amber-50 text-center"><div className="text-lg font-bold text-amber-800">{cPreview.conflict_count || 0}</div><div className="text-[10px] text-slate-500">Konflik</div></div>
+                    </div>
+
+                    {(cPreview.unmatched_names?.length > 0 || cPreview.ambiguous_names?.length > 0) && (
+                      <div className="p-3 bg-rose-50 border border-rose-200 rounded text-xs" data-testid="combined-unmatched">
+                        <div className="font-bold text-rose-800 mb-1">⚠️ Nama tidak cocok dengan Master Karyawan (data-nya dilewati):</div>
+                        {cPreview.unmatched_names?.length > 0 && <div className="text-rose-700">Tidak ditemukan: <b>{cPreview.unmatched_names.join(", ")}</b></div>}
+                        {cPreview.ambiguous_names?.length > 0 && <div className="text-rose-700 mt-1">Ambigu (lebih dari 1 kandidat): <b>{cPreview.ambiguous_names.join(", ")}</b></div>}
+                        <div className="text-[10px] text-rose-600 mt-1">Perbaiki nama di Master Karyawan lalu ulangi, atau input manual.</div>
+                      </div>
+                    )}
+
+                    {cPreview.overtime_summary?.length > 0 && (
+                      <div className="border rounded max-h-56 overflow-y-auto">
+                        <table className="w-full text-xs">
+                          <thead className="bg-slate-100 sticky top-0"><tr>
+                            <th className="text-left px-2 py-1">Karyawan</th>
+                            <th className="text-right px-2 py-1">Hari</th>
+                            <th className="text-right px-2 py-1">Jam</th>
+                            <th className="text-right px-2 py-1">Nominal</th>
+                          </tr></thead>
+                          <tbody>
+                            {cPreview.overtime_summary.map((s, i) => (
+                              <tr key={i} className="border-t">
+                                <td className="px-2 py-1">{s.employee_name}</td>
+                                <td className="px-2 py-1 text-right font-mono">{s.days}</td>
+                                <td className="px-2 py-1 text-right font-mono">{Math.round((s.hours || 0) * 100) / 100}</td>
+                                <td className="px-2 py-1 text-right font-mono">Rp {Math.round(s.nominal || 0).toLocaleString("id-ID")}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {cPreview.conflict_count > 0 && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded text-xs">
+                        <div className="font-bold text-amber-800 mb-1">{cPreview.conflict_count} data lama akan {cMode === "merge" ? "berubah" : "hilang/berubah"}:</div>
+                        <ul className="space-y-0.5 max-h-32 overflow-y-auto">
+                          {(cPreview.conflicts || []).slice(0, 30).map((c, i) => (
+                            <li key={i} className="text-amber-700"><b>{c.employee_name}</b> · {c.date} · {c.field}: {String(c.old)} → {String(c.new)}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between gap-2 pt-3 border-t">
+                      <Button variant="secondary" onClick={resetCombined} disabled={cLoading}>Kembali</Button>
+                      <Button variant="success" onClick={() => runCombined(false)} disabled={cLoading} data-testid="combined-apply-btn">
+                        <Save size={14}/> {cLoading ? "Memproses..." : "Proses & Isi ke ARC"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* RESULT */}
+            {cResult && (
+              <div className="space-y-3" data-testid="combined-result">
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded">
+                  <div className="font-bold text-emerald-800">✅ {cResult.imported} hari absensi terisi ke ARC</div>
+                  <div className="text-xs text-emerald-700 mt-1">
+                    Lembur: {cResult.overtime_employee_count} karyawan · Total Rp {(cResult.overtime_total_nominal || 0).toLocaleString("id-ID")}
+                  </div>
+                </div>
+                {(cResult.unmatched_names?.length > 0) && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded text-xs text-rose-700">
+                    Nama dilewati (tidak ada di master): <b>{cResult.unmatched_names.join(", ")}</b>
+                  </div>
+                )}
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+                  Langkah berikutnya: buka tab <b>Payroll</b> → <b>Simulasi</b> → <b>Jalankan</b> untuk proses gaji.
+                </div>
+                <div className="flex justify-end gap-2 pt-3 border-t">
+                  <Button onClick={() => { setShowCombined(false); resetCombined(); setCAbsFile(null); setCLemFile(null); }} data-testid="combined-done-btn">Selesai</Button>
                 </div>
               </div>
             )}
