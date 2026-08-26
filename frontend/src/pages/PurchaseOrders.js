@@ -9,6 +9,7 @@ import { Plus, X, Trash2, FileSignature, MessageCircle, Edit2, ChevronDown, Chev
 import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 function todayStr() {
   const d = new Date();
@@ -150,6 +151,8 @@ export default function PurchaseOrders() {
 
   const grandTotal = useMemo(() => rows.reduce((s, r) => s + (r.total_amount || 0), 0), [rows]);
 
+  const pag = usePagination(rows, { resetKey: String(rows.length) });
+
   return (
     <div data-testid="po-page">
       <PageHeader
@@ -174,7 +177,7 @@ export default function PurchaseOrders() {
             <Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {pag.paged.map((r) => (
               <React.Fragment key={r.id}>
                 <tr data-testid={`po-row-${r.number}`}>
                   <Td>
@@ -261,6 +264,7 @@ export default function PurchaseOrders() {
             {rows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-8">Belum ada PO.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-po"/>
       </Card>
 
       {/* CREATE PO MODAL */}

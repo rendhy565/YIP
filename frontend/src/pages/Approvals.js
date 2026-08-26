@@ -5,6 +5,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { CheckCircle2, XCircle, Clock, FileText } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const DOC_TYPE_LABELS = {
   cash_advance: "Panjar Kerja",
@@ -32,6 +33,8 @@ export default function Approvals() {
   }, [tab]);
 
   useEffect(() => { load(); }, [load]);
+
+  const pag = usePagination(rows, { resetKey: tab });
 
   const submitAction = async () => {
     if (!actioning) return;
@@ -96,7 +99,7 @@ export default function Approvals() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((a) => {
+              {pag.paged.map((a) => {
                 const snap = a.document_snapshot || {};
                 const currentStepIdx = a.current_step_idx || 0;
                 const steps = a.steps || [];
@@ -149,6 +152,7 @@ export default function Approvals() {
             </tbody>
           </Table>
         )}
+        {rows.length > 0 && <Pagination {...pag} testid="pagination-approvals"/>}
       </Card>
 
       {actioning && (

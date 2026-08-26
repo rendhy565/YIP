@@ -3,6 +3,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Input, Label, Table, Th, Td } from "../components/ui";
 import { fmtDate, parseServerDate } from "../lib/utils";
 import { Activity, ChevronRight, X, Navigation } from "lucide-react";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const ACTION_COLORS = {
   create: "bg-emerald-50 text-emerald-800 border-emerald-200",
@@ -42,6 +43,9 @@ export default function ActivityLog() {
 
   // module dropdown: value = raw target_type, label = friendly module_label
   const moduleOpts = [...new Map(rows.filter((r) => r.target_type).map((r) => [r.target_type, r.module_label || r.target_type])).entries()];
+
+  const actionsPag = usePagination(rows, { resetKey: `${filters.start_date}|${filters.end_date}|${filters.target_type}|${filters.action}` });
+  const navPag = usePagination(navRows, { resetKey: `${filters.start_date}|${filters.end_date}|${navUser}` });
 
   return (
     <div data-testid="activity-log-page">
@@ -91,7 +95,7 @@ export default function ActivityLog() {
             <Th>Waktu</Th><Th>User</Th><Th>Role</Th><Th>Aksi</Th><Th>Modul</Th><Th>Target</Th><Th>Detail</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => {
+            {actionsPag.paged.map((r) => {
               const detailEntries = r.details && typeof r.details === "object" ? Object.entries(r.details) : [];
               const hasDetail = detailEntries.length > 0 || r.changes;
               return (
@@ -118,6 +122,7 @@ export default function ActivityLog() {
             {rows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-10"><Activity size={28} className="mx-auto opacity-30 mb-2"/>Belum ada aktivitas.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...actionsPag} testid="pagination-activity"/>
       </Card>
       </>)}
 
@@ -144,7 +149,7 @@ export default function ActivityLog() {
             <Table>
               <thead><tr><Th>Waktu</Th><Th>User</Th><Th>Role</Th><Th>Halaman</Th><Th>Path</Th></tr></thead>
               <tbody>
-                {navRows.map((r) => (
+                {navPag.paged.map((r) => (
                   <tr key={r.id} data-testid={`nav-row-${r.id}`} className="hover:bg-slate-50">
                     <Td className="text-xs font-mono text-slate-700 whitespace-nowrap">{parseServerDate(r.timestamp).toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "2-digit", month: "short", year: "numeric" })} <span className="text-slate-400">{parseServerDate(r.timestamp).toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit", second: "2-digit" })} WIB</span></Td>
                     <Td className="font-semibold">{r.user_name || "—"}</Td>
@@ -156,6 +161,7 @@ export default function ActivityLog() {
                 {navRows.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-500 py-10"><Navigation size={28} className="mx-auto opacity-30 mb-2"/>Belum ada log navigasi.</Td></tr>}
               </tbody>
             </Table>
+            <Pagination {...navPag} testid="pagination-navigation"/>
           </Card>
         </>
       )}

@@ -7,6 +7,7 @@ import { fmtIDR, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Wallet, Plus, X, CheckCircle2, Trash2, ChevronDown, ChevronRight } from "lucide-react";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const STATUS_BADGE = {
   active: "bg-blue-50 text-blue-800 border-blue-200",
@@ -35,6 +36,8 @@ export default function KasbonKaryawan() {
   };
   useEffect(() => { load(); }, [statusFilter]);
   useEffect(() => { api.get("/hr/employees").then((r) => setEmps(r.data || [])); }, []);
+
+  const pag = usePagination(loans, { resetKey: statusFilter });
 
   const perInstallment = (() => {
     const p = Number(form.principal), n = Number(form.installments);
@@ -106,7 +109,7 @@ export default function KasbonKaryawan() {
             <Th>Status</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {loans.map((k) => {
+            {pag.paged.map((k) => {
               const isOpen = expanded === k.id;
               const paidCount = (k.payments || []).length;
               return (
@@ -171,6 +174,7 @@ export default function KasbonKaryawan() {
             {loans.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10"><Wallet size={28} className="mx-auto opacity-30 mb-2" />Belum ada kasbon.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-kasbon"/>
       </Card>
 
       {showForm && (

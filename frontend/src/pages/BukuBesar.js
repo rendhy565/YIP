@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Input, Select, Label, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, currentMonth } from "../lib/utils";
+import Pagination, { usePagination } from "../components/Pagination";
 
 export default function BukuBesar() {
   const [accounts, setAccounts] = useState([]);
@@ -23,6 +24,9 @@ export default function BukuBesar() {
     if (period) p.period = period;
     api.get("/ledger", { params: p }).then((r) => setData(r.data));
   }, [code, period]);
+
+  const ledgerRows = data?.rows || [];
+  const pag = usePagination(ledgerRows, { resetKey: `${code}|${period}` });
 
   return (
     <div data-testid="ledger-page">
@@ -64,7 +68,7 @@ export default function BukuBesar() {
               <tbody>
                 <tr className="bg-slate-50"><Td colSpan={5} className="font-bold">Saldo Awal</Td><Td className="text-right font-mono font-bold">{fmtIDR(data.beginning_balance)}</Td></tr>
                 {data.rows.length === 0 && <tr><Td colSpan={6} className="text-center text-slate-400 py-6">Tidak ada mutasi</Td></tr>}
-                {data.rows.map((r, i) => (
+                {pag.paged.map((r, i) => (
                   <tr key={i}>
                     <Td className="text-xs">{fmtDate(r.date)}</Td>
                     <Td className="font-mono text-xs">{r.entry_no}</Td>
@@ -77,6 +81,7 @@ export default function BukuBesar() {
                 <tr className="bg-blue-50 font-bold"><Td colSpan={5}>Saldo Akhir</Td><Td className="text-right font-mono">{fmtIDR(data.ending_balance)}</Td></tr>
               </tbody>
             </Table>
+            <Pagination {...pag} testid="pagination-ledger"/>
           </Card>
         </>
       )}

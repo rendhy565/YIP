@@ -3,14 +3,14 @@
 **Purpose:** Public-facing tracking page di website AR Cargo (ARCWEB) — customer memasukkan Tracking Code lalu melihat daftar AWB beserta status.
 
 **Repo:** https://github.com/rendhy565/ARCWEB.git
-**ARC Backend:** https://date-filter-refactor.preview.emergentagent.com  *(preview; produksi akan disesuaikan)*
+**ARC Backend:** https://plot-expenses.preview.emergentagent.com  *(preview; produksi akan disesuaikan)*
 
 ---
 
 ## 1. Endpoint
 
 ```
-GET https://date-filter-refactor.preview.emergentagent.com/api/public/tracking/{code}
+GET https://plot-expenses.preview.emergentagent.com/api/public/tracking/{code}
 ```
 
 - **Auth:** ❌ **TIDAK PERLU** JWT. Public endpoint.
@@ -93,7 +93,7 @@ const track = async (code) => {
   setLoading(true); setError(null);
   try {
     const r = await fetch(
-      `https://date-filter-refactor.preview.emergentagent.com/api/public/tracking/${encodeURIComponent(code)}`
+      `https://plot-expenses.preview.emergentagent.com/api/public/tracking/${encodeURIComponent(code)}`
     );
     if (!r.ok) {
       const err = await r.json();
@@ -131,14 +131,14 @@ Untuk keamanan data & privasi customer, field berikut TIDAK dikirim ke public tr
 
 ```bash
 # Valid code
-curl https://date-filter-refactor.preview.emergentagent.com/api/public/tracking/ARC-BUDI-2024
+curl https://plot-expenses.preview.emergentagent.com/api/public/tracking/ARC-BUDI-2024
 
 # Invalid → 404
-curl https://date-filter-refactor.preview.emergentagent.com/api/public/tracking/INVALID-CODE
+curl https://plot-expenses.preview.emergentagent.com/api/public/tracking/INVALID-CODE
 
 # Rate limit test (kirim 31 req cepat)
 for i in {1..31}; do curl -s -o /dev/null -w "%{http_code}\n" \
-  https://date-filter-refactor.preview.emergentagent.com/api/public/tracking/ARC-BUDI-2024; done
+  https://plot-expenses.preview.emergentagent.com/api/public/tracking/ARC-BUDI-2024; done
 ```
 
 ## 8. CORS

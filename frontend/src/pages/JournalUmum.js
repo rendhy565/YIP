@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, Save, X, BookOpen } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 export default function JournalUmum() {
   const { user } = useAuth();
@@ -63,6 +64,8 @@ export default function JournalUmum() {
   };
 
   const accName = (c) => accounts.find((a) => a.code === c)?.name || c;
+
+  const pag = usePagination(entries, { resetKey: `${period}|${refType}|${accountCode}` });
 
   return (
     <div data-testid="journal-page">
@@ -147,7 +150,7 @@ export default function JournalUmum() {
           <thead><tr><Th>No Jurnal</Th><Th>Tanggal</Th><Th>Deskripsi</Th><Th>Ref</Th><Th className="text-right">Total</Th><Th></Th></tr></thead>
           <tbody>
             {entries.length === 0 && <tr><Td colSpan={6} className="text-center text-slate-400 py-6">Belum ada jurnal pada filter ini</Td></tr>}
-            {entries.map((j) => {
+            {pag.paged.map((j) => {
               const tot = (j.lines || []).reduce((s, l) => s + (l.debit || 0), 0);
               const isOpen = !!expanded[j.id];
               return (
@@ -181,6 +184,7 @@ export default function JournalUmum() {
             })}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-journal"/>
       </Card>
     </div>
   );

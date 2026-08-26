@@ -1,6 +1,15 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
 ## Pagination pada Halaman Tabel (Jun 2026) — sebagian, dilanjut nanti
+- **Kebutuhan user:** semua halaman yang menampilkan data ke tabel diberi pagination; filter & search TETAP bekerja ke SELURUH data (bukan cuma halaman aktif). Halaman dgn data kecil/bounded & non-dinamis → SKIP (permintaan user).
+- **Pola dipakai:** hook client-side `usePagination(array, {resetKey, defaultSize})` + komponen `<Pagination>` (sudah ada di `components/Pagination.js`). Filter/search dijalankan dulu ke seluruh array → hasil filter baru di-paginate. Default 25/page (mengikuti default hook). `Pagination` auto-hide bila total=0.
+- **Selesai sesi lanjutan (Jun 2026):** Costs/Plotting Biaya (tabel utama "Daftar Biaya per AWB" saja, panel grup prorata TIDAK dipaginate — sesuai user), FixedCosts (Expense), Approvals (resetKey=tab), JournalUmum (resetKey=period|refType|akun), ActivityLog (tab Aksi + tab Navigasi, dua pagination terpisah), BankReconciliation (resetKey=bank|periode|status), BukuBesar (data.rows, resetKey=akun|periode), PurchaseOrders, KasbonKaryawan (resetKey=statusFilter).
+- **Sengaja SKIP (kecil/bounded, permintaan user):** ExpenseCategories (master kategori, bounded + sudah ada search), NeracaSaldo (trial balance, bounded jumlah akun COA).
+- **Sudah punya sebelumnya:** Customers, PettyCash, Contracts, RecurringExpenses, ChartOfAccounts, Pph21, AssetModule, MasterVendor, OrdersList, Payments, Invoices, AccrueSettlement, TariffCorrection, TaxModule, VendorAging, Users(sebagian).
+- **Catatan env:** backend sempat down di preview krn drift dependency (pydantic_core 2.46.4 vs pydantic 2.9.2 → downgrade pydantic-core==2.23.4; + install et_xmlfile utk openpyxl). requirements.txt TIDAK diubah (transitif; pydantic 2.9.2 menarik pydantic-core benar otomatis).
+- **Status:** frontend compile bersih (1 warning lama non-blocking). Diverifikasi via screenshot: halaman Plotting Biaya render OK (pagination auto-hide krn preview DB kosong cost). Testing agent DILARANG user (tes sendiri di VPS). Butuh deploy frontend.
+
+## Pagination pada Halaman Tabel — sesi sebelumnya (arsip)
 - **Kebutuhan user:** semua halaman yang menampilkan data ke tabel diberi pagination; filter & search TETAP bekerja ke SELURUH data (bukan cuma halaman aktif).
 - **Pola dipakai:** hook client-side `usePagination(array, {resetKey, defaultSize})` + komponen `<Pagination>` (sudah ada di `components/Pagination.js`). Filter/search dijalankan dulu ke seluruh array → hasil filter baru di-paginate, jadi pencarian tetap lintas semua data. Hook di-hardening: `resetKey` reset ke halaman 1 saat filter berubah, dan `page` di-clamp ke `totalPages` (mencegah tampil kosong saat data mengecil).
 - **Selesai (8 halaman) + yang sudah punya sebelumnya:** Customers (+search baru), PettyCash (+search), Contracts (+search), RecurringExpenses (+search), ChartOfAccounts (paginate list terfilter), Pph21, AssetModule (tab Aset + Depreciation Runs), MasterVendor (paginate `shown`). Sudah punya pagination sejak sebelumnya: OrdersList, Payments, Invoices, AccrueSettlement, TariffCorrection, TaxModule, VendorAging, Users(sebagian).

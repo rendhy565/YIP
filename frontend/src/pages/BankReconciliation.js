@@ -5,6 +5,7 @@ import { Card, PageHeader, Button, Input, Select, Label, Table, Th, Td } from ".
 import { fmtIDR, fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Link2, Unlink, CheckCircle2, X } from "lucide-react";
+import Pagination, { usePagination } from "../components/Pagination";
 
 export default function BankReconciliation() {
   const [cashAccounts, setCashAccounts] = useState([]);
@@ -24,6 +25,8 @@ export default function BankReconciliation() {
   };
   useEffect(() => { api.get("/accounts", { params: { is_cash: true } }).then((r) => { setCashAccounts(r.data); if (r.data.length && !r.data.find((x) => x.code === bankCode)) setBankCode(r.data[0].code); }); }, []);
   useEffect(() => { load(); }, [bankCode, period, matchedFilter]);
+
+  const pag = usePagination(lines, { resetKey: `${bankCode}|${period}|${matchedFilter}` });
 
   const submit = async () => {
     if (!form.description || !form.amount) return toast.error("Isi semua field");
@@ -87,7 +90,7 @@ export default function BankReconciliation() {
           <thead><tr><Th>Tanggal</Th><Th>Deskripsi</Th><Th className="text-right">Jumlah</Th><Th>Status</Th><Th>Aksi</Th></tr></thead>
           <tbody>
             {lines.length === 0 && <tr><Td colSpan={5} className="text-center text-slate-400 py-6">Belum ada mutasi</Td></tr>}
-            {lines.map((l) => (
+            {pag.paged.map((l) => (
               <React.Fragment key={l.id}>
                 <tr>
                   <Td className="text-xs">{fmtDate(l.date)}</Td>
@@ -119,6 +122,7 @@ export default function BankReconciliation() {
             ))}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-bank-recon"/>
       </Card>
     </div>
   );

@@ -1,5 +1,5 @@
 {
-  "summary": "Iteration-10 FRONTEND e2e PASS. All 9 review items verified end-to-end via Playwright against the live preview URL (https://date-filter-refactor.preview.emergentagent.com/arc/). Order creation with Polis/Asuransi + PPN1% gave Grand Total Rp 221.000 exactly as expected. Bulk-revert flow, Invoices split (creation vs tercetak), Receive modal with numeric polis + SPSI/Forklift conditional fields, Panjar settle with 3-AWB breakdown (200k/200k/100k=500k balanced green banner), Settings logo+bank fields, and sidebar 'Buat Invoice'+'Invoice Tercetak' all functioning correctly.",
+  "summary": "Iteration-10 FRONTEND e2e PASS. All 9 review items verified end-to-end via Playwright against the live preview URL (https://plot-expenses.preview.emergentagent.com/arc/). Order creation with Polis/Asuransi + PPN1% gave Grand Total Rp 221.000 exactly as expected. Bulk-revert flow, Invoices split (creation vs tercetak), Receive modal with numeric polis + SPSI/Forklift conditional fields, Panjar settle with 3-AWB breakdown (200k/200k/100k=500k balanced green banner), Settings logo+bank fields, and sidebar 'Buat Invoice'+'Invoice Tercetak' all functioning correctly.",
   "backend_issues": {"critical": [], "minor": []},
   "frontend_issues": {
     "ui_bugs": [],

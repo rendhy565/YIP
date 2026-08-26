@@ -20,6 +20,6 @@
   "seed_data_creation": "Test PO docs (TEST_E2E_*, TEST_PO_*, TEST_PATCH_V, TEST_DEL_V) created during tests; each test cleans up via DELETE after assertion. A few from UI test (TEST_E2E_<timestamp>) remain in DB — safe to ignore or purge by prefix.",
   "retest_needed": false,
   "main_agent_can_self_test": true,
-  "context_for_next_testing_agent": "PO refactor stable. New schema items[] with origin/destination/armada/item_description/qty/harga/awb_id. Cost auto-created only when BOTH awb_id and harga>0. PATCH endpoint /api/purchase-orders/{pid}/items/{idx} handles update + cost reconciliation. WA button uses window.open to wa.me/?text= (no phone). For UI tests on this app, login inputs have no name/type='text'; use generic input[] query selector and fill by index. Public URL: https://date-filter-refactor.preview.emergentagent.com/arc/...",
+  "context_for_next_testing_agent": "PO refactor stable. New schema items[] with origin/destination/armada/item_description/qty/harga/awb_id. Cost auto-created only when BOTH awb_id and harga>0. PATCH endpoint /api/purchase-orders/{pid}/items/{idx} handles update + cost reconciliation. WA button uses window.open to wa.me/?text= (no phone). For UI tests on this app, login inputs have no name/type='text'; use generic input[] query selector and fill by index. Public URL: https://plot-expenses.preview.emergentagent.com/arc/...",
   "rca of the issue": "N/A — feature works as specified."
 }

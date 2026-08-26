@@ -1,7 +1,7 @@
 # Test Credentials — ARC TMS
 
 ## Login URL
-`https://df4b07c5-1652-4b61-8e8c-18d77cdc9906.preview.emergentagent.com/arc/login`
+`https://plot-expenses.preview.emergentagent.com/arc/login`
 
 ## Users (seeded automatically)
 | Username  | Password      | Role           |

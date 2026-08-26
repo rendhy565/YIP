@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Plus, Trash2, X, Banknote, Receipt, Copy, ChevronDown, Check, Search, Upload, FileSpreadsheet, AlertCircle } from "lucide-react";
 import { useCan } from "../lib/useCan";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const POSTING_BADGE = {
   cogs:    { label: "COGS",    cls: "text-emerald-700 bg-emerald-50 border-emerald-200" },
@@ -210,6 +211,8 @@ export default function FixedCosts() {
   useEffect(() => { loadCategories(); }, []);
   useEffect(() => { load(); }, [startMonth, endMonth]);
 
+  const rowsPag = usePagination(rows, { resetKey: startMonth + endMonth });
+
   const submit = async (e) => {
     e.preventDefault();
     if (!form.category) {
@@ -408,7 +411,7 @@ export default function FixedCosts() {
             <Th className="text-right">Jumlah</Th><Th></Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => {
+            {rowsPag.paged.map((r) => {
               const ptype = r.posting_type || catByName[r.category]?.posting_type || "expense";
               return (
                 <tr key={r.id} data-testid={`fixed-cost-row-${r.id}`}>
@@ -446,6 +449,7 @@ export default function FixedCosts() {
             {rows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-10">Belum ada expense untuk periode ini.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...rowsPag} testid="pagination-fixed-costs"/>
       </Card>
 
       {open && (

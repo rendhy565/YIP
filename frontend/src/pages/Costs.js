@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
 import { Plus, Trash2, X, Wallet, Coins, Layers, RefreshCw, CheckSquare, Square, Search } from "lucide-react";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 export default function Costs() {
   const { user } = useAuth();
@@ -157,8 +158,7 @@ export default function Costs() {
     } catch (e2) { toast.error(errMsg(e2)); }
   };
 
-  const del = async (id) => {
-    if (!window.confirm("Hapus biaya?")) return;
+  const del = async (id) => {    if (!window.confirm("Hapus biaya?")) return;
     try {
       const r = await api.delete(`/costs/${id}`);
       // Server returns ok=false + needs_confirmation when this is the LAST cost
@@ -185,6 +185,8 @@ export default function Costs() {
       load();
     } catch (e2) { toast.error(errMsg(e2)); }
   };
+
+  const costsPag = usePagination(costs, { resetKey: String(costs.length) });
 
   return (
     <div data-testid="costs-page">
@@ -218,7 +220,7 @@ export default function Costs() {
             <Th>Vendor / Deskripsi</Th><Th className="text-right">Jumlah</Th><Th>Settle</Th><Th></Th>
           </tr></thead>
           <tbody>
-            {costs.map((c) => (
+            {costsPag.paged.map((c) => (
               <tr key={c.id} data-testid={`cost-row-${c.id}`}>
                 <Td className="text-xs text-slate-600">{fmtDate(c.created_at)}</Td>
                 <Td className="font-mono font-semibold">{c.awb_number}</Td>
@@ -264,6 +266,7 @@ export default function Costs() {
             {costs.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-8">Belum ada biaya.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...costsPag} testid="pagination-costs"/>
       </Card>
 
       {open && (
