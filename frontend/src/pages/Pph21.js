@@ -4,6 +4,7 @@ import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from ".
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Receipt, ChevronDown, ChevronRight, CheckCircle2, Banknote, X } from "lucide-react";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const STATUS_BADGE = {
   paid: "bg-emerald-50 text-emerald-800 border-emerald-200",
@@ -27,6 +28,7 @@ export default function Pph21() {
 
   const load = () => api.get("/hr/pph21").then((r) => setRows(r.data || [])).catch((e) => toast.error(errMsg(e)));
   useEffect(() => { load(); api.get("/accounts", { params: { is_cash: true } }).then((r) => setCashAccounts(r.data || [])); }, []);
+  const pag = usePagination(rows, { resetKey: "", defaultSize: 50 });
 
   const openPay = (row) => {
     setPayFor(row);
@@ -61,7 +63,7 @@ export default function Pph21() {
               <Th></Th><Th>Periode Payroll</Th><Th className="text-right">Total PPh21</Th><Th>Status</Th><Th>Tgl Bayar</Th><Th className="text-right">Aksi</Th>
             </tr></thead>
             <tbody>
-              {rows.map((r) => (
+              {pag.paged.map((r) => (
                 <React.Fragment key={r.payroll_id}>
                   <tr data-testid={`pph21-row-${r.period_month}`} className="hover:bg-slate-50">
                     <Td>
@@ -114,6 +116,7 @@ export default function Pph21() {
               )}
             </tbody>
           </Table>
+          <Pagination {...pag} testid="pagination-pph21"/>
         </div>
       </Card>
 

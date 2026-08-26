@@ -5,6 +5,7 @@ import { errMsg } from "../lib/utils";
 import { PPH_LABEL } from "../components/VendorSelect";
 import { toast } from "sonner";
 import { Plus, Trash2, Pencil, X, AlertTriangle, GitMerge } from "lucide-react";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const empty = { name: "", npwp: "", pph_type: "", address: "", bank_account: "", notes: "" };
 
@@ -27,6 +28,7 @@ export default function MasterVendor() {
 
   const reviewCount = useMemo(() => rows.filter((r) => !r.pph_reviewed).length, [rows]);
   const shown = useMemo(() => (onlyReview ? rows.filter((r) => !r.pph_reviewed) : rows), [rows, onlyReview]);
+  const pag = usePagination(shown, { resetKey: onlyReview ? "review" : "all" });
 
   // ---- Merge vendor ----
   const [sel, setSel] = useState(new Set());
@@ -119,7 +121,7 @@ export default function MasterVendor() {
             <Th></Th><Th>Nama</Th><Th>NPWP</Th><Th>Jenis PPh</Th><Th>Status</Th><Th>Rekening</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {shown.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`vendor-row-${r.id}`} className={sel.has(r.id) ? "bg-indigo-50" : ""}>
                 <Td>
                   <input type="checkbox" data-testid={`vendor-check-${r.id}`} checked={sel.has(r.id)} onChange={() => toggleSel(r.id)} className="h-4 w-4 accent-indigo-600 cursor-pointer" />
@@ -146,6 +148,7 @@ export default function MasterVendor() {
             {shown.length === 0 && <tr><Td className="text-slate-500 text-center py-8" colSpan={7}>{onlyReview ? "Tidak ada vendor yang perlu ditinjau." : "Belum ada vendor."}</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-vendors"/>
       </Card>
 
       {open && (

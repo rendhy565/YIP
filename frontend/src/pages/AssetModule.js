@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg, currentMonth } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Save, PlayCircle, X } from "lucide-react";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 export default function AssetModule() {
   const [tab, setTab] = useState("assets");
@@ -18,6 +19,8 @@ export default function AssetModule() {
   const loadA = () => api.get("/assets").then((r) => setAssets(r.data));
   const loadR = () => api.get("/assets/depreciation-runs").then((r) => setRuns(r.data));
   useEffect(() => { loadA(); loadR(); }, []);
+  const pagA = usePagination(assets, { resetKey: "assets" });
+  const pagR = usePagination(runs, { resetKey: "runs" });
 
   const submit = async () => {
     if (!form.name || !form.cost) return toast.error("Nama & biaya perolehan wajib");
@@ -75,7 +78,7 @@ export default function AssetModule() {
             <thead><tr><Th>Nama</Th><Th>Kategori</Th><Th>Tgl Perolehan</Th><Th className="text-right">Harga</Th><Th className="text-right">Umur</Th><Th className="text-right">Akumulasi</Th><Th className="text-right">Nilai Buku</Th><Th></Th></tr></thead>
             <tbody>
               {assets.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-400 py-6">Belum ada aset</Td></tr>}
-              {assets.map((a) => {
+              {pagA.paged.map((a) => {
                 const nilaiBuku = (a.cost || 0) - (a.accumulated_depreciation || 0);
                 return (
                   <tr key={a.id}>
@@ -92,6 +95,7 @@ export default function AssetModule() {
               })}
             </tbody>
           </Table>
+          <Pagination {...pagA} testid="pagination-assets"/>
         </Card>
       )}
 
@@ -101,7 +105,7 @@ export default function AssetModule() {
             <thead><tr><Th>Periode</Th><Th>Tanggal Run</Th><Th className="text-right">Total Depresiasi</Th><Th>Detail</Th></tr></thead>
             <tbody>
               {runs.length === 0 && <tr><Td colSpan={4} className="text-center text-slate-400 py-6">Belum ada</Td></tr>}
-              {runs.map((r) => (
+              {pagR.paged.map((r) => (
                 <tr key={r.id}>
                   <Td className="font-mono font-bold">{r.period_month}</Td>
                   <Td className="text-xs">{fmtDate(r.created_at)}</Td>
@@ -111,6 +115,7 @@ export default function AssetModule() {
               ))}
             </tbody>
           </Table>
+          <Pagination {...pagR} testid="pagination-depr-runs"/>
         </Card>
       )}
     </div>

@@ -5,6 +5,7 @@ import { errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Edit2, X, Save, ShieldAlert } from "lucide-react";
 import { useAuth } from "../lib/auth";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const TYPE_OPTIONS = [
   { v: "asset", l: "Aset" },
@@ -56,6 +57,7 @@ export default function ChartOfAccounts() {
   const list = rows.filter((r) =>
     !filter || r.code.includes(filter) || r.name.toLowerCase().includes(filter.toLowerCase()) || r.type.includes(filter)
   );
+  const pag = usePagination(list, { resetKey: filter, defaultSize: 50 });
 
   return (
     <div data-testid="coa-page">
@@ -97,7 +99,7 @@ export default function ChartOfAccounts() {
                 </Td>
               </tr>
             )}
-            {list.map((a) => editing === a.code ? (
+            {pag.paged.map((a) => editing === a.code ? (
               <tr key={a.code} className="bg-blue-50/50">
                 <Td><Input value={form.code} onChange={(e) => setForm({...form, code: e.target.value})} disabled={a.is_system}/></Td>
                 <Td><Input value={form.name} onChange={(e) => setForm({...form, name: e.target.value})}/></Td>
@@ -134,6 +136,7 @@ export default function ChartOfAccounts() {
             ))}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-coa"/>
       </Card>
     </div>
   );

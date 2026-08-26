@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Card, PageHeader, Button, Input, Label, Table, Th, Td } from "../components/ui";
@@ -6,6 +6,7 @@ import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X, Repeat, AlertCircle, Pause, Play, Edit2 } from "lucide-react";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 export default function RecurringExpenses() {
   const [rows, setRows] = useState([]);
@@ -25,6 +26,15 @@ export default function RecurringExpenses() {
   const load = () => api.get("/recurring-expenses").then((r) => setRows(r.data));
   const loadCat = () => api.get("/expense-categories").then((r) => setCategories(r.data));
   useEffect(() => { load(); loadCat(); }, []);
+
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return rows;
+    return rows.filter((r) => [r.name, r.category, r.description, r.frequency]
+      .some((v) => (v || "").toString().toLowerCase().includes(s)));
+  }, [rows, q]);
+  const pag = usePagination(filtered, { resetKey: q });
 
   const submit = async (e) => {
     e.preventDefault();
@@ -106,6 +116,10 @@ export default function RecurringExpenses() {
       />
 
       <Card>
+        <div className="p-3 border-b border-slate-200 flex items-center gap-2">
+          <Input data-testid="recurring-search" placeholder="Cari nama / kategori / deskripsi..." value={q} onChange={(e) => setQ(e.target.value)} className="max-w-md"/>
+          <span className="text-xs text-slate-500 ml-auto">{filtered.length} dari {rows.length}</span>
+        </div>
         <Table>
           <thead><tr>
             <Th>Nama</Th><Th>Kategori</Th><Th>Frekuensi</Th>
@@ -113,7 +127,7 @@ export default function RecurringExpenses() {
             <Th>Next Due</Th><Th>Last Run</Th><Th>Status</Th><Th></Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`recurring-row-${r.name}`} className={r.active ? "" : "opacity-50"}>
                 <Td><div className="font-semibold">{r.name}</div><div className="text-[10px] text-slate-500">{r.description}</div></Td>
                 <Td><span className="text-xs">{r.category}</span></Td>
@@ -144,6 +158,7 @@ export default function RecurringExpenses() {
             {rows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10">Belum ada recurring expense.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-recurring"/>
       </Card>
 
       {open && (

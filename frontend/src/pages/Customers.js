@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Table, Th, Td } from "../components/ui";
 import { errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, Pencil, X, Copy, Ticket } from "lucide-react";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const empty = { name: "", company_details: "", address: "", npwp: "", tracking_code: "", attn: "", default_ppn_percentage: "" };
 
@@ -13,6 +14,14 @@ export default function Customers() {
   const [form, setForm] = useState(empty);
   const [editId, setEditId] = useState(null);
   const [applyingPpn, setApplyingPpn] = useState(false);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return rows;
+    return rows.filter((r) => [r.name, r.company_details, r.npwp, r.address, r.tracking_code, r.attn]
+      .some((v) => (v || "").toString().toLowerCase().includes(s)));
+  }, [rows, q]);
+  const pag = usePagination(filtered, { resetKey: q });
 
   const applyDefaultPpn = async () => {
     if (!editId) return;
@@ -69,12 +78,16 @@ export default function Customers() {
       />
 
       <Card>
+        <div className="p-3 border-b border-slate-200 flex items-center gap-2">
+          <Input data-testid="customers-search" placeholder="Cari nama / NPWP / kode / alamat..." value={q} onChange={(e) => setQ(e.target.value)} className="max-w-md"/>
+          <span className="text-xs text-slate-500 ml-auto">{filtered.length} dari {rows.length} customer</span>
+        </div>
         <Table>
           <thead><tr>
             <Th>Nama</Th><Th>Tracking Code</Th><Th>Detail Perusahaan</Th><Th>NPWP</Th><Th>Alamat</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`customer-row-${r.id}`}>
                 <Td><span className="font-semibold">{r.name}</span></Td>
                 <Td>
@@ -110,6 +123,7 @@ export default function Customers() {
             {rows.length === 0 && <tr><Td className="text-slate-500 text-center py-8" colSpan={6}>Belum ada customer.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-customers"/>
       </Card>
 
       {open && (

@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Select, Table, Th, Td } from "../components/ui";
 import { errMsg, fmtIDR } from "../lib/utils";
 import { toast } from "sonner";
 import { Plus, Trash2, X } from "lucide-react";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const empty = { customer_id: "", origin: "", destination: "", price_per_kg: 0, via: "", minimum_kg: "" };
 
@@ -23,6 +24,15 @@ export default function Contracts() {
   useEffect(() => { load(); }, []);
 
   const cName = (id) => customers.find((c) => c.id === id)?.name || "-";
+
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return rows;
+    return rows.filter((r) => [cName(r.customer_id), r.origin, r.destination, r.via]
+      .some((v) => (v || "").toString().toLowerCase().includes(s)));
+  }, [rows, q, customers]);
+  const pag = usePagination(filtered, { resetKey: q });
 
   const submit = async (e) => {
     e.preventDefault();
@@ -51,13 +61,17 @@ export default function Contracts() {
         action={<Button data-testid="add-contract-btn" onClick={() => setOpen(true)}><Plus size={16}/> Tambah Perjanjian</Button>}
       />
       <Card>
+        <div className="p-3 border-b border-slate-200 flex items-center gap-2">
+          <Input data-testid="contracts-search" placeholder="Cari customer / origin / destination..." value={q} onChange={(e) => setQ(e.target.value)} className="max-w-md"/>
+          <span className="text-xs text-slate-500 ml-auto">{filtered.length} dari {rows.length} perjanjian</span>
+        </div>
         <Table>
           <thead><tr>
             <Th>Customer</Th><Th>Origin</Th><Th>Destination</Th><Th>Via</Th>
             <Th className="text-right">Tarif / Kg</Th><Th className="text-right">Min Kg</Th><Th></Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`contract-row-${r.id}`}>
                 <Td><span className="font-semibold">{cName(r.customer_id)}</span></Td>
                 <Td className="font-mono">{r.origin}</Td>
@@ -77,6 +91,7 @@ export default function Contracts() {
             {rows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-8">Belum ada perjanjian rate.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-contracts"/>
       </Card>
 
       {open && (

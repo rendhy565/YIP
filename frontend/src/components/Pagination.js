@@ -16,13 +16,15 @@ export function usePagination(items = [], { defaultSize = 25, resetKey = "" } = 
   const isAll = pageSize === "all";
   const sizeNum = isAll ? total : pageSize;
   const totalPages = isAll ? 1 : Math.max(1, Math.ceil(total / (sizeNum || 1)));
+  const safePage = Math.min(page, totalPages);
+  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
   const paged = useMemo(() => {
     if (isAll) return items;
-    const start = (page - 1) * sizeNum;
+    const start = (safePage - 1) * sizeNum;
     return items.slice(start, start + sizeNum);
-  }, [items, page, sizeNum, isAll]);
+  }, [items, safePage, sizeNum, isAll]);
 
-  return { paged, page, setPage, pageSize, setPageSize, total, totalPages, isAll };
+  return { paged, page: safePage, setPage, pageSize, setPageSize, total, totalPages, isAll };
 }
 
 /**

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from "../components/ui";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Plus, X, Trash2, Wallet } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 const CATEGORIES = ["Operational", "Lintas", "Umum", "Kantor", "Lainnya"];
 
@@ -24,6 +25,14 @@ export default function PettyCash() {
   const [show, setShow] = useState(false);
   const [form, setForm] = useState(empty);
   const [saving, setSaving] = useState(false);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return rows;
+    return rows.filter((r) => [r.number, r.category, r.description, r.cash_account_code]
+      .some((v) => (v || "").toString().toLowerCase().includes(s)));
+  }, [rows, q]);
+  const pag = usePagination(filtered, { resetKey: q });
 
   const load = async () => {
     const [pc, accs] = await Promise.all([
@@ -81,13 +90,17 @@ export default function PettyCash() {
       </Card>
 
       <Card>
+        <div className="p-3 border-b border-slate-200 flex items-center gap-2">
+          <Input data-testid="petty-search" placeholder="Cari no / kategori / deskripsi..." value={q} onChange={(e) => setQ(e.target.value)} className="max-w-md"/>
+          <span className="text-xs text-slate-500 ml-auto">{filtered.length} dari {rows.length} entri</span>
+        </div>
         <Table>
           <thead><tr>
             <Th>No.</Th><Th>Tanggal</Th><Th>Kategori</Th><Th>Deskripsi</Th>
             <Th className="text-right">Nominal</Th><Th>Sumber Kas</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.id} data-testid={`petty-row-${r.number}`}>
                 <Td className="font-mono font-semibold">{r.number}</Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.expense_date)}</Td>
@@ -105,6 +118,7 @@ export default function PettyCash() {
             {rows.length === 0 && <tr><Td colSpan={7} className="text-center text-slate-500 py-8">Belum ada petty cash.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-petty"/>
       </Card>
 
       {show && (
