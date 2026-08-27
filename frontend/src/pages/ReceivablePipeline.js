@@ -5,6 +5,7 @@ import MonthPicker from "../components/MonthPicker";
 import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import { Download, FileClock, ReceiptText, AlertTriangle, Loader2, ChevronDown } from "lucide-react";
+import Pagination, { usePagination } from "../components/Pagination";
 import * as XLSX from "xlsx";
 
 export default function ReceivablePipeline() {
@@ -25,6 +26,9 @@ export default function ReceivablePipeline() {
   useEffect(() => { load(); }, [month]); // eslint-disable-line
 
   const s = data.summary || {};
+  const openPag = usePagination(data.open || [], { resetKey: `${month}|${(data.open || []).length}` });
+  const nyPag = usePagination(data.ny_po || [], { resetKey: `${month}|${(data.ny_po || []).length}` });
+  const invPag = usePagination(data.invoiced || [], { resetKey: `${month}|${(data.invoiced || []).length}` });
   const monthLabel = month
     ? new Date(month + "-01").toLocaleDateString("id-ID", { month: "long", year: "numeric" })
     : "Semua Bulan";
@@ -137,7 +141,7 @@ export default function ReceivablePipeline() {
                 <Th>No AWB</Th><Th>Customer</Th><Th>Rute</Th><Th>Tgl Order</Th><Th className="text-right">Umur</Th><Th className="text-right">Nilai</Th>
               </tr></thead>
               <tbody>
-                {(data.open || []).map((r) => (
+                {openPag.paged.map((r) => (
                   <tr key={r.awb_id} data-testid={`open-row-${r.awb_number}`}>
                     <Td className="font-mono font-bold">{r.awb_number}</Td>
                     <Td>{r.customer_name || "-"}</Td>
@@ -153,6 +157,7 @@ export default function ReceivablePipeline() {
               </tbody>
             </Table>
           </div>
+          <Pagination {...openPag} testid="pagination-pipeline-open"/>
         </Card>
       )}
 
@@ -169,7 +174,7 @@ export default function ReceivablePipeline() {
                 <Th>No AWB</Th><Th>Customer</Th><Th>Rute</Th><Th>Keterangan</Th><Th>Tgl Reconcile</Th><Th className="text-right">Umur</Th><Th className="text-right">Nilai</Th>
               </tr></thead>
               <tbody>
-                {(data.ny_po || []).map((r) => (
+                {nyPag.paged.map((r) => (
                   <tr key={r.awb_id} data-testid={`nypo-row-${r.awb_number}`}>
                     <Td className="font-mono font-bold">{r.awb_number}</Td>
                     <Td>{r.customer_name || "-"}</Td>
@@ -190,6 +195,7 @@ export default function ReceivablePipeline() {
               </tbody>
             </Table>
           </div>
+          <Pagination {...nyPag} testid="pagination-pipeline-nypo"/>
         </Card>
       )}
 
@@ -206,7 +212,7 @@ export default function ReceivablePipeline() {
                 <Th>No AWB</Th><Th>Customer</Th><Th>No Invoice</Th><Th>Tgl Print</Th><Th className="text-right">Umur</Th><Th className="text-right">Nilai</Th>
               </tr></thead>
               <tbody>
-                {(data.invoiced || []).map((r) => (
+                {invPag.paged.map((r) => (
                   <tr key={r.awb_id} data-testid={`invoiced-row-${r.awb_number}`}>
                     <Td className="font-mono font-bold">{r.awb_number}</Td>
                     <Td>{r.customer_name || "-"}</Td>
@@ -222,6 +228,7 @@ export default function ReceivablePipeline() {
               </tbody>
             </Table>
           </div>
+          <Pagination {...invPag} testid="pagination-pipeline-invoiced"/>
         </Card>
       )}
 
