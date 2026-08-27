@@ -78,12 +78,12 @@ export default function ReceivablePipeline() {
     <div data-testid="receivable-pipeline-page">
       <PageHeader
         title="Pipeline Penerimaan Kas"
-        subtitle="Tiga tahap piutang: pekerjaan berjalan (Open), belum invoice (NY-PO), dan sudah invoice belum dibayar. Klik kartu untuk melihat detailnya."
+        subtitle="Tiga tahap piutang: pekerjaan berjalan (Open), belum invoice (NY-PO), dan sudah invoice belum dibayar. Filter bulan mengikuti TANGGAL ORDER; umur (aging) tetap dihitung dari titik masing-masing. Klik kartu untuk melihat detailnya."
       />
 
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <div>
-          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1">Filter Bulan</div>
+          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1">Filter Bulan (tgl order)</div>
           <MonthPicker value={month} onChange={setMonth} allowEmpty />
         </div>
         <Button data-testid="pipeline-export-btn" variant="secondary" onClick={exportXLS}><Download size={14}/> Export Excel</Button>

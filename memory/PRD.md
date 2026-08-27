@@ -1,6 +1,13 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
-## Pagination pada Halaman Tabel (Jun 2026) — sebagian, dilanjut nanti
+## Fix Pipeline Penerimaan — Filter Bulan pakai Tgl Order (Jun 2026)
+- **Bug (dilaporkan user):** filter bulan di Pipeline Penerimaan Kas (`/api/reports/receivable-pipeline`) menyaring tiap kartu berdasarkan tanggal acuan bucket-nya sendiri (Open→created_at, NY-PO→reconciled_at, Invoiced→first_printed_at). Akibatnya order Januari yang baru di-invoice Juli HILANG dari filter Januari (muncul di Juli).
+- **Requirement user:** filter bulan SELALU berdasarkan **tanggal order** (`created_at`) untuk semua kartu; **aging tetap** per titik masing-masing (Open→tgl order, NY-PO→tgl reconcile, Invoiced→tgl print).
+- **Fix** (`server.py` receivable_pipeline): semua `_in_month(...)` diganti jadi `_in_month(o.get("created_at"))` di ketiga bucket; `ref` (untuk ref_date + age_days) dibiarkan sesuai titik masing-masing. Docstring diperbarui.
+- **Frontend** (`ReceivablePipeline.js`): label filter → "Filter Bulan (tgl order)" + subtitle diperjelas.
+- **Verifikasi (curl + data sintetis, testing agent DILARANG user):** order created Jan 2026, status Invoiced, invoice printed Juli → filter 2026-01 = MUNCUL di kartu Invoiced dg aging dari tgl print (age 38 hr, ref Juli); filter 2026-07 = TIDAK muncul; tanpa filter = muncul. Data test dibersihkan (DB kembali 0 order). Perlu deploy backend+frontend.
+
+
 - **Kebutuhan user:** semua halaman yang menampilkan data ke tabel diberi pagination; filter & search TETAP bekerja ke SELURUH data (bukan cuma halaman aktif). Halaman dgn data kecil/bounded & non-dinamis → SKIP (permintaan user).
 - **Pola dipakai:** hook client-side `usePagination(array, {resetKey, defaultSize})` + komponen `<Pagination>` (sudah ada di `components/Pagination.js`). Filter/search dijalankan dulu ke seluruh array → hasil filter baru di-paginate. Default 25/page (mengikuti default hook). `Pagination` auto-hide bila total=0.
 - **Selesai sesi lanjutan (Jun 2026):** Costs/Plotting Biaya (tabel utama "Daftar Biaya per AWB" saja, panel grup prorata TIDAK dipaginate — sesuai user), FixedCosts (Expense), Approvals (resetKey=tab), JournalUmum (resetKey=period|refType|akun), ActivityLog (tab Aksi + tab Navigasi, dua pagination terpisah), BankReconciliation (resetKey=bank|periode|status), BukuBesar (data.rows, resetKey=akun|periode), PurchaseOrders, KasbonKaryawan (resetKey=statusFilter).

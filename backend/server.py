@@ -4754,7 +4754,10 @@ async def receivable_pipeline(
       Aging dari TANGGAL RECONCILE.
     - INVOICED (Belum Dibayar): invoice yang SUDAH diprint tapi belum Paid.
       Aging dari TANGGAL PRINT (first_printed_at).
-    Filter bulan opsional: tiap kategori difilter oleh tanggal acuannya masing-masing.
+    Filter bulan opsional: SELALU berdasarkan TANGGAL ORDER (created_at) untuk SEMUA
+    kategori — jadi order Januari yang baru di-invoice Juli tetap muncul di filter
+    Januari (di kartu sesuai status terkininya). Aging tetap dihitung dari tanggal
+    acuan masing-masing kategori.
     """
     now = datetime.now(timezone.utc)
     now_naive = now.replace(tzinfo=None)
@@ -4817,7 +4820,7 @@ async def receivable_pipeline(
     open_rows, open_total = [], 0.0
     for o in open_orders:
         ref = o.get("created_at")
-        if not _in_month(ref):
+        if not _in_month(o.get("created_at")):
             continue
         v = _val(o); open_total += v
         open_rows.append({
@@ -4830,7 +4833,7 @@ async def receivable_pipeline(
     ny_rows, ny_total = [], 0.0
     for o in recon_orders:
         ref = o.get("reconciled_at")
-        if not _in_month(ref):
+        if not _in_month(o.get("created_at")):
             continue
         v = _val(o); ny_total += v
         ny_rows.append({
@@ -4845,10 +4848,11 @@ async def receivable_pipeline(
     for o in invoiced_orders:
         inv = inv_by_order.get(o["_id"])
         printed_at = (inv or {}).get("first_printed_at")
+        # Filter bulan SELALU pakai tgl order (created_at), apa pun bucket-nya
+        if not _in_month(o.get("created_at")):
+            continue
         if printed_at:
             # Sudah diprint → kategori INVOICED (aging dari tgl print)
-            if not _in_month(printed_at):
-                continue
             v = _val(o); inv_total += v
             inv_rows.append({
                 "awb_id": str(o["_id"]), "awb_number": o.get("awb_number"),
@@ -4860,8 +4864,6 @@ async def receivable_pipeline(
         else:
             # Invoice belum diprint → masuk NY-PO (aging dari tgl reconcile)
             ref = o.get("reconciled_at") or o.get("invoiced_at")
-            if not _in_month(ref):
-                continue
             v = _val(o); ny_total += v
             ny_rows.append({
                 "awb_id": str(o["_id"]), "awb_number": o.get("awb_number"),
