@@ -1,6 +1,12 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
-## Fix Pipeline Penerimaan — Filter Bulan pakai Tgl Order (Jun 2026)
+## Panjar Kerja — Pagination + Filter Pengaju + Multi-select (Jun 2026)
+- **Kebutuhan user:** pagination di Panjar Kerja, filter by user (pengaju), multi-select untuk hapus & ubah status massal.
+- **Backend** (`server.py`): 2 endpoint baru (administrator only) — `POST /api/cash-advances/bulk-delete` {ids[]} (hapus permanen, sama seperti hapus per baris) & `POST /api/cash-advances/bulk-status` {ids[], status: Open|Settled} (LABEL SAJA — set field `status`, TIDAK menyentuh jurnal/biaya, untuk koreksi status). Models `BulkIdsIn`/`BulkStatusIn`.
+- **Frontend** (`PanjarKerja.js`): (1) pagination `usePagination` pada list terfilter (`pagination-panjar`); (2) toolbar Filter Pengaju (dropdown user pembuat, `panjar-pengaju-filter`) + Filter Status (`panjar-status-filter`) — filter jalan ke SELURUH data lalu dipaginate; kolom baru "Pengaju"; (3) multi-select **admin only**: checkbox per baris + select-all header (`panjar-select-all`), bar aksi (`panjar-bulk-bar`) muncul saat ada seleksi → tombol Set Open/Set Settled (`bulk-status-*-btn`, konfirmasi + catatan "label saja") & Hapus Terpilih (`bulk-delete-btn`). Non-admin tidak melihat checkbox/bar.
+- **Verifikasi (curl + data sintetis, testing agent DILARANG user):** bulk-status set 2 panjar→Settled (updated=2, sisanya tetap Open), bulk-delete 1 panjar (deleted=1). Data test dibersihkan. UI diverifikasi via screenshot (filter+checkbox render, bar/pagination auto-hide saat data 0). Perlu deploy backend+frontend.
+
+
 - **Bug (dilaporkan user):** filter bulan di Pipeline Penerimaan Kas (`/api/reports/receivable-pipeline`) menyaring tiap kartu berdasarkan tanggal acuan bucket-nya sendiri (Open→created_at, NY-PO→reconciled_at, Invoiced→first_printed_at). Akibatnya order Januari yang baru di-invoice Juli HILANG dari filter Januari (muncul di Juli).
 - **Requirement user:** filter bulan SELALU berdasarkan **tanggal order** (`created_at`) untuk semua kartu; **aging tetap** per titik masing-masing (Open→tgl order, NY-PO→tgl reconcile, Invoiced→tgl print).
 - **Fix** (`server.py` receivable_pipeline): semua `_in_month(...)` diganti jadi `_in_month(o.get("created_at"))` di ketiga bucket; `ref` (untuk ref_date + age_days) dibiarkan sesuai titik masing-masing. Docstring diperbarui.

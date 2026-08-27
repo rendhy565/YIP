@@ -10751,6 +10751,35 @@ async def delete_cash_advance(cid: str, user: dict = Depends(require_role("admin
     await db.cash_advances.delete_one({"_id": _oid(cid)})
     return {"ok": True}
 
+class BulkIdsIn(BaseModel):
+    ids: List[str] = []
+
+class BulkStatusIn(BaseModel):
+    ids: List[str] = []
+    status: Literal["Open", "Settled"]
+
+@app.post("/api/cash-advances/bulk-delete")
+async def bulk_delete_cash_advances(data: BulkIdsIn, user: dict = Depends(require_role("administrator"))):
+    """Hapus banyak panjar sekaligus (administrator only). Permanen (sama seperti hapus per baris)."""
+    oids = [_oid(x) for x in (data.ids or [])]
+    if not oids:
+        raise HTTPException(400, "Tidak ada panjar dipilih")
+    r = await db.cash_advances.delete_many({"_id": {"$in": oids}})
+    return {"ok": True, "deleted": r.deleted_count}
+
+@app.post("/api/cash-advances/bulk-status")
+async def bulk_status_cash_advances(data: BulkStatusIn, user: dict = Depends(require_role("administrator"))):
+    """Ubah status panjar massal (administrator only) — LABEL SAJA, tidak menyentuh
+    jurnal/biaya. Dipakai untuk koreksi status yang salah, bukan proses settle normal."""
+    oids = [_oid(x) for x in (data.ids or [])]
+    if not oids:
+        raise HTTPException(400, "Tidak ada panjar dipilih")
+    r = await db.cash_advances.update_many(
+        {"_id": {"$in": oids}},
+        {"$set": {"status": data.status, "updated_at": datetime.now(timezone.utc), "updated_by": user["id"]}},
+    )
+    return {"ok": True, "updated": r.modified_count, "status": data.status}
+
 # ===========================================================================
 # Excel Exports — REPORT AR & Invoice (matching templates from user)
 # ===========================================================================

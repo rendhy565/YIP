@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Input, Label, Select, Table, Th, Td } from "../components/ui";
 import SearchableSelect from "../components/SearchableSelect";
@@ -9,6 +9,7 @@ import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
 import BPVPrintTemplate from "../components/BPVPrintTemplate";
 import NumberInput from "../components/NumberInput";
+import Pagination, { usePagination } from "../components/Pagination";
 
 function todayStr() {
   const d = new Date();
@@ -29,6 +30,10 @@ export default function PanjarKerja() {
   const { user } = useAuth();
   const isAdmin = user?.role === "administrator";
   const [rows, setRows] = useState([]);
+  const [pengajuFilter, setPengajuFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [selected, setSelected] = useState({}); // id -> true (admin bulk actions)
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [allOrders, setAllOrders] = useState([]);
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState(empty);
@@ -316,6 +321,63 @@ export default function PanjarKerja() {
     catch (e) { toast.error(errMsg(e)); }
   };
 
+  // ── Filter (by pengaju/user + status) + pagination ──
+  const userLabel = (uid) => {
+    const u = users.find((x) => x.id === uid);
+    return u ? (u.full_name || u.username) : "—";
+  };
+  const filtered = useMemo(() => {
+    let list = rows;
+    if (pengajuFilter) list = list.filter((r) => r.created_by === pengajuFilter);
+    if (statusFilter) list = list.filter((r) => r.status === statusFilter);
+    return list;
+  }, [rows, pengajuFilter, statusFilter]);
+  const pag = usePagination(filtered, { resetKey: `${pengajuFilter}|${statusFilter}` });
+
+  // Pengaju options — hanya user yang pernah membuat panjar
+  const pengajuOptions = useMemo(() => {
+    const ids = [...new Set(rows.map((r) => r.created_by).filter(Boolean))];
+    return ids.map((id) => ({ id, label: userLabel(id) })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [rows, users]);
+
+  // ── Multi-select (admin) ──
+  const pageIds = pag.paged.map((r) => r.id);
+  const selectedIds = Object.keys(selected).filter((k) => selected[k]);
+  const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected[id]);
+  const toggleOne = (id) => setSelected((m) => ({ ...m, [id]: !m[id] }));
+  const togglePage = () => {
+    setSelected((m) => {
+      const next = { ...m };
+      if (allPageSelected) pageIds.forEach((id) => { delete next[id]; });
+      else pageIds.forEach((id) => { next[id] = true; });
+      return next;
+    });
+  };
+  const clearSelection = () => setSelected({});
+
+  const bulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Hapus ${selectedIds.length} panjar terpilih? Aksi ini permanen.`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await api.post("/cash-advances/bulk-delete", { ids: selectedIds });
+      toast.success(`${r.data.deleted} panjar dihapus`);
+      clearSelection(); load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setBulkBusy(false); }
+  };
+  const bulkStatus = async (status) => {
+    if (selectedIds.length === 0) return;
+    if (!window.confirm(`Ubah status ${selectedIds.length} panjar terpilih menjadi "${status}"?\n\nCatatan: ini hanya mengubah label status, TIDAK membuat/menghapus jurnal.`)) return;
+    setBulkBusy(true);
+    try {
+      const r = await api.post("/cash-advances/bulk-status", { ids: selectedIds, status });
+      toast.success(`${r.data.updated} panjar → ${status}`);
+      clearSelection(); load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setBulkBusy(false); }
+  };
+
   const openCount = rows.filter((r) => r.status === "Open").length;
   const openTotal = rows.filter((r) => r.status === "Open").reduce((s, r) => {
     const consumed = (r.settled_amount || 0) + (r.refund_amount || 0);
@@ -363,15 +425,49 @@ export default function PanjarKerja() {
         </div>
       </Card>
 
+      <Card className="p-3 mb-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[200px]">
+            <Label>Filter Pengaju</Label>
+            <Select data-testid="panjar-pengaju-filter" value={pengajuFilter} onChange={(e) => setPengajuFilter(e.target.value)}>
+              <option value="">Semua Pengaju</option>
+              {pengajuOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </Select>
+          </div>
+          <div className="min-w-[160px]">
+            <Label>Filter Status</Label>
+            <Select data-testid="panjar-status-filter" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">Semua Status</option>
+              <option value="Open">Open</option>
+              <option value="Settled">Settled</option>
+            </Select>
+          </div>
+          <span className="text-xs text-slate-500 ml-auto pb-2">{filtered.length} dari {rows.length} panjar</span>
+        </div>
+      </Card>
+
+      {isAdmin && selectedIds.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-3 p-3 rounded-lg bg-slate-900 text-white" data-testid="panjar-bulk-bar">
+          <span className="text-sm font-semibold">{selectedIds.length} dipilih</span>
+          <div className="flex flex-wrap gap-2 ml-auto">
+            <Button data-testid="bulk-status-open-btn" variant="secondary" disabled={bulkBusy} onClick={() => bulkStatus("Open")}>Set Open</Button>
+            <Button data-testid="bulk-status-settled-btn" variant="secondary" disabled={bulkBusy} onClick={() => bulkStatus("Settled")}>Set Settled</Button>
+            <Button data-testid="bulk-delete-btn" disabled={bulkBusy} onClick={bulkDelete} className="bg-red-600 hover:bg-red-700"><Trash2 size={14}/> Hapus Terpilih ({selectedIds.length})</Button>
+            <Button variant="ghost" onClick={clearSelection} className="text-white hover:bg-white/10"><X size={14}/></Button>
+          </div>
+        </div>
+      )}
+
       <Card>
         <Table>
           <thead><tr>
-            <Th>No.</Th><Th>Tanggal</Th><Th>Penerima</Th><Th>Keperluan</Th>
+            {isAdmin && <Th className="w-8"><input type="checkbox" data-testid="panjar-select-all" checked={allPageSelected} onChange={togglePage} className="accent-slate-800"/></Th>}
+            <Th>No.</Th><Th>Tanggal</Th><Th>Pengaju</Th><Th>Penerima</Th><Th>Keperluan</Th>
             <Th className="text-right">Panjar</Th><Th className="text-right">Aktual</Th><Th className="text-right">Refund</Th>
             <Th>Status</Th><Th>Approval</Th><Th>Breakdown AWB</Th><Th className="text-right">Aksi</Th>
           </tr></thead>
           <tbody>
-            {rows.map((r) => {
+            {pag.paged.map((r) => {
               const overspend = (r.overspend_amount || 0);
               const isOverspent = r.status === "Settled" && overspend > 0;
               const rowCls = isOverspent
@@ -379,8 +475,10 @@ export default function PanjarKerja() {
                 : (r.status === "Settled" ? "bg-emerald-50/40 hover:bg-emerald-50/70" : "bg-amber-50/40 hover:bg-amber-50/70");
               return (
               <tr key={r.id} data-testid={`panjar-row-${r.number}`} className={rowCls}>
+                {isAdmin && <Td><input type="checkbox" data-testid={`panjar-select-${r.number}`} checked={!!selected[r.id]} onChange={() => toggleOne(r.id)} className="accent-slate-800"/></Td>}
                 <Td className="font-mono font-semibold">{r.number}</Td>
                 <Td className="text-xs text-slate-600">{fmtDate(r.advance_date)}</Td>
+                <Td className="text-xs text-slate-600">{userLabel(r.created_by)}</Td>
                 <Td className="font-semibold">{r.recipient_name}</Td>
                 <Td className="text-xs">{r.purpose || "-"}</Td>
                 <Td className="text-right font-semibold">{fmtIDR(r.amount)}</Td>
@@ -456,9 +554,10 @@ export default function PanjarKerja() {
               </tr>
               );
             })}
-            {rows.length === 0 && <tr><Td colSpan={11} className="text-center text-slate-500 py-8">Belum ada panjar kerja.</Td></tr>}
+            {filtered.length === 0 && <tr><Td colSpan={isAdmin ? 13 : 12} className="text-center text-slate-500 py-8">Belum ada panjar kerja.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-panjar"/>
       </Card>
 
       {showAdd && (
