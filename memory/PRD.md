@@ -1,5 +1,19 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Koreksi Data Produksi (double-input) + Dump Terkoreksi (Jun 2026)
+- **Konteks:** user restore dump produksi baru (`arc_db.archive.gz`) → tms_db (17.415 dok). Minta dibetulkan di DB preview lalu diberi link download untuk deploy di VPS (TANPA bikin fitur dulu). Constraint: **hanya P&L Order Jan–Jun yang TIDAK BOLEH berubah** (sudah dilaporkan). Target: P&L Order = P&L Akunting & konsisten Neraca.
+- **Temuan (data nyata):** (1a) 1201=4,11 M vs pipeline invoiced 3,71 M; 1290=8,50 M vs unbilled DPP 6,95 M (selisih 1,55 M dari jurnal ganda). (1b) 272 panjar Settled label-only (1108 nyangkut Rp 57,18 jt, TANPA jurnal settle). (1c) 20 AWB nol-depan (Jul/Agu), 116 order revenue ganda + 103 pymhd ganda, 4 payment ganda. **Kunci:** 270 order Juli **Invoiced tapi cost belum di-plot** (Rp 2,63 M) → P&L Order Juli << P&L Akunting Juli (bukan error, gap input).
+- **Eksekusi (script /tmp, dijalankan di tms_db, backup /tmp/BACKUP_before_fix.archive.gz):**
+  1. Hapus 20 AWB nol-depan + cascade (18 costs, 2 invoice, 59 jurnal).
+  2. Rebuild 116 order "dirty" (dup revenue/pymhd): hapus semua pymhd/revenue/reversal-nya, buat ulang **tepat 1 pasang** (Dr1290/Cr2390 + Dr2390/Cr4101) di tanggal order & total_tariff → 2390 netral per-order.
+  3. Akui revenue 38 order has-cost-tanpa-revenue (32 Open+6 Paid) → tutup gap Apr/Jun.
+  4. **Re-date global** 1.253 jurnal revenue_recognition/pymhd/reversal/cost ke `created_at` order (PPN-aman: TIDAK menyentuh jurnal invoice 1201/2210 & payment/kas).
+- **Verifikasi (endpoint asli):** Revenue P&L Order == P&L Akunting utk Jan/Feb/Mar/Apr/Mei/Agu (selisih 0), Jun +9,2 jt, **Juli −2,59 M (murni 270 order belum di-plot cost — HARUS input cost dulu)**. Trial balance DR=CR (selisih 0,00). Neraca balance (assets−(liab+equity)=0). **P&L Order Jan–Jun terbukti UTUH** (profit-loss tidak baca jurnal; order/cost Jan–Jun tak disentuh).
+- **BELUM disentuh (sengaja):** panjar menggantung Rp 57,18 jt (1108) — P&L-netral bila di-refund; menunggu keputusan user (refund vs bebankan). Selisih COGS/expense kecil (puluhan jt) = timing amortisasi, bukan double-input.
+- **Dump terkoreksi:** `/app/frontend/public/arc_db_corrected.archive.gz` → link `https://plot-expenses.preview.emergentagent.com/arc_db_corrected.archive.gz`. Restore VPS: `mongorestore --archive=arc_db_corrected.archive.gz --gzip --nsFrom='tms_db.*' --nsTo='arc_db.*' --drop` (sesuaikan DB_NAME target = arc_db).
+
+
+
 ## Panjar Kerja — Pagination + Filter Pengaju + Multi-select (Jun 2026)
 - **Kebutuhan user:** pagination di Panjar Kerja, filter by user (pengaju), multi-select untuk hapus & ubah status massal.
 - **Backend** (`server.py`): 2 endpoint baru (administrator only) — `POST /api/cash-advances/bulk-delete` {ids[]} (hapus permanen, sama seperti hapus per baris) & `POST /api/cash-advances/bulk-status` {ids[], status: Open|Settled} (LABEL SAJA — set field `status`, TIDAK menyentuh jurnal/biaya, untuk koreksi status). Models `BulkIdsIn`/`BulkStatusIn`.
