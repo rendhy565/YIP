@@ -11,7 +11,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Literal, Dict, Any
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Request, status, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Depends, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field, BeforeValidator, ConfigDict
@@ -8979,8 +8979,6 @@ async def import_excel_preview(
     """Stub kept for compatibility; main entry is /api/import/excel which accepts multipart."""
     raise HTTPException(501, "Gunakan endpoint /api/import/excel (multipart upload)")
 
-from fastapi import UploadFile, File, Form
-
 async def _parse_excel(content: bytes, dry_run: bool, posted_by: str, sheet_names: Optional[List[str]] = None) -> dict:
     """Parse Excel content and (optionally) import. Returns summary."""
     wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
@@ -9552,7 +9550,7 @@ async def _build_awb_filter(
         q["created_at"] = date_q
     if customer_id:
         try: q["customer_id"] = _oid(customer_id)
-        except: pass
+        except Exception: pass
     if region: q["region"] = region
     if status: q["status"] = status
     if fleet_type: q["fleet_type"] = fleet_type
@@ -10783,9 +10781,6 @@ async def bulk_status_cash_advances(data: BulkStatusIn, user: dict = Depends(req
 # ===========================================================================
 # Excel Exports — REPORT AR & Invoice (matching templates from user)
 # ===========================================================================
-from fastapi.responses import StreamingResponse
-import io
-import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
