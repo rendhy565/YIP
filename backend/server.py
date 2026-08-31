@@ -5924,6 +5924,24 @@ async def delete_employment_contract(cid: str, user: dict = Depends(require_feat
     await db.employment_contracts.delete_one({"_id": _oid(cid)})
     return {"ok": True}
 
+ALLOWED_CONTRACT_STATUS = ["draft", "signed_user", "signed_direktur", "signed_employee", "copied", "archived"]
+
+class ContractStatusIn(BaseModel):
+    status: str
+
+@app.put("/api/hr/contracts/{cid}/status")
+async def update_employment_contract_status(cid: str, data: ContractStatusIn, user: dict = Depends(require_feature("hr"))):
+    if data.status not in ALLOWED_CONTRACT_STATUS:
+        raise HTTPException(400, "Status tidak valid")
+    existing = await db.employment_contracts.find_one({"_id": _oid(cid)})
+    if not existing:
+        raise HTTPException(404, "Kontrak kerja tidak ditemukan")
+    await db.employment_contracts.update_one(
+        {"_id": _oid(cid)},
+        {"$set": {"status": data.status, "updated_at": datetime.now(timezone.utc)}},
+    )
+    return serialize(await db.employment_contracts.find_one({"_id": _oid(cid)}))
+
 async def _build_contract_ctx(cid: str):
     from fastapi.responses import Response  # local import to avoid top clutter
     import contract_docs

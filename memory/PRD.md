@@ -1,5 +1,12 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Kontrak Kerja — Tombol Ganti Status (Jun 2026)
+- Endpoint baru `PUT /api/hr/contracts/{cid}/status` (validasi terhadap daftar status; require_feature hr).
+- Status kanonik: `draft, signed_user, signed_direktur, signed_employee, copied, archived` (label: Draft / Signed User / Signed Direktur / Signed Employee / Copied / Archived).
+- Frontend `KontrakKerja.js`: dropdown pill berwarna (`data-testid="status-select-{cid}"`) di tiap baris (utama & riwayat) untuk ganti status instan + opsi form diperbarui. Badge legacy (active/expired) tetap ditangani.
+- Verifikasi: curl (valid→update, invalid→400) + screenshot UI (15 dropdown render, live change OK).
+
+
 ## Koreksi Data Produksi (double-input) + Dump Terkoreksi (Jun 2026)
 - **Konteks:** user restore dump produksi baru (`arc_db.archive.gz`) → tms_db (17.415 dok). Minta dibetulkan di DB preview lalu diberi link download untuk deploy di VPS (TANPA bikin fitur dulu). Constraint: **hanya P&L Order Jan–Jun yang TIDAK BOLEH berubah** (sudah dilaporkan). Target: P&L Order = P&L Akunting & konsisten Neraca.
 - **Temuan (data nyata):** (1a) 1201=4,11 M vs pipeline invoiced 3,71 M; 1290=8,50 M vs unbilled DPP 6,95 M (selisih 1,55 M dari jurnal ganda). (1b) 272 panjar Settled label-only (1108 nyangkut Rp 57,18 jt, TANPA jurnal settle). (1c) 20 AWB nol-depan (Jul/Agu), 116 order revenue ganda + 103 pymhd ganda, 4 payment ganda. **Kunci:** 270 order Juli **Invoiced tapi cost belum di-plot** (Rp 2,63 M) → P&L Order Juli << P&L Akunting Juli (bukan error, gap input).

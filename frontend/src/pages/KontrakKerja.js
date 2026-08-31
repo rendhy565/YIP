@@ -28,8 +28,23 @@ function terbilang(n) {
   return s.charAt(0).toUpperCase() + s.slice(1) + " Rupiah";
 }
 
+const STATUS_OPTIONS = [
+  { value: "draft", label: "Draft" },
+  { value: "signed_user", label: "Signed User" },
+  { value: "signed_direktur", label: "Signed Direktur" },
+  { value: "signed_employee", label: "Signed Employee" },
+  { value: "copied", label: "Copied" },
+  { value: "archived", label: "Archived" },
+];
+const STATUS_LABEL = STATUS_OPTIONS.reduce((a, o) => ({ ...a, [o.value]: o.label }), {});
 const STATUS_BADGE = {
   draft: "bg-slate-100 text-slate-700 border-slate-200",
+  signed_user: "bg-amber-50 text-amber-800 border-amber-200",
+  signed_direktur: "bg-blue-50 text-blue-800 border-blue-200",
+  signed_employee: "bg-indigo-50 text-indigo-800 border-indigo-200",
+  copied: "bg-violet-50 text-violet-800 border-violet-200",
+  archived: "bg-zinc-200 text-zinc-700 border-zinc-300",
+  // legacy
   active: "bg-emerald-50 text-emerald-800 border-emerald-200",
   expired: "bg-rose-50 text-rose-800 border-rose-200",
 };
@@ -145,6 +160,15 @@ export default function KontrakKerja() {
 
   const doPrint = (contract, employee) => setPrintData({ contract, employee });
 
+  const updateStatus = async (contract, status) => {
+    if (!contract?.id || status === contract.status) return;
+    try {
+      await api.put(`/hr/contracts/${contract.id}/status`, { status });
+      toast.success(`Status → ${STATUS_LABEL[status] || status}`);
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+
   return (
     <div data-testid="kontrak-kerja-page">
       <PageHeader
@@ -188,7 +212,7 @@ export default function KontrakKerja() {
                         ? `${latest?.start_date ? fmtDate(latest.start_date) : "…"} → ${latest?.end_date ? fmtDate(latest.end_date) : "…"}`
                         : <span className="text-slate-400">—</span>}
                     </Td>
-                    <Td><StatusBadge status={latest?.status} hasContract={!!latest} /></Td>
+                    <Td>{latest ? <StatusSelect contract={latest} onChange={updateStatus} /> : <StatusBadge status={null} hasContract={false} />}</Td>
                     <Td className="text-right">
                       <div className="inline-flex gap-1.5 items-center">
                         {latest ? (
@@ -220,7 +244,7 @@ export default function KontrakKerja() {
                       <Td className="text-xs">{ct.position || <span className="text-slate-400">—</span>}</Td>
                       <Td className="text-xs font-mono">{ct.contract_no || <span className="text-slate-400">—</span>}</Td>
                       <Td className="text-xs">{ct.start_date ? fmtDate(ct.start_date) : "…"} → {ct.end_date ? fmtDate(ct.end_date) : "…"}</Td>
-                      <Td><StatusBadge status={ct.status} hasContract /></Td>
+                      <Td><StatusSelect contract={ct} onChange={updateStatus} /></Td>
                       <Td className="text-right">
                         <div className="inline-flex gap-1.5">
                           <Button data-testid={`edit-riwayat-${ct.id}`} variant="secondary" onClick={() => openEdit(ct)}><Pencil size={13} /></Button>
@@ -253,7 +277,7 @@ export default function KontrakKerja() {
                 <Grid>
                   <Field label="Jenis"><Select value={form.contract_type} onChange={(e) => setF("contract_type", e.target.value)}><option value="PKWT">PKWT</option><option value="PKWTT">PKWTT</option></Select></Field>
                   <Field label="No. Kontrak"><Input data-testid="c-no" value={form.contract_no} onChange={(e) => setF("contract_no", e.target.value)} placeholder="001/PKWT/AR/VII/2026" /></Field>
-                  <Field label="Status"><Select value={form.status} onChange={(e) => setF("status", e.target.value)}><option value="draft">Draft</option><option value="active">Aktif</option><option value="expired">Berakhir</option></Select></Field>
+                  <Field label="Status"><Select value={form.status} onChange={(e) => setF("status", e.target.value)}>{STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}</Select></Field>
                   <Field label="Tempat Tanda Tangan"><Input value={form.sign_place} onChange={(e) => setF("sign_place", e.target.value)} /></Field>
                   <Field label="Tanggal Tanda Tangan"><Input type="date" value={form.sign_date || ""} onChange={(e) => setF("sign_date", e.target.value)} /></Field>
                 </Grid>
@@ -335,5 +359,21 @@ function Field({ label, children, full }) {
 }
 function StatusBadge({ status, hasContract }) {
   if (!hasContract) return <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-400">Belum ada</span>;
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_BADGE[status] || STATUS_BADGE.draft}`}>{status || "draft"}</span>;
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase ${STATUS_BADGE[status] || STATUS_BADGE.draft}`}>{STATUS_LABEL[status] || status || "draft"}</span>;
+}
+function StatusSelect({ contract, onChange }) {
+  const opts = STATUS_LABEL[contract.status]
+    ? STATUS_OPTIONS
+    : [{ value: contract.status, label: contract.status || "draft" }, ...STATUS_OPTIONS];
+  return (
+    <select
+      data-testid={`status-select-${contract.id}`}
+      value={contract.status || "draft"}
+      onChange={(e) => onChange(contract, e.target.value)}
+      title="Ganti status kontrak"
+      className={`rounded-full border px-2 py-1 text-[10px] font-bold uppercase cursor-pointer outline-none focus:ring-2 focus:ring-blue-300 ${STATUS_BADGE[contract.status] || STATUS_BADGE.draft}`}
+    >
+      {opts.map((o) => <option key={o.value} value={o.value} className="bg-white text-slate-800 normal-case font-medium">{o.label}</option>)}
+    </select>
+  );
 }
