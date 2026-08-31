@@ -10802,39 +10802,54 @@ async def bulk_status_cash_advances(data: BulkStatusIn, user: dict = Depends(req
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 
-REPORT_AR_HEADER_ROW1 = [
-    # main cols (1-17)
-    "Bulan", "Tgl Pick Up", "Tanggal Terima", "Status Pengiriman", "AWB",
-    "Vendor Name", "Transport", "From", "Destination", "No Mobil",
-    "Penerima", "Qty", "Koli", "KG", "Min Kg", "Final KG", "Harga /KG",
-    # Group: Kirim Barang (R-Z = 9 sub-cols, col 18-26)
-    "Kirim Barang", "", "", "", "", "", "", "", "",
-    # Group: Dismantle Barang (AA-AI = 9 sub-cols, col 27-35)
-    "Dismantle Barang", "", "", "", "", "", "", "", "",
-    # Group: Relokasi Barang (AJ-AR = 9 sub-cols, col 36-44)
-    "Relokasi Barang", "", "", "", "", "", "", "", "",
-    # Trailing single cols (AS-AX, col 45-50)
-    "Amount\n(Exc VAT)", "Keterangan", "Harga", "List Muatan", "Asuransi", "No Invoice",
+# Layout PERSIS mengikuti file "REPORT AR - EMR" (header 2 baris, biru tua 1E4E79, teks putih)
+AR_MAIN_HEADERS = [
+    (1, "Bulan"), (2, "Tgl Pick Up"), (3, "Tanggal Terima"), (4, "Status Pengiriman "),
+    (5, "AWB"), (6, "Vendor Name"), (7, "Transport"), (8, "From "), (9, "Destination"),
+    (10, "No Mobil"), (11, "Penerima"), (12, "Qty "), (13, "Koli"), (14, "KG"),
+    (15, "Min Kg"), (16, "Final KG"), (17, "Harga /KG"), (18, "DG"),
 ]
-# Row 2 sub-headers (only for the 3 groups)
-REPORT_AR_HEADER_ROW2_GROUPS = {
-    "kirim":     ["Polis", "Insurance", "SPSI", "Sewa Froklift", "Kirim Barang", "Loading/Unloading", "Air", "Konsul", "Trucking"],
-    "dismantle": ["Polis", "Insurance", "SPSI", "Sewa Froklift", "Packing",      "Loading/Unloading", "Air", "Konsul", "Trucking"],
-    "relokasi":  ["Polis", "Insurance", "SPSI", "Sewa Froklift", "Loading/Unloading", "Packing",       "Air", "Konsul", "Trucking"],
+# (key, label row1, start_col, [sub-headers row2])
+AR_GROUPS = [
+    ("kirim", "Kirim Barang", 19,
+        ["Polis", "Insurance", "SURCHARGE (PENANGANAN KHUSUS", "UN NUMBER (SERTIFIKASI KEMASAN) ",
+         "SPSI", "Sewa Froklift", "Kirim Barang", "Loading/Unloading", "Air ", "Konsul", "Trucking"]),
+    ("dismantle", "Dismantle Barang ", 30,
+        ["Polis", "Insurance ", "SPSI", "Sewa Froklift", "Packing", "Loading/Unloading", "Air ", "Konsul", "Trucking"]),
+    ("relokasi", "Relokasi Barang ", 39,
+        ["Polis", "Insurance ", "SPSI", "Sewa Froklift", "Loading/Unloading", "Packing", "Air ", "Konsul", "Trucking"]),
+]
+AR_TRAILING = [
+    (48, "Amount\n(Exc VAT)"), (49, "Keterangan"), (50, "HARGA "),
+    (51, "LIST MUATAN"), (52, "ASURANSI"), (53, "No Invoice"),
+]
+AR_COL_WIDTHS = {
+    1: 8.5, 2: 12.8, 3: 12.8, 4: 9.8, 5: 11.2, 6: 10, 7: 38.3, 8: 27.8, 9: 33.2, 10: 10.7,
+    11: 17.2, 12: 6.5, 13: 4.8, 14: 5.5, 15: 7.3, 16: 8.2, 17: 9.8, 18: 4.3, 19: 11, 20: 12.5,
+    21: 36.8, 22: 37.7, 23: 11.5, 24: 18.2, 25: 10, 26: 23.5, 27: 10.8, 28: 13.7, 29: 15, 30: 11.8,
+    31: 16.5, 32: 11.5, 33: 18.2, 34: 14.3, 35: 23.5, 36: 10.8, 37: 13.7, 38: 15, 39: 11.8, 40: 16.5,
+    41: 11.5, 42: 18.2, 43: 23.5, 44: 14.3, 45: 10.8, 46: 13.7, 47: 15, 48: 16.2, 49: 48.5, 50: 7.8,
+    51: 12.5, 52: 9.2, 53: 22.2,
 }
+AR_MONTHS_FULL = ["JANUARI", "FEBRUARI", "MARET", "APRIL", "MEI", "JUNI",
+                  "JULI", "AGUSTUS", "SEPTEMBER", "OKTOBER", "NOVEMBER", "DESEMBER"]
 
-INDO_MONTHS = ["JAN", "FEB", "MAR", "APR", "MEI", "JUN", "JUL", "AGU", "SEP", "OKT", "NOV", "DES"]
+def _ar_group_of(order: dict) -> str:
+    wt = (order.get("work_type") or "").lower()
+    if "dismantle" in wt:
+        return "dismantle"
+    if "relokasi" in wt:
+        return "relokasi"
+    return "kirim"  # default (sesuai konfirmasi user)
 
-def _ar_group_start(group_key: str) -> int:
-    # 1-indexed column where each group starts (Kirim=18, Dismantle=27, Relokasi=36)
-    return {"kirim": 18, "dismantle": 27, "relokasi": 36}[group_key]
-
-def _ar_subcol_offset(group_key: str, sub_name: str) -> Optional[int]:
-    subs = REPORT_AR_HEADER_ROW2_GROUPS[group_key]
-    try:
-        return subs.index(sub_name)
-    except ValueError:
-        return None
+def _ar_mode_sub(order: dict) -> str:
+    a = (order.get("armada") or "").upper()
+    s = (order.get("service") or "").upper()
+    if "KONSUL" in a:
+        return "Konsul"
+    if "AIR" in a or "UDARA" in a or s == "AIR":
+        return "Air "
+    return "Trucking"
 
 @app.get("/api/exports/report-ar")
 async def export_report_ar(
@@ -10863,12 +10878,6 @@ async def export_report_ar(
         except Exception:
             raise HTTPException(400, "month harus YYYY-MM")
     orders = await db.awb_orders.find(q).sort("created_at", 1).to_list(20000)
-    # Pre-fetch customer names
-    cust_ids = list({o.get("customer_id") for o in orders if o.get("customer_id")})
-    cust_map = {}
-    if cust_ids:
-        async for c in db.customers.find({"_id": {"$in": cust_ids}}):
-            cust_map[str(c["_id"])] = c
     # Pre-fetch invoice numbers
     awb_ids = [o["_id"] for o in orders]
     inv_map = {}
@@ -10878,132 +10887,110 @@ async def export_report_ar(
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "REPORT AR"
+    ws.title = "Sheet1"
 
-    # Styles
-    hdr_fill = PatternFill("solid", fgColor="FFD966")        # gold
-    grp_fill = {
-        "kirim":     PatternFill("solid", fgColor="C6E0B4"), # green
-        "dismantle": PatternFill("solid", fgColor="F4B084"), # orange
-        "relokasi":  PatternFill("solid", fgColor="B4C7E7"), # blue
-    }
-    sub_fill = {
-        "kirim":     PatternFill("solid", fgColor="E2EFDA"),
-        "dismantle": PatternFill("solid", fgColor="FCE4D6"),
-        "relokasi":  PatternFill("solid", fgColor="D9E1F2"),
-    }
-    hdr_font = Font(bold=True, color="000000", size=10)
-    thin = Side(border_style="thin", color="404040")
+    HDR_FILL = PatternFill("solid", fgColor="FF1E4E79")
+    HDR_FONT = Font(bold=True, color="FFFFFFFF", size=10)
+    thin = Side(border_style="thin", color="FF808080")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    # Row 1
-    for i, h in enumerate(REPORT_AR_HEADER_ROW1, start=1):
-        c = ws.cell(1, i, h)
-        c.font = hdr_font
-        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        c.border = border
-        # Coloring
-        if 18 <= i <= 26: c.fill = grp_fill["kirim"]
-        elif 27 <= i <= 35: c.fill = grp_fill["dismantle"]
-        elif 36 <= i <= 44: c.fill = grp_fill["relokasi"]
-        else: c.fill = hdr_fill
+    def _hdr(r, col, val):
+        cell = ws.cell(r, col, val)
+        cell.fill = HDR_FILL
+        cell.font = HDR_FONT
+        cell.alignment = center
+        cell.border = border
+        return cell
 
-    # Merge group headers in row 1
-    ws.merge_cells(start_row=1, start_column=18, end_row=1, end_column=26)  # Kirim
-    ws.merge_cells(start_row=1, start_column=27, end_row=1, end_column=35)  # Dismantle
-    ws.merge_cells(start_row=1, start_column=36, end_row=1, end_column=44)  # Relokasi
+    # Main headers (kolom yg merge vertikal rows 1-2 vs single sesuai file referensi)
+    MERGE_VERT = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12}
+    for col, label in AR_MAIN_HEADERS:
+        _hdr(1, col, label)
+        if col in MERGE_VERT:
+            ws.merge_cells(start_row=1, start_column=col, end_row=2, end_column=col)
+        else:
+            _hdr(2, col, None)
+    # Group headers (row1 merged horizontal) + sub-headers (row2)
+    for key, label, start, subs in AR_GROUPS:
+        end = start + len(subs) - 1
+        _hdr(1, start, label)
+        for i in range(start + 1, end + 1):
+            _hdr(1, i, None)
+        ws.merge_cells(start_row=1, start_column=start, end_row=1, end_column=end)
+        for off, sub in enumerate(subs):
+            _hdr(2, start + off, sub)
+    # Trailing headers
+    for col, label in AR_TRAILING:
+        _hdr(1, col, label)
+        if col in (50, 51, 52, 53):
+            ws.merge_cells(start_row=1, start_column=col, end_row=2, end_column=col)
+        else:
+            _hdr(2, col, None)
 
-    # Merge main cols vertically (rows 1-2)
-    for col in list(range(1, 18)) + list(range(45, 51)):
-        ws.merge_cells(start_row=1, start_column=col, end_row=2, end_column=col)
+    for col, w in AR_COL_WIDTHS.items():
+        ws.column_dimensions[get_column_letter(col)].width = w
+    ws.row_dimensions[1].height = 27
+    ws.row_dimensions[2].height = 22.5
+    ws.freeze_panes = "A3"
 
-    # Row 2 sub-headers
-    for offset, sub in enumerate(REPORT_AR_HEADER_ROW2_GROUPS["kirim"]):
-        c = ws.cell(2, 18 + offset, sub); c.font = hdr_font; c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True); c.fill = sub_fill["kirim"]; c.border = border
-    for offset, sub in enumerate(REPORT_AR_HEADER_ROW2_GROUPS["dismantle"]):
-        c = ws.cell(2, 27 + offset, sub); c.font = hdr_font; c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True); c.fill = sub_fill["dismantle"]; c.border = border
-    for offset, sub in enumerate(REPORT_AR_HEADER_ROW2_GROUPS["relokasi"]):
-        c = ws.cell(2, 36 + offset, sub); c.font = hdr_font; c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True); c.fill = sub_fill["relokasi"]; c.border = border
-
-    # Column widths
-    widths = [8, 12, 12, 14, 12, 18, 22, 22, 22, 14, 18, 10, 8, 10, 10, 10, 12]
-    for i, w in enumerate(widths, start=1): ws.column_dimensions[get_column_letter(i)].width = w
-    for i in range(18, 45): ws.column_dimensions[get_column_letter(i)].width = 11
-    for i, w in zip(range(45, 51), [14, 16, 12, 14, 14, 20]):
-        ws.column_dimensions[get_column_letter(i)].width = w
-    ws.row_dimensions[1].height = 22
-    ws.row_dimensions[2].height = 28
-    ws.freeze_panes = "F3"
-
-    # Data rows
     row_idx = 3
     for o in orders:
-        cust = cust_map.get(str(o.get("customer_id"))) if o.get("customer_id") else None
-        pickup_dt = o.get("created_at")
-        recv_dt = o.get("received_at")
-        bulan = INDO_MONTHS[pickup_dt.month - 1] if pickup_dt else ""
-        ws.cell(row_idx, 1, bulan)
-        ws.cell(row_idx, 2, pickup_dt.replace(tzinfo=None) if pickup_dt else None).number_format = "yyyy-mm-dd"
-        if recv_dt:
-            ws.cell(row_idx, 3, recv_dt.replace(tzinfo=None)).number_format = "yyyy-mm-dd"
+        pickup = o.get("created_at")
+        grp = _ar_group_of(o)
+        subs = next(s for k, _l, _st, s in AR_GROUPS if k == grp)
+        gstart = next(st for k, _l, st, _s in AR_GROUPS if k == grp)
+
+        def gcol(name):
+            tgt = name.strip().lower()
+            for i, sub in enumerate(subs):
+                if sub.strip().lower() == tgt:
+                    return gstart + i
+            return None
+
+        ws.cell(row_idx, 1, AR_MONTHS_FULL[pickup.month - 1] if pickup else "")
+        if pickup:
+            ws.cell(row_idx, 2, pickup.replace(tzinfo=None)).number_format = "dd/mm/yyyy"
+        # 3 Tanggal Terima: dikosongkan (tak ada sumber di app)
         ws.cell(row_idx, 4, (o.get("status_pengiriman") or "").upper())
         ws.cell(row_idx, 5, o.get("awb_number"))
-        # Vendor Name: take from awb_costs (1st vendor cost), else blank
-        vname = ""
-        cost_doc = await db.awb_costs.find_one({"awb_id": o["_id"], "cost_category": "Vendor", "vendor_name": {"$ne": None}})
-        if cost_doc: vname = cost_doc.get("vendor_name", "") or ""
-        ws.cell(row_idx, 6, vname)
-        # Transport: combine armada + service
-        transport_parts = []
-        if o.get("armada"): transport_parts.append(o["armada"])
-        if o.get("service"): transport_parts.append(o["service"])
-        ws.cell(row_idx, 7, " ".join(transport_parts))
+        ws.cell(row_idx, 6, "AR CARGO")
+        ws.cell(row_idx, 7, o.get("armada") or "")
         ws.cell(row_idx, 8, o.get("origin"))
         ws.cell(row_idx, 9, o.get("destination"))
         ws.cell(row_idx, 10, o.get("nopol"))
-        ws.cell(row_idx, 11, o.get("received_by_name") or o.get("consignee") or "")
-        ws.cell(row_idx, 12, o.get("qty_kg"))
-        ws.cell(row_idx, 13, o.get("koli_count"))
-        ws.cell(row_idx, 14, o.get("qty_kg"))  # KG
-        # Min Kg / Final KG: leave blank unless we add a field; default to qty_kg
-        ws.cell(row_idx, 16, o.get("qty_kg"))  # Final KG
+        ws.cell(row_idx, 11, o.get("consignee") or "")
+        ws.cell(row_idx, 12, o.get("koli_count"))   # Qty
+        ws.cell(row_idx, 13, o.get("koli_count"))   # Koli
+        ws.cell(row_idx, 14, o.get("qty_kg"))       # KG
+        # 15 Min Kg, 16 Final KG, 18 DG: dikosongkan
         ws.cell(row_idx, 17, o.get("tariff_per_kg"))
 
-        # Group placement based on work_type
-        wt = (o.get("work_type") or "").lower()
-        grp_key = None
-        if "kirim" in wt: grp_key = "kirim"
-        elif "dismantle" in wt: grp_key = "dismantle"
-        elif "relokasi" in wt: grp_key = "relokasi"
+        # Charge dalam grup (semua nilai = total_tariff / Exc VAT sesuai konfirmasi)
+        if o.get("polis_amount"):
+            cP = gcol("Polis")
+            if cP:
+                ws.cell(row_idx, cP, o["polis_amount"])
+        if o.get("insurance_amount"):
+            cI = gcol("Insurance")
+            if cI:
+                ws.cell(row_idx, cI, o["insurance_amount"])
+        cMode = gcol(_ar_mode_sub(o))
+        if cMode and o.get("total_tariff"):
+            ws.cell(row_idx, cMode, o.get("total_tariff"))
 
-        if grp_key:
-            gstart = _ar_group_start(grp_key)
-            # Polis (col offset 0), Insurance (1), SPSI (2), Sewa Froklift (3)
-            if o.get("received_polis"): ws.cell(row_idx, gstart + 0, o["received_polis"])
-            if o.get("received_asuransi_amount"): ws.cell(row_idx, gstart + 1, o["received_asuransi_amount"])
-            if o.get("spsi_enabled") and o.get("spsi_amount"): ws.cell(row_idx, gstart + 2, o["spsi_amount"])
-            if o.get("sewa_forklift_enabled") and o.get("sewa_forklift_amount"): ws.cell(row_idx, gstart + 3, o["sewa_forklift_amount"])
-            # Mode column: Air / Trucking / Konsul → grand_total value
-            mode = (o.get("mode") or "").strip()
-            if mode in ("Air", "Trucking", "Konsul"):
-                off = _ar_subcol_offset(grp_key, mode)
-                if off is not None:
-                    ws.cell(row_idx, gstart + off, o.get("grand_total"))
+        ws.cell(row_idx, 48, o.get("total_tariff"))            # Amount (Exc VAT)
+        ws.cell(row_idx, 49, o.get("item_description"))        # Keterangan
+        ws.cell(row_idx, 50, o.get("grand_total"))             # HARGA
+        ws.cell(row_idx, 51, o.get("goods_content"))           # LIST MUATAN
+        ws.cell(row_idx, 52, o.get("insurance_amount") or "")  # ASURANSI
+        ws.cell(row_idx, 53, inv_map.get(str(o["_id"]), ""))   # No Invoice
 
-        ws.cell(row_idx, 45, o.get("grand_total"))  # Amount (Exc VAT) — using grand_total
-        ws.cell(row_idx, 46, o.get("item_description"))  # Keterangan
-        ws.cell(row_idx, 47, o.get("tariff_per_kg"))     # Harga
-        ws.cell(row_idx, 48, o.get("goods_content"))     # List Muatan
-        ws.cell(row_idx, 49, o.get("received_asuransi_amount") or o.get("insurance_amount") or "")
-        ws.cell(row_idx, 50, inv_map.get(str(o["_id"]), ""))
-
-        # Number formatting & borders for data cells
-        for col in [12, 13, 14, 15, 16, 17, 45, 47, 49] + list(range(18, 45)):
-            cc = ws.cell(row_idx, col)
-            if cc.value is not None and isinstance(cc.value, (int, float)):
-                cc.number_format = "#,##0"
-        for col in range(1, 51):
-            ws.cell(row_idx, col).border = border
+        for col in range(1, 54):
+            cell = ws.cell(row_idx, col)
+            if isinstance(cell.value, (int, float)):
+                cell.number_format = "#,##0"
+            cell.border = border
         row_idx += 1
 
     buf = io.BytesIO()

@@ -1,5 +1,13 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Export Payroll (urutan person) & Report AR (persis template) — Jun 2026
+- **Task 1 — Payroll**: `HrPayroll.js` exportSimToExcel kini mengurutkan `sim.slips` sesuai daftar `PERSON_ORDER` (17 nama, persis file "8. AR-Cargo Gaji Periode Agust 2026.xlsx"). Match by nama ternormalisasi; nama tak dikenal ditaruh di akhir. Tidak ada perubahan lain.
+- **Task 2 — Report AR** (`/api/exports/report-ar`, tombol di Recap.js): ditulis ulang PERSIS mengikuti "REPORT AR - EMR PERIODE JULI 2026". 53 kolom, header 2 baris biru `1E4E79` teks putih, merge & lebar kolom sesuai referensi. Grup: Kirim(11 sub, S–AC)/Dismantle(9,AD–AL)/Relokasi(9,AM–AU) + DG(R) + AV Amount(ExcVAT)/AW Keterangan/AX HARGA/AY List Muatan/AZ Asuransi/BA No Invoice.
+- **Pemetaan data (dikonfirmasi user):** grup default Kirim Barang (work_type kosong); charge=total_tariff ditaruh di sub-kolom Trucking/Konsul/Air (deteksi dari armada/service); Polis=polis_amount, Insurance=insurance_amount; AV=total_tariff, AX=grand_total, AZ=insurance_amount; Vendor Name konstan "AR CARGO"; kolom tanpa sumber (DG, Min/Final Kg, SURCHARGE, UN NUMBER, SPSI, Sewa Froklift, Loading/Unloading, Packing, Tanggal Terima) DIKOSONGKAN. Bulan pakai nama penuh (JULI).
+- **Deviasi kecil (tidak direplikasi):** merge vertikal per-invoice di area data (BA/AX referensi menggabung beberapa baris AWB satu invoice). Di sini tiap baris tampil No Invoice + grand_total sendiri.
+- Verifikasi: curl month=2026-07 → 404 baris, header/subheader/warna/lebar/merge header cocok. TIDAK panggil testing agent (permintaan user).
+
+
 ## Kontrak Kerja — Tombol Ganti Status (Jun 2026)
 - Endpoint baru `PUT /api/hr/contracts/{cid}/status` (validasi terhadap daftar status; require_feature hr).
 - Status kanonik: `draft, signed_user, signed_direktur, signed_employee, copied, archived` (label: Draft / Signed User / Signed Direktur / Signed Employee / Copied / Archived).
