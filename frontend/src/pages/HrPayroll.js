@@ -271,7 +271,20 @@ export default function HrPayroll() {
 
     // Data rows dimulai baris 8
     const startRow = 8;
-    const slips = sim.slips;
+    // Urutan person disamakan PERSIS dengan file "8. AR-Cargo Gaji Periode Agust 2026.xlsx"
+    const PERSON_ORDER = [
+      "Amrullah", "Abidin", "Aris Priyanto", "Desvian Dwirendy Burhan", "Jensen Lif",
+      "Reeza Marwan", "Elvina Abirahma", "Mohammad Raffy Anwar", "Iwan Habibi", "Ardiansyah",
+      "Samsir", "M. Agus Masrukhan", "Dede Jubaedi", "Rachel Putri Indria",
+      "Abdul Aziz Haddad Mujahid", "Wahyu Addien Althaf", "Deni Nugraha",
+    ];
+    const _normName = (x) => (x || "").toString().trim().toLowerCase().replace(/\s+/g, " ");
+    const _rankMap = new Map(PERSON_ORDER.map((n, i) => [_normName(n), i]));
+    const slips = [...sim.slips].sort((a, b) => {
+      const ra = _rankMap.has(_normName(a.employee_name)) ? _rankMap.get(_normName(a.employee_name)) : 999;
+      const rb = _rankMap.has(_normName(b.employee_name)) ? _rankMap.get(_normName(b.employee_name)) : 999;
+      return ra - rb;
+    });
     slips.forEach((s, i) => {
       const r = startRow + i;
       const row = ws.getRow(r);
