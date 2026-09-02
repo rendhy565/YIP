@@ -2927,6 +2927,88 @@ async def bulk_settle(data: BulkSettleIn, user: dict = Depends(require_role("ope
             skipped.append({"id": cid, "reason": str(e)})
     return {"settled": settled, "skipped": skipped, "settled_count": len(settled), "skipped_count": len(skipped)}
 
+class PayBulkIn(BaseModel):
+    cost_ids: List[str] = []
+    mode: str = "percent"   # "percent" (persen dari sisa tiap hutang) | "amount" (nominal total, dibagi proporsional)
+    value: float = 0
+    cash_account_code: Optional[str] = None
+    force: bool = False
+
+@app.post("/api/costs/pay-bulk")
+async def pay_bulk(data: PayBulkIn, user: dict = Depends(require_role("operation", "finance", "administrator"))):
+    """Bayar banyak hutang vendor sekaligus secara PROPORSIONAL.
+    - mode=percent: tiap hutang dibayar `value`% dari sisanya (mis. 50% → 12,5jt dari 25jt).
+    - mode=amount: `value` (bruto total) dibagi proporsional sesuai sisa masing-masing hutang.
+    Cocok untuk melunasi sebagian hutang hasil prorata tanpa hitung manual satu per satu."""
+    cash_acc = data.cash_account_code or "1101"
+    acc = await get_account(cash_acc)
+    if not acc or not acc.get("is_cash"):
+        raise HTTPException(400, "Akun kas/bank tidak valid")
+    targets = []  # (cid, cost, remaining)
+    for cid in data.cost_ids:
+        c = await db.awb_costs.find_one({"_id": _oid(cid)})
+        if not c:
+            continue
+        if c.get("cost_category") != "Vendor" or c.get("payment_type") != "Accrue" or c.get("is_settled"):
+            continue
+        remaining = round(float(c["amount"]) - float(c.get("paid_amount") or 0), 2)
+        if remaining > 0.5:
+            targets.append((cid, c, remaining))
+    if not targets:
+        raise HTTPException(400, "Tidak ada hutang Accrue yang bisa dibayar dari pilihan")
+
+    if data.mode == "percent":
+        pct = float(data.value)
+        if pct <= 0 or pct > 100:
+            raise HTTPException(400, "Persentase harus 1-100")
+        pays = [(cid, c, round(rem * pct / 100.0, 2)) for cid, c, rem in targets]
+    else:
+        total_amt = round(float(data.value), 2)
+        total_rem = round(sum(rem for _, _, rem in targets), 2)
+        if total_amt <= 0:
+            raise HTTPException(400, "Nominal harus > 0")
+        if total_amt > total_rem + 0.5:
+            raise HTTPException(400, f"Nominal melebihi total sisa hutang ({fmt_idr(total_rem)})")
+        pays = []
+        allocated = 0.0
+        for i, (cid, c, rem) in enumerate(targets):
+            p = round(total_amt - allocated, 2) if i == len(targets) - 1 else round(total_amt * rem / total_rem, 2)
+            allocated += p
+            pays.append((cid, c, p))
+    # guard: jangan melebihi sisa & buang yang 0
+    clean = []
+    for cid, c, p in pays:
+        rem = round(float(c["amount"]) - float(c.get("paid_amount") or 0), 2)
+        p = min(round(p, 2), rem)
+        if p > 0:
+            clean.append((cid, c, p))
+    if not clean:
+        raise HTTPException(400, "Nilai pembayaran hasil hitung = 0")
+
+    if not data.force:
+        vnames = {c.get("vendor_name") for _, c, _ in clean if c.get("vendor_name")}
+        unreviewed = []
+        for vn in vnames:
+            vd = await db.vendors.find_one({"name": vn})
+            if vd is not None and not vd.get("pph_reviewed", False):
+                unreviewed.append(vn)
+        if unreviewed:
+            return {"ok": False, "needs_confirmation": True, "vendors": unreviewed,
+                    "warning": (f"Vendor berikut belum dikonfigurasi PPh oleh Finance: {', '.join(unreviewed)}. "
+                                f"Lanjutkan bayar sekaligus tanpa potong PPh?")}
+
+    now = datetime.now(timezone.utc)
+    results = []
+    total_paid = 0.0
+    for cid, c, p in clean:
+        vn = c.get("vendor_name") or ""
+        vd = await db.vendors.find_one({"name": vn}) if vn else None
+        res = await _record_vendor_payment(c, cid, p, cash_acc, user, now, vd)
+        total_paid += p
+        results.append({"cost_id": cid, "vendor_name": vn, "paid": p,
+                        "remaining": res.get("remaining"), "fully_paid": res.get("fully_paid")})
+    return {"ok": True, "count": len(results), "total_paid": round(total_paid, 2), "results": results}
+
 @app.delete("/api/costs/{cid}")
 async def delete_cost(cid: str, confirm: bool = False, user: dict = Depends(get_current_user)):
     cost = await db.awb_costs.find_one({"_id": _oid(cid)})

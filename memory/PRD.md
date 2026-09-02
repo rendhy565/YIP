@@ -1,5 +1,12 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Bulk Proportional Pay Hutang Vendor (Prorata) — Jun 2026
+- **Masalah user:** settle hutang vendor prorate harus satu-satu & hitung persen manual (mis. invoice 100jt/4 AWB, mau bayar 50% → input 12,5jt ke tiap hutang).
+- **Backend:** endpoint baru `POST /api/costs/pay-bulk` — `mode=percent` (bayar value% dari SISA tiap hutang) atau `mode=amount` (nominal total dibagi proporsional sesuai sisa). Validasi Accrue/Vendor/belum lunas, gate PPh per vendor (needs_confirmation→force), posting via `_record_vendor_payment` (PPh 23 otomatis). Return count + total_paid + rincian per hutang.
+- **Frontend** (`AccrueSettlement.js`): tombol **"Bayar %"** di bar bulk (muncul saat ada baris terpilih), prompt persentase, handle konfirmasi PPh. Manfaatkan multi-select yang sudah ada → pilih 4 AWB prorata lalu 50% sekaligus.
+- Verifikasi curl: grup prorata 3×14jt (sisa 4,2jt each) → bayar 50% → 2,1jt each, total 6,3jt, sisa 2,1jt. Data uji di-void kembali ke semula. Frontend compiled OK. TIDAK panggil testing agent (permintaan user).
+
+
 ## Export Payroll (urutan person) & Report AR (persis template) — Jun 2026
 - **Task 1 — Payroll**: `HrPayroll.js` exportSimToExcel kini mengurutkan `sim.slips` sesuai daftar `PERSON_ORDER` (17 nama, persis file "8. AR-Cargo Gaji Periode Agust 2026.xlsx"). Match by nama ternormalisasi; nama tak dikenal ditaruh di akhir. Tidak ada perubahan lain.
 - **Task 2 — Report AR** (`/api/exports/report-ar`, tombol di Recap.js): ditulis ulang PERSIS mengikuti "REPORT AR - EMR PERIODE JULI 2026". 53 kolom, header 2 baris biru `1E4E79` teks putih, merge & lebar kolom sesuai referensi. Grup: Kirim(11 sub, S–AC)/Dismantle(9,AD–AL)/Relokasi(9,AM–AU) + DG(R) + AV Amount(ExcVAT)/AW Keterangan/AX HARGA/AY List Muatan/AZ Asuransi/BA No Invoice.

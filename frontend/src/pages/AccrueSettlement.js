@@ -151,6 +151,31 @@ export default function AccrueSettlement() {
     finally { setBulkSaving(false); }
   };
 
+  const bulkPayPercent = async () => {
+    const ids = selectedRows.map((r) => r.id);
+    if (ids.length === 0) return;
+    const raw = window.prompt(
+      `Bayar PROPORSIONAL untuk ${ids.length} hutang terpilih (total sisa ${fmtIDR(selectedTotal)}).\n\n` +
+      `Masukkan PERSENTASE yang dibayar (mis. 50 untuk 50% dari sisa masing-masing):`,
+      "50"
+    );
+    if (raw === null) return;
+    const pct = Number(String(raw).replace(/[^0-9.]/g, ""));
+    if (!pct || pct <= 0 || pct > 100) { toast.error("Persentase harus 1-100"); return; }
+    setBulkSaving(true);
+    try {
+      let r = await api.post("/costs/pay-bulk", { cost_ids: ids, mode: "percent", value: pct });
+      if (r.data && r.data.needs_confirmation) {
+        if (!window.confirm(`⚠️ ${r.data.warning}`)) { setBulkSaving(false); return; }
+        r = await api.post("/costs/pay-bulk", { cost_ids: ids, mode: "percent", value: pct, force: true });
+      }
+      toast.success(`${r.data.count} hutang dibayar ${pct}% — total ${fmtIDR(r.data.total_paid)}`);
+      setSelected(new Set());
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setBulkSaving(false); }
+  };
+
   const paidFiltered = useMemo(() => {
     const s = qPaid.trim().toLowerCase();
     if (!s) return paidRows;
@@ -321,6 +346,9 @@ export default function AccrueSettlement() {
           {selected.size > 0 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-xs text-slate-600">{selected.size} terpilih · <span className="font-semibold">{fmtIDR(selectedTotal)}</span></span>
+              <Button data-testid="accrue-bulk-pay-pct-btn" variant="secondary" disabled={bulkSaving} onClick={bulkPayPercent} title="Bayar sebagian secara proporsional (mis. 50% dari sisa tiap hutang) untuk semua yang dipilih sekaligus">
+                <Banknote size={14}/> Bayar %
+              </Button>
               <Button data-testid="accrue-bulk-paid-btn" variant="success" disabled={bulkSaving} onClick={bulkSettle}>
                 <CheckCircle2 size={14}/> {bulkSaving ? "Memproses..." : `Bulk Paid (${selected.size})`}
               </Button>
