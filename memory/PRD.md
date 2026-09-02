@@ -1,5 +1,10 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Bulk Pay Hutang Vendor — Bayar Nominal Total & Filter Grup Prorata (Jun 2026)
+- **Bayar Nominal (mode=amount):** endpoint `pay-bulk` sudah dukung; tombol **"Bayar Rp"** di bar bulk `AccrueSettlement.js` — input nominal total, dibagi PROPORSIONAL sesuai sisa tiap hutang (residual pembulatan ke hutang terakhir). Verifikasi curl: 6jt→3×2jt.
+- **Filter Grup Prorata:** dropdown `accrue-prorata-filter` (dibangun dari rows is_prorata+cost_group_id, label vendor·nAWB·sisa). Pilih grup → tabel tampil hanya AWB grup itu → select-all → Bayar %/Rp. `proGroup` ikut di filtered/useEffect/pagination.
+- Verifikasi: curl amount mode OK, UI (screenshot) dropdown + tombol tampil, data uji di-void kembali. Tidak panggil testing agent (permintaan user).
+
 ## Bulk Proportional Pay Hutang Vendor (Prorata) — Jun 2026
 - **Masalah user:** settle hutang vendor prorate harus satu-satu & hitung persen manual (mis. invoice 100jt/4 AWB, mau bayar 50% → input 12,5jt ke tiap hutang).
 - **Backend:** endpoint baru `POST /api/costs/pay-bulk` — `mode=percent` (bayar value% dari SISA tiap hutang) atau `mode=amount` (nominal total dibagi proporsional sesuai sisa). Validasi Accrue/Vendor/belum lunas, gate PPh per vendor (needs_confirmation→force), posting via `_record_vendor_payment` (PPh 23 otomatis). Return count + total_paid + rincian per hutang.

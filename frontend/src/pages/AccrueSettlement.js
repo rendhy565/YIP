@@ -18,6 +18,7 @@ export default function AccrueSettlement() {
   const [q, setQ] = useState("");
   const [vendor, setVendor] = useState("");
   const [monthFilter, setMonthFilter] = useState("");
+  const [proGroup, setProGroup] = useState("");
   const [filterMode, setFilterMode] = useState("AND");
   const [selected, setSelected] = useState(new Set());
   const [bulkSaving, setBulkSaving] = useState(false);
@@ -112,17 +113,31 @@ export default function AccrueSettlement() {
   }, [rows]);
 
   const filtered = useMemo(() => {
+    let base = rows;
+    if (proGroup) base = base.filter((r) => r.cost_group_id === proGroup);
     const qStr = q.trim().toLowerCase();
     const fns = [];
     if (qStr) fns.push((r) => `${r.awb_number || ""} ${r.vendor_name || ""} ${r.description || ""}`.toLowerCase().includes(qStr));
     if (vendor) fns.push((r) => r.vendor_name === vendor);
     if (monthFilter) fns.push((r) => String(r.created_at || "").slice(0, 7) === monthFilter);
-    if (fns.length === 0) return rows;
-    return rows.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
-  }, [rows, q, vendor, monthFilter, filterMode]);
+    if (fns.length === 0) return base;
+    return base.filter((r) => filterMode === "AND" ? fns.every((f) => f(r)) : fns.some((f) => f(r)));
+  }, [rows, q, vendor, monthFilter, filterMode, proGroup]);
+
+  // Grup prorata yang ada di daftar hutang belum lunas (untuk filter cepat)
+  const proGroups = useMemo(() => {
+    const map = new Map();
+    rows.forEach((r) => {
+      if (r.is_prorata && r.cost_group_id) {
+        const g = map.get(r.cost_group_id) || { id: r.cost_group_id, vendor: r.vendor_name || "-", n: 0, total: 0 };
+        g.n += 1; g.total += remainingOf(r); map.set(r.cost_group_id, g);
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => b.total - a.total);
+  }, [rows]);
 
   // Bersihkan pilihan tiap kali filter berubah — bulk hanya mengenai yang terfilter
-  useEffect(() => { setSelected(new Set()); }, [q, vendor, monthFilter]);
+  useEffect(() => { setSelected(new Set()); }, [q, vendor, monthFilter, proGroup]);
 
   const selectableIds = filtered.map((r) => r.id);
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
@@ -176,13 +191,40 @@ export default function AccrueSettlement() {
     finally { setBulkSaving(false); }
   };
 
+  const bulkPayAmount = async () => {
+    const ids = selectedRows.map((r) => r.id);
+    if (ids.length === 0) return;
+    const raw = window.prompt(
+      `Bayar NOMINAL TOTAL untuk ${ids.length} hutang terpilih (total sisa ${fmtIDR(selectedTotal)}).\n\n` +
+      `Nominal akan dibagi PROPORSIONAL sesuai sisa masing-masing hutang.\n` +
+      `Masukkan total BRUTO yang dibayar:`,
+      String(Math.round(selectedTotal))
+    );
+    if (raw === null) return;
+    const amount = Number(String(raw).replace(/[^0-9.]/g, ""));
+    if (!amount || amount <= 0) { toast.error("Nominal tidak valid"); return; }
+    if (amount > selectedTotal + 0.5) { toast.error(`Melebihi total sisa (${fmtIDR(selectedTotal)})`); return; }
+    setBulkSaving(true);
+    try {
+      let r = await api.post("/costs/pay-bulk", { cost_ids: ids, mode: "amount", value: amount });
+      if (r.data && r.data.needs_confirmation) {
+        if (!window.confirm(`⚠️ ${r.data.warning}`)) { setBulkSaving(false); return; }
+        r = await api.post("/costs/pay-bulk", { cost_ids: ids, mode: "amount", value: amount, force: true });
+      }
+      toast.success(`${r.data.count} hutang dibayar — total ${fmtIDR(r.data.total_paid)} (proporsional)`);
+      setSelected(new Set());
+      load();
+    } catch (e) { toast.error(errMsg(e)); }
+    finally { setBulkSaving(false); }
+  };
+
   const paidFiltered = useMemo(() => {
     const s = qPaid.trim().toLowerCase();
     if (!s) return paidRows;
     return paidRows.filter((r) => `${r.awb_number || ""} ${r.vendor_name || ""} ${r.description || ""}`.toLowerCase().includes(s));
   }, [paidRows, qPaid]);
 
-  const pag = usePagination(filtered, { resetKey: `${q}|${vendor}|${monthFilter}|${filterMode}` });
+  const pag = usePagination(filtered, { resetKey: `${q}|${vendor}|${monthFilter}|${filterMode}|${proGroup}` });
   const pagPaid = usePagination(paidFiltered, { resetKey: qPaid });
 
   const total = rows.reduce((s, r) => s + remainingOf(r), 0);
@@ -336,6 +378,17 @@ export default function AccrueSettlement() {
               {monthOptions.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </div>
+          {proGroups.length > 0 && (
+            <div className="min-w-[280px]">
+              <Label>Grup Prorata</Label>
+              <select data-testid="accrue-prorata-filter" value={proGroup} onChange={(e) => setProGroup(e.target.value)} className="h-10 rounded border border-indigo-300 px-3 text-sm bg-indigo-50 w-full">
+                <option value="">Semua ({proGroups.length} grup prorata)</option>
+                {proGroups.map((g) => (
+                  <option key={g.id} value={g.id}>{g.vendor} · {g.n} AWB · sisa {fmtIDR(g.total)}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="ml-auto text-xs text-slate-500">{filtered.length} dari {rows.length} hutang</div>
         </div>
       </Card>
@@ -346,8 +399,11 @@ export default function AccrueSettlement() {
           {selected.size > 0 && (
             <div className="flex items-center gap-2 ml-auto">
               <span className="text-xs text-slate-600">{selected.size} terpilih · <span className="font-semibold">{fmtIDR(selectedTotal)}</span></span>
-              <Button data-testid="accrue-bulk-pay-pct-btn" variant="secondary" disabled={bulkSaving} onClick={bulkPayPercent} title="Bayar sebagian secara proporsional (mis. 50% dari sisa tiap hutang) untuk semua yang dipilih sekaligus">
+              <Button data-testid="accrue-bulk-pay-pct-btn" variant="secondary" disabled={bulkSaving} onClick={bulkPayPercent} title="Bayar sebagian proporsional berdasarkan PERSENTASE dari sisa tiap hutang">
                 <Banknote size={14}/> Bayar %
+              </Button>
+              <Button data-testid="accrue-bulk-pay-amount-btn" variant="secondary" disabled={bulkSaving} onClick={bulkPayAmount} title="Bayar NOMINAL TOTAL, dibagi proporsional ke sisa tiap hutang terpilih">
+                <Banknote size={14}/> Bayar Rp
               </Button>
               <Button data-testid="accrue-bulk-paid-btn" variant="success" disabled={bulkSaving} onClick={bulkSettle}>
                 <CheckCircle2 size={14}/> {bulkSaving ? "Memproses..." : `Bulk Paid (${selected.size})`}
