@@ -17,6 +17,7 @@ const TEXT_FIELDS = [
   ["origin", "Origin"],
   ["destination", "Tujuan"],
   ["nopol", "Nopol"],
+  ["fleet_type", "Transport (tampil di Invoice)"],
   ["status_pengiriman", "Status Pengiriman"],
   ["work_type", "Jenis Pekerjaan"],
   ["item_description", "Deskripsi Barang"],

@@ -2242,7 +2242,7 @@ async def resync_awb_tariff_journals(awb) -> dict:
 _SE_DETAIL_FIELDS = [
     "awb_number", "consignee", "sender_name", "reff_no", "company_name",
     "origin", "destination", "nopol", "status_pengiriman", "work_type",
-    "item_description", "goods_content", "received_by_name",
+    "item_description", "goods_content", "received_by_name", "fleet_type",
 ]
 _SE_ADDON_FIELDS = ["received_polis_amount", "received_asuransi_amount", "spsi_amount", "sewa_forklift_amount"]
 

@@ -1,5 +1,15 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## Edit Transport (fleet_type) di Invoice — Jun 2026
+- Kolom "TRANSPORT" pada lampiran invoice (`invoice_docs.py` baris ~177: `a.fleet_type || a.mode`) = field **`fleet_type`** order (terisi dari import Excel kolom transport → `fleet_type`).
+- Field `fleet_type` tadinya tak ter-expose di form edit manapun. Ditambahkan:
+  - Backend: `fleet_type` masuk `_SE_DETAIL_FIELDS` (super-edit apply). Endpoint `/orders/{id}/extended` sudah menerima sejak awal.
+  - Frontend SuperEdit.js: TEXT_FIELDS + `["fleet_type","Transport (tampil di Invoice)"]`.
+  - Frontend Recap.js: field "Transport (tampil di Invoice)" di modal Edit AWB + mapping openEdit.
+- Catatan: label "Armada Request Customer — tampil di invoice" di OrderInput.js MENYESATKAN (invoice pakai fleet_type, bukan armada_requested) — belum diubah.
+- AWB Invoiced/Paid → edit via Super Edit; Open/Reconciled → via Rekap Edit. Verifikasi curl super-edit apply fleet_type (ubah+revert OK), frontend compile OK. Tidak panggil testing agent.
+
+
 ## Bulk Pay Hutang Vendor — Bayar Nominal Total & Filter Grup Prorata (Jun 2026)
 - **Bayar Nominal (mode=amount):** endpoint `pay-bulk` sudah dukung; tombol **"Bayar Rp"** di bar bulk `AccrueSettlement.js` — input nominal total, dibagi PROPORSIONAL sesuai sisa tiap hutang (residual pembulatan ke hutang terakhir). Verifikasi curl: 6jt→3×2jt.
 - **Filter Grup Prorata:** dropdown `accrue-prorata-filter` (dibangun dari rows is_prorata+cost_group_id, label vendor·nAWB·sisa). Pilih grup → tabel tampil hanya AWB grup itu → select-all → Bayar %/Rp. `proGroup` ikut di filtered/useEffect/pagination.

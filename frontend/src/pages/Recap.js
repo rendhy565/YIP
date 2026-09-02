@@ -188,6 +188,7 @@ export default function Recap() {
       service: r.service || "",
       via: r.via || "",
       status_pengiriman: r.status_pengiriman || "",
+      fleet_type: r.fleet_type || "",
       item_description: r.item_description || "",
       goods_content: r.goods_content || "",
       is_charter: looksCharter,
@@ -562,6 +563,10 @@ export default function Recap() {
                   <option value="">— (blank, tidak ditampilkan) —</option>
                   <option value="Reguler">Reguler</option><option value="Project">Project</option>
                 </Select>
+              </div>
+              <div>
+                <Label>Transport (tampil di Invoice)</Label>
+                <Input data-testid="edit-fleet-type" value={editForm.fleet_type} onChange={(e) => setEditForm({ ...editForm, fleet_type: e.target.value })} placeholder="mis. TRUCKING CHARTER TRONTON"/>
               </div>
               <div className="md:col-span-3"><Label>Item</Label><Input value={editForm.item_description} onChange={(e) => setEditForm({ ...editForm, item_description: e.target.value })}/></div>
               <div className="md:col-span-3"><Label>Isi Barang</Label><Input value={editForm.goods_content} onChange={(e) => setEditForm({ ...editForm, goods_content: e.target.value })}/></div>
