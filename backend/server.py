@@ -10103,7 +10103,7 @@ async def export_awbs_excel(
     ws = wb.active
     ws.title = "AWBs"
     headers = [
-        "AWB", "WO Number", "Pickup Date", "Customer", "Region", "Destination", "Destination City",
+        "AWB", "WO Number", "Pickup Date", "Customer", "Region", "Origin", "Destination", "Destination City",
         "Tipe Armada", "Jenis Armada", "Vendor Utama", "Item Lines", "Qty (Kg)",
         "Selling", "PPN", "Inv+PPN", "Cashback", "PPh 2%", "Total Biaya",
         "Margin (Rp)", "Margin (%)", "Status", "No Invoice Eksternal", "Tgl Bayar",
@@ -10134,6 +10134,7 @@ async def export_awbs_excel(
             a.get("created_at").strftime("%Y-%m-%d") if a.get("created_at") else "",
             cust_map.get(a.get("customer_id"), "-"),
             a.get("region"),
+            a.get("origin"),
             a.get("destination"),
             a.get("destination_city"),
             a.get("armada_type"),
@@ -10156,15 +10157,15 @@ async def export_awbs_excel(
         for col_idx, val in enumerate(row, 1):
             cell = ws.cell(row=i, column=col_idx, value=val)
             cell.border = border
-            if col_idx in (12, 13, 14, 15, 16, 17, 18, 19):  # numeric columns
+            if col_idx in (13, 14, 15, 16, 17, 18, 19, 20):  # numeric columns
                 cell.number_format = '#,##0'
                 cell.alignment = Alignment(horizontal="right")
-            elif col_idx == 20:  # margin %
+            elif col_idx == 21:  # margin %
                 cell.number_format = '0.00"%"'
                 cell.alignment = Alignment(horizontal="right")
 
     # Auto-width columns
-    widths = [14, 12, 12, 30, 16, 18, 18, 12, 12, 22, 6, 8, 14, 12, 14, 12, 12, 14, 14, 10, 12, 24, 12]
+    widths = [14, 12, 12, 30, 16, 18, 18, 18, 12, 12, 22, 6, 8, 14, 12, 14, 12, 12, 14, 14, 10, 12, 24, 12]
     for i, w in enumerate(widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
