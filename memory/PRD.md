@@ -1,5 +1,11 @@
 # PRD — AR Cargo TMS (Order → Cash)
 
+## P&L Order — Exclude Drop + Search/Pagination List AWB (Jun 2026)
+- Backend `/api/reports/profit-loss`: AWB status **Drop** di-skip total (tidak masuk revenue_excluded/excluded_count, tidak masuk rows list). Dampak: 11 Drop-dgn-cost hanya di Jul(10)/Agu(1) → total P&L Jan–Jun (dilaporkan) TIDAK berubah.
+- Frontend `ProfitLoss.js`: list "Rincian per AWB" diberi **search** (data-testid `pnl-row-search`, cari AWB/customer/status) + **pagination** (`Pagination` + `usePagination`, testid `pagination-pnl`). Pesan "N AWB tanpa biaya" & list otomatis tak lagi memunculkan Drop.
+- Verifikasi: curl Juli → 0 baris Drop, excluded_count tak hitung Drop; UI search box render & filter jalan. Tidak panggil testing agent.
+
+
 ## Edit Transport (fleet_type) di Invoice — Jun 2026
 - Kolom "TRANSPORT" pada lampiran invoice (`invoice_docs.py` baris ~177: `a.fleet_type || a.mode`) = field **`fleet_type`** order (terisi dari import Excel kolom transport → `fleet_type`).
 - Field `fleet_type` tadinya tak ter-expose di form edit manapun. Ditambahkan:

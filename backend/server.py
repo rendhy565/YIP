@@ -4687,6 +4687,10 @@ async def profit_loss(
     revenue_excluded = 0.0  # AWBs without cost (informational)
     excluded_count = 0
     for o in orders:
+        # AWB berstatus Drop (dibatalkan) tidak masuk P&L sama sekali —
+        # tidak dihitung sebagai "AWB tanpa cost" & tidak muncul di list.
+        if o.get("status") == "Drop":
+            continue
         rev = o.get("total_tariff", 0) or 0
         cst = cost_agg.get(o["_id"], 0) or 0
         has_cost = cst > 0

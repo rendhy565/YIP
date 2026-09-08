@@ -1,7 +1,8 @@
 import MonthPicker from "../components/MonthPicker";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td, StatusBadge } from "../components/ui";
+import Pagination, { usePagination } from "../components/Pagination";
 import { fmtIDR, fmtDate, currentMonth, monthStart, monthEnd } from "../lib/utils";
 import { TrendingUp, TrendingDown, Wallet, Download, Info, Banknote } from "lucide-react";
 import * as XLSX from "xlsx";
@@ -24,6 +25,7 @@ export default function ProfitLoss() {
   const startDate = monthStart(startMonth);
   const endDate = monthEnd(endMonth);
   const [customerId, setCustomerId] = useState("");
+  const [rowSearch, setRowSearch] = useState("");
 
   const load = () => {
     const params = { start_date: startDate, end_date: endDate };
@@ -73,6 +75,15 @@ export default function ProfitLoss() {
 
   const s = data.summary || {};
   const periodLabel = startDate === endDate ? startDate : `${startDate} → ${endDate}`;
+
+  const filteredRows = useMemo(() => {
+    const qs = rowSearch.trim().toLowerCase();
+    if (!qs) return data.rows;
+    return data.rows.filter((r) =>
+      `${r.awb_number || ""} ${r.customer_name || ""} ${r.status || ""}`.toLowerCase().includes(qs)
+    );
+  }, [data.rows, rowSearch]);
+  const pag = usePagination(filteredRows, { resetKey: `${rowSearch}|${startMonth}|${endMonth}|${customerId}` });
 
   return (
     <div data-testid="pnl-page">
@@ -200,10 +211,13 @@ export default function ProfitLoss() {
 
       {/* Per-AWB Breakdown */}
       <Card>
-        <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
+        <div className="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center gap-2">
           <TrendingUp size={16} className="text-emerald-700"/>
           <h3 className="font-bold">Rincian per AWB (Revenue & COGS)</h3>
-          <span className="text-xs text-slate-500 ml-2">{data.rows.length} AWB</span>
+          <span className="text-xs text-slate-500">{filteredRows.length} AWB{rowSearch ? ` (dari ${data.rows.length})` : ""}</span>
+          <div className="ml-auto w-full sm:w-64">
+            <Input data-testid="pnl-row-search" value={rowSearch} onChange={(e) => setRowSearch(e.target.value)} placeholder="Cari AWB / customer / status..."/>
+          </div>
         </div>
         <Table>
           <thead><tr>
@@ -212,7 +226,7 @@ export default function ProfitLoss() {
             <Th className="text-right">Gross Profit</Th><Th className="text-right">Margin %</Th>
           </tr></thead>
           <tbody>
-            {data.rows.map((r) => (
+            {pag.paged.map((r) => (
               <tr key={r.awb_id} data-testid={`pnl-row-${r.awb_id}`} className={!r.has_cost ? "opacity-50" : ""}>
                 <Td className="font-mono font-semibold">
                   {r.awb_number}
@@ -228,8 +242,10 @@ export default function ProfitLoss() {
               </tr>
             ))}
             {data.rows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10">Tidak ada data untuk filter ini.</Td></tr>}
+            {data.rows.length > 0 && filteredRows.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-10">Tidak ada AWB yang cocok dengan pencarian.</Td></tr>}
           </tbody>
         </Table>
+        <Pagination {...pag} testid="pagination-pnl"/>
       </Card>
     </div>
   );
