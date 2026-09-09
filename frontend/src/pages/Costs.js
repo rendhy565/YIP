@@ -18,6 +18,7 @@ export default function Costs() {
   const [costs, setCosts] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [open, setOpen] = useState(false);
+  const [searchAwb, setSearchAwb] = useState("");
 
   const isOp = user?.role === "operation";
   const isAdmin = user?.role === "administrator";
@@ -186,7 +187,13 @@ export default function Costs() {
     } catch (e2) { toast.error(errMsg(e2)); }
   };
 
-  const costsPag = usePagination(costs, { resetKey: String(costs.length) });
+  const filteredCosts = useMemo(() => {
+    if (!searchAwb.trim()) return costs;
+    const term = searchAwb.toLowerCase().trim();
+    return costs.filter((c) => c.awb_number?.toLowerCase().includes(term));
+  }, [costs, searchAwb]);
+
+  const costsPag = usePagination(filteredCosts, { resetKey: String(filteredCosts.length) + searchAwb });
 
   return (
     <div data-testid="costs-page">
@@ -212,7 +219,19 @@ export default function Costs() {
       <Card>
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2 flex-wrap">
           <h3 className="font-bold text-sm">Daftar Biaya per AWB</h3>
-          <span className="text-xs text-slate-500">{costs.length} baris</span>
+          <span className="text-xs text-slate-500">{filteredCosts.length} dari {costs.length} baris</span>
+        </div>
+        <div className="px-4 py-3 border-b border-slate-200">
+          <div className="relative max-w-md">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+            <Input
+              data-testid="search-awb-input"
+              value={searchAwb}
+              onChange={(e) => setSearchAwb(e.target.value)}
+              placeholder="Cari No AWB..."
+              className="pl-10"
+            />
+          </div>
         </div>
         <Table>
           <thead><tr>
@@ -263,6 +282,7 @@ export default function Costs() {
                 </Td>
               </tr>
             ))}
+            {filteredCosts.length === 0 && costs.length > 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-8">Tidak ada biaya yang cocok dengan pencarian.</Td></tr>}
             {costs.length === 0 && <tr><Td colSpan={8} className="text-center text-slate-500 py-8">Belum ada biaya.</Td></tr>}
           </tbody>
         </Table>
