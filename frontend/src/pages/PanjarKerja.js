@@ -30,7 +30,7 @@ export default function PanjarKerja() {
   const { user } = useAuth();
   const isAdmin = user?.role === "administrator";
   const [rows, setRows] = useState([]);
-  const [pengajuFilter, setPengajuFilter] = useState("");
+  const [penerimaFilter, setPenerimaFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [selected, setSelected] = useState({}); // id -> true (admin bulk actions)
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -328,17 +328,17 @@ export default function PanjarKerja() {
   };
   const filtered = useMemo(() => {
     let list = rows;
-    if (pengajuFilter) list = list.filter((r) => r.created_by === pengajuFilter);
+    if (penerimaFilter) list = list.filter((r) => (r.recipient_name || "") === penerimaFilter);
     if (statusFilter) list = list.filter((r) => r.status === statusFilter);
     return list;
-  }, [rows, pengajuFilter, statusFilter]);
-  const pag = usePagination(filtered, { resetKey: `${pengajuFilter}|${statusFilter}` });
+  }, [rows, penerimaFilter, statusFilter]);
+  const pag = usePagination(filtered, { resetKey: `${penerimaFilter}|${statusFilter}` });
 
-  // Pengaju options — hanya user yang pernah membuat panjar
-  const pengajuOptions = useMemo(() => {
-    const ids = [...new Set(rows.map((r) => r.created_by).filter(Boolean))];
-    return ids.map((id) => ({ id, label: userLabel(id) })).sort((a, b) => a.label.localeCompare(b.label));
-  }, [rows, users]);
+  // Penerima options — hanya penerima yang pernah ada di panjar
+  const penerimaOptions = useMemo(() => {
+    const names = [...new Set(rows.map((r) => (r.recipient_name || "").trim()).filter(Boolean))];
+    return names.sort((a, b) => a.localeCompare(b));
+  }, [rows]);
 
   // ── Multi-select (admin) ──
   const pageIds = pag.paged.map((r) => r.id);
@@ -428,10 +428,10 @@ export default function PanjarKerja() {
       <Card className="p-3 mb-3">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-[200px]">
-            <Label>Filter Pengaju</Label>
-            <Select data-testid="panjar-pengaju-filter" value={pengajuFilter} onChange={(e) => setPengajuFilter(e.target.value)}>
-              <option value="">Semua Pengaju</option>
-              {pengajuOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            <Label>Filter Penerima</Label>
+            <Select data-testid="panjar-penerima-filter" value={penerimaFilter} onChange={(e) => setPenerimaFilter(e.target.value)}>
+              <option value="">Semua Penerima</option>
+              {penerimaOptions.map((name) => <option key={name} value={name}>{name}</option>)}
             </Select>
           </div>
           <div className="min-w-[160px]">
