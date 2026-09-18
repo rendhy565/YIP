@@ -3,6 +3,14 @@ export const fmtIDR = (n) => {
   return "Rp " + v.toLocaleString("id-ID", { maximumFractionDigits: 0 });
 };
 
+// Basis Revenue/Selling = DPP + addon, TANPA PPN (PPN hanya untuk invoice).
+// = grand_total - tax_amount; fallback ke total_tariff bila grand_total kosong.
+export const sellingOf = (r) => {
+  const gt = Number(r?.grand_total || 0);
+  const tax = Number(r?.tax_amount || 0);
+  return gt > 0 ? gt - tax : Number(r?.total_tariff || 0);
+};
+
 export const fmtDate = (s) => {
   if (!s) return "-";
   try {

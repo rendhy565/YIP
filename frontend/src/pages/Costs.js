@@ -5,7 +5,7 @@ import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td } from "../components/ui";
 import SearchableSelect from "../components/SearchableSelect";
 import VendorSelect from "../components/VendorSelect";
-import { errMsg, fmtIDR, fmtDate, currentMonth } from "../lib/utils";
+import { errMsg, fmtIDR, fmtDate, currentMonth, sellingOf } from "../lib/utils";
 import { toast } from "sonner";
 import { useAuth } from "../lib/auth";
 import { Plus, Trash2, X, Wallet, Coins, Layers, RefreshCw, CheckSquare, Square, Search } from "lucide-react";
@@ -84,7 +84,7 @@ export default function Costs() {
 
   const selectedList = useMemo(() => Object.values(proSelected), [proSelected]);
   const proTotalSelectedSales = useMemo(() => {
-    return selectedList.reduce((s, a) => s + (Number(a.grand_total) || 0), 0);
+    return selectedList.reduce((s, a) => s + sellingOf(a), 0);
   }, [selectedList]);
 
   const proPreview = useMemo(() => {
@@ -92,7 +92,7 @@ export default function Costs() {
     if (!total || proTotalSelectedSales <= 0) return [];
     let running = 0;
     return selectedList.map((a, i) => {
-      const share = a.grand_total / proTotalSelectedSales;
+      const share = sellingOf(a) / proTotalSelectedSales;
       const amt = i === selectedList.length - 1
         ? +(total - running).toFixed(2)
         : +(total * share).toFixed(2);
@@ -402,7 +402,7 @@ export default function Costs() {
                     {(g.children || []).map((c) => (
                       <tr key={c.cost_id}>
                         <Td className="font-mono font-semibold text-xs">{c.awb_number}</Td>
-                        <Td className="text-right font-mono text-xs">{fmtIDR(c.grand_total)}</Td>
+                        <Td className="text-right font-mono text-xs">{fmtIDR(sellingOf(c))}</Td>
                         <Td className="text-right font-mono text-xs text-indigo-700">{c.share_pct}%</Td>
                         <Td className="text-right font-mono font-bold text-rose-700">{fmtIDR(c.amount)}</Td>
                         <Td><span className={`text-[10px] font-bold uppercase ${c.is_settled ? "text-emerald-700" : "text-slate-400"}`}>{c.is_settled ? "Settled" : "Pending"}</span></Td>
@@ -423,7 +423,7 @@ export default function Costs() {
             <div className="flex items-start justify-between p-5 border-b border-slate-200">
               <div>
                 <h3 className="font-heading font-bold text-xl inline-flex items-center gap-2"><Layers size={20} className="text-indigo-700"/> Prorata Vendor Cost</h3>
-                <p className="text-xs text-slate-500 mt-0.5">1 tagihan vendor dibagi proporsional ke banyak AWB berdasarkan besaran sales (grand_total) tiap AWB.</p>
+                <p className="text-xs text-slate-500 mt-0.5">1 tagihan vendor dibagi proporsional ke banyak AWB berdasarkan besaran sales (Exc. PPN) tiap AWB.</p>
               </div>
               <button onClick={() => setProOpen(false)} className="p-1 hover:bg-slate-100 rounded"><X size={18}/></button>
             </div>
@@ -506,7 +506,7 @@ export default function Costs() {
                         </div>
                         <div className="text-right">
                           <div className="text-[10px] uppercase text-slate-500">Sales</div>
-                          <div className="font-mono font-bold text-sm text-emerald-700">{fmtIDR(a.grand_total)}</div>
+                          <div className="font-mono font-bold text-sm text-emerald-700">{fmtIDR(sellingOf(a))}</div>
                         </div>
                       </label>
                     );
@@ -525,7 +525,7 @@ export default function Costs() {
                       {proPreview.map((p) => (
                         <tr key={p.id}>
                           <Td className="font-mono text-xs">{p.awb_number}</Td>
-                          <Td className="text-right font-mono text-xs">{fmtIDR(p.grand_total)}</Td>
+                          <Td className="text-right font-mono text-xs">{fmtIDR(sellingOf(p))}</Td>
                           <Td className="text-right font-mono text-xs text-indigo-700">{p.share_pct}%</Td>
                           <Td className="text-right font-mono font-bold text-rose-700">{fmtIDR(p.amount)}</Td>
                         </tr>

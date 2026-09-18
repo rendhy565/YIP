@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import api from "../lib/api";
 import { Card, PageHeader, Select, Input, Table, Th, Td, StatusBadge, Label, Button } from "../components/ui";
-import { fmtIDR, fmtDate, fmtDateTime, errMsg } from "../lib/utils";
+import { fmtIDR, fmtDate, fmtDateTime, errMsg, sellingOf } from "../lib/utils";
 import { Trash2, MinusCircle, PackageCheck, X, Search, Download, MapPin } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useCan } from "../lib/useCan";
@@ -307,7 +307,7 @@ export default function OrdersList() {
           <div className="text-sm">
             <span className="text-slate-500 mr-1">Sales</span>
             <span className="font-mono font-bold text-emerald-700" data-testid="filtered-total-sales">
-              {fmtIDR(filteredRows.reduce((s, r) => s + (Number(r.grand_total) || 0), 0))}
+              {fmtIDR(filteredRows.reduce((s, r) => s + sellingOf(r), 0))}
             </span>
           </div>
           <div className="text-sm">
@@ -319,7 +319,7 @@ export default function OrdersList() {
           <div className="text-sm">
             <span className="text-slate-500 mr-1">Margin</span>
             <span className="font-mono font-bold text-blue-700" data-testid="filtered-total-margin">
-              {fmtIDR(filteredRows.reduce((s, r) => s + ((Number(r.grand_total) || 0) - (Number(r._total_cost) || 0)), 0))}
+              {fmtIDR(filteredRows.reduce((s, r) => s + (sellingOf(r) - (Number(r._total_cost) || 0)), 0))}
             </span>
           </div>
           <div className="text-sm">
@@ -387,7 +387,7 @@ export default function OrdersList() {
                 <Td className="text-xs">{r.vendor_2 || <span className="text-slate-400">—</span>}</Td>
                 <Td className="text-xs">{r.vendor_3 || <span className="text-slate-400">—</span>}</Td>
                 <Td className="text-right">{r.qty_kg}</Td>
-                <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
+                <Td className="text-right font-semibold">{fmtIDR(sellingOf(r))}</Td>
                 <Td className="text-right">
                   {r._total_cost > 0 ? (
                     canViewCost ? (
@@ -536,7 +536,7 @@ export default function OrdersList() {
                 const gt = (recvFor.grand_total || 0) + penambah;
                 return (
                   <div className="mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs">
-                    <div className="flex items-center justify-between"><span>Nilai AWB:</span><span className="font-mono">{fmtIDR(recvFor.grand_total)}</span></div>
+                    <div className="flex items-center justify-between"><span>Nilai AWB (Exc. PPN):</span><span className="font-mono">{fmtIDR(sellingOf(recvFor))}</span></div>
                     <div className="flex items-center justify-between"><span>+ Polis:</span><span className="font-mono">{fmtIDR(polis)}</span></div>
                     <div className="flex items-center justify-between"><span>+ Asuransi:</span><span className="font-mono">{fmtIDR(asuransi)}</span></div>
                     <div className="flex items-center justify-between"><span>+ SPSI:</span><span className="font-mono">{fmtIDR(spsi)}</span></div>
@@ -566,8 +566,8 @@ export default function OrdersList() {
                 </div>
               </div>
               <div className="mt-3 px-3 py-2 bg-slate-50 border border-slate-200 rounded flex items-center justify-between text-sm">
-                <span className="text-slate-500">Nilai AWB (Grand Total) →</span>
-                <span className="font-heading font-bold text-blue-700">{fmtIDR(recvFor.grand_total)}</span>
+                <span className="text-slate-500">Nilai AWB (Exc. PPN) →</span>
+                <span className="font-heading font-bold text-blue-700">{fmtIDR(sellingOf(recvFor))}</span>
               </div>
               <p className="text-[11px] text-slate-500 mt-2">
                 Nilai AWB akan masuk ke kolom <strong>{recvForm.work_type} → {recvForm.mode}</strong> di Report AR Excel.

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../lib/api";
 import { Card, PageHeader, Button, Select, Input, Label, Table, Th, Td, StatusBadge } from "../components/ui";
-import { fmtIDR, fmtDate, errMsg } from "../lib/utils";
+import { fmtIDR, fmtDate, errMsg, sellingOf } from "../lib/utils";
 import { toast } from "sonner";
 import { Download, Undo2, CheckSquare, Square, Coins, ClipboardCheck, AlertCircle, Edit3, Save, X, FileSpreadsheet } from "lucide-react";
 import FilterPresets from "../components/FilterPresets";
@@ -105,7 +105,7 @@ export default function Recap() {
     for (const r of openRows) {
       if (!passGlobal(r)) continue;
       const c = costMap[r.id] || 0;
-      const enriched = { ...r, _total_cost: c, _margin: (r.grand_total || 0) - c };
+      const enriched = { ...r, _total_cost: c, _margin: sellingOf(r) - c };
       if (c > 0) ready.push(enriched); else noCost.push(enriched);
     }
     return { readyRows: ready, noCostRows: noCost };
@@ -381,7 +381,7 @@ export default function Recap() {
                 <Td className="text-xs">{r.consignee || "-"}</Td>
                 <Td className="font-mono text-xs">{r.origin} → {r.destination}</Td>
                 <Td className="text-xs">{[r.service, r.via].filter(Boolean).join(" / ") || "-"}</Td>
-                <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
+                <Td className="text-right font-semibold">{fmtIDR(sellingOf(r))}</Td>
                 <Td className="text-right whitespace-nowrap">
                   <div className="flex gap-1 justify-end">
                     {canAddCost && (
@@ -445,7 +445,7 @@ export default function Recap() {
                 <Td className="font-mono text-xs">{r.origin} → {r.destination}</Td>
                 <Td className="text-xs">{[r.service, r.via].filter(Boolean).join(" / ") || "-"}</Td>
                 <Td className="text-xs">{[r.armada, r.nopol].filter(Boolean).join(" · ") || "-"}</Td>
-                <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
+                <Td className="text-right font-semibold">{fmtIDR(sellingOf(r))}</Td>
                 <Td className="text-right">
                   {r._total_cost > 0 ? (
                     <button data-testid={`view-cost-${r.awb_number}`} onClick={() => setViewCostFor(r)} className="text-rose-700 font-bold hover:underline">
@@ -513,7 +513,7 @@ export default function Recap() {
                 <Td className="text-xs text-slate-600">{fmtDate(r.created_at)}</Td>
                 <Td>{r.customer_name}</Td>
                 <Td className="font-mono text-xs">{r.origin} → {r.destination}</Td>
-                <Td className="text-right font-semibold">{fmtIDR(r.grand_total)}</Td>
+                <Td className="text-right font-semibold">{fmtIDR(sellingOf(r))}</Td>
                 <Td><StatusBadge status={r.status}/></Td>
                 <Td className="text-right">
                   <Button data-testid={`revert-btn-${r.id}`} variant="secondary" onClick={() => revert(r.id)}>

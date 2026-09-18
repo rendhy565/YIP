@@ -3107,10 +3107,14 @@ async def _generate_prorata_children(group_id: ObjectId, group: dict, user_id: s
     if len(awbs) < 2:
         raise HTTPException(400, "Prorata minimal 2 AWB")
     # Sum grand_total (sales)
-    def _sales(a): return float(a.get("grand_total") or a.get("total_tariff") or 0)
+    # Sum sales EXCLUDING PPN (DPP + addon = grand_total - tax_amount). PPN hanya utk invoice.
+    def _sales(a):
+        gt = float(a.get("grand_total") or 0)
+        tax = float(a.get("tax_amount") or 0)
+        return (gt - tax) if gt > 0 else float(a.get("total_tariff") or 0)
     total_sales = sum(_sales(a) for a in awbs)
     if total_sales <= 0:
-        raise HTTPException(400, "Total sales AWB = 0, tidak bisa prorata (grand_total kosong semua)")
+        raise HTTPException(400, "Total sales AWB = 0, tidak bisa prorata (nilai sales kosong semua)")
     total_amount = float(group["total_amount"])
     vendor_name = group["vendor_name"]
     now = datetime.now(timezone.utc)
@@ -3214,6 +3218,8 @@ async def list_cost_groups(period_month: Optional[str] = None, vendor_name: Opti
                 "awb_id": str(c["awb_id"]),
                 "awb_number": (awb_map.get(c["awb_id"]) or {}).get("awb_number"),
                 "grand_total": float((awb_map.get(c["awb_id"]) or {}).get("grand_total") or 0),
+                "tax_amount": float((awb_map.get(c["awb_id"]) or {}).get("tax_amount") or 0),
+                "total_tariff": float((awb_map.get(c["awb_id"]) or {}).get("total_tariff") or 0),
                 "amount": float(c.get("amount") or 0),
                 "share_pct": float(c.get("prorata_share_pct") or 0),
                 "is_settled": bool(c.get("is_settled")),
@@ -3338,6 +3344,8 @@ async def prorata_candidate_awbs(period_month: Optional[str] = None,
             "origin": d.get("origin"),
             "destination": d.get("destination"),
             "grand_total": gt,
+            "tax_amount": float(d.get("tax_amount") or 0),
+            "total_tariff": float(d.get("total_tariff") or 0),
             "status": d.get("status"),
             "created_at": d.get("created_at"),
         })
