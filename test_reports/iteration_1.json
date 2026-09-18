@@ -1,0 +1,32 @@
+{
+  "summary": "PPN-exclusion refactor verified end-to-end. Backend + Frontend both correctly compute revenue/Selling/Margin as grand_total - tax_amount, while the receive-modal 'Total Invoice (preview)' still includes PPN. AWB 201189 shows Selling=Rp 31.416.500 (not 31.762.081) as required. Prorata candidate endpoint returns tax_amount & total_tariff, and prorata child shares are computed on ex-PPN basis.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "verified_points": [
+    "Login admin/admin123 -> dashboard OK",
+    "OrdersList AWB 201189: filtered-total-sales=Rp 31.416.500, filtered-total-margin=Rp 5.416.500, row Selling=Rp 31.416.500 (all EX-PPN, matches grand_total - tax_amount = 31.762.081,5 - 345.581,5)",
+    "OrdersList Receive modal: 'Nilai AWB (Exc. PPN)' present + data-testid=receive-total-preview visible; preview shows grand_total+addons (PPN retained for invoice context)",
+    "Rekap page: table has Selling / Cost / Margin columns; values populate from API",
+    "Costs page (Plotting Biaya) -> Prorata Vendor modal: header text explicitly states 'berdasarkan besaran sales (Exc. PPN) tiap AWB'; candidate AWB rows show SALES column",
+    "Backend GET /api/cost-groups/candidate-awbs returns grand_total, tax_amount, total_tariff fields",
+    "Backend POST /api/cost-groups: prorata child amounts computed on (grand_total - tax_amount); tolerance check confirms shares differ from GT-based split when tax>0",
+    "Backend /api/orders exposes grand_total & tax_amount for FE sellingOf() helper"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_ppn_exclusion.py",
+    "/app/test_reports/pytest/ppn_exclusion.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 15,418 lines — well beyond the 700-line guideline; recommend splitting by module (orders, invoices, cost_groups, journal) for maintainability. Not blocking for this refactor.",
+    "sellingOf() correctly falls back to total_tariff when grand_total is 0; consider unit tests for the helper on FE.",
+    "Prorata description string uses int(_sales(awb)) which drops fractional rupiah — acceptable for display but note for PSAK reporting reconciliation."
+  ],
+  "updated_files": ["/app/backend/tests/test_ppn_exclusion.py"],
+  "success_rate": {"backend": "100% (6/6 pytest)", "frontend": "100% (all specified data-testids present and returning ex-PPN values)"},
+  "test_credentials": "admin / admin123 (username login)",
+  "seed_data_creation": "Test creates and deletes a temporary cost group with vendor_name='TEST_PPN_VENDOR', period_month='2026-01'. Cleanup done in finally block.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "PPN exclusion refactor complete. Selling = grand_total - tax_amount everywhere EXCEPT invoice/payment. AWB 201189 is the canonical test AWB (Invoiced status, tax_amount=345,581.5). For receive-modal PPN-with-tax visualization, need an Open-status AWB with tax_amount>0 (none was available in current data; verified structural correctness on grand_total=1 AWBs)."
+}

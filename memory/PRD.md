@@ -25,3 +25,12 @@
 - arcweb/ (company profile SPA) also present in repo but NOT deployed here.
 - Frontend calls API via `src/lib/api.js` using REACT_APP_BACKEND_URL + `/api`.
 - User will send follow-up questions/requests next.
+
+## Update (2026-06): Revenue exclude PPN
+- Requirement: revenue/Selling/Margin/Nilai AWB must EXCLUDE PPN (VAT); PPN only for invoice/payment.
+- Definition chosen (user): selling = grand_total - tax_amount (DPP + addon, exclude PPN).
+- Added helper `sellingOf()` in frontend/src/lib/utils.js.
+- Changed: OrdersList (Sales/Margin totals, row Selling, receive modal "Nilai AWB (Exc. PPN)"), Recap (Selling/Margin), Costs prorata (basis + displays).
+- Backend server.py: _generate_prorata_children._sales() = grand_total-tax_amount; candidate-awbs & cost-group children now return tax_amount & total_tariff.
+- Kept WITH PPN: InvoicesCreated, Payments, receive modal "Total Invoice (preview)".
+- Verified by testing_agent iteration_1.json: 100% pass. PPN rate in data ~1.1% (explains earlier ~1.011 Excel gap). Canonical test AWB 201189.
