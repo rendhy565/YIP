@@ -1,0 +1,61 @@
+{
+  "name": "tms-frontend",
+  "version": "1.0.0",
+  "homepage": "/",
+  "private": true,
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.2",
+    "@radix-ui/react-dropdown-menu": "^2.1.2",
+    "@radix-ui/react-label": "^2.1.0",
+    "@radix-ui/react-select": "^2.1.2",
+    "@radix-ui/react-slot": "^1.1.0",
+    "@radix-ui/react-tabs": "^1.1.1",
+    "@radix-ui/react-toast": "^1.2.2",
+    "axios": "^1.7.7",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
+    "lucide-react": "^0.452.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-is": "^19.2.7",
+    "react-router-dom": "^6.27.0",
+    "react-scripts": "5.0.1",
+    "recharts": "^3.8.1",
+    "sonner": "^1.5.0",
+    "tailwind-merge": "^2.5.4",
+    "tailwindcss-animate": "^1.0.7",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@craco/craco": "^7.1.0",
+    "autoprefixer": "^10.4.20",
+    "esbuild-loader": "^4.5.0",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13"
+  },
+  "scripts": {
+    "start": "craco start",
+    "build": "craco build",
+    "build:arc": "PUBLIC_URL=/arc craco build",
+    "build:arcweb": "cd ../arcweb && (yarn install --frozen-lockfile || npm ci || npm install) && (yarn build || npm run build) && rm -rf ../frontend/public/arcweb && mkdir -p ../frontend/public/arcweb && cp -r ./build/* ../frontend/public/arcweb/",
+    "test": "craco test"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

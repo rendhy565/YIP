@@ -1,0 +1,198 @@
+@import url('https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800,900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,400;1,9..144,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+    --bg: #0F1115;
+    --surface: #1A1D24;
+    --text: #F4F4F5;
+    --text-dim: #A1A1AA;
+    --accent: #FF5A00;
+    --accent-hover: #E04F00;
+    --border: #272A30;
+}
+
+@layer base {
+    :root {
+        --background: 220 14% 7%;
+        --foreground: 240 5% 96%;
+        --card: 222 12% 11%;
+        --card-foreground: 240 5% 96%;
+        --popover: 222 12% 11%;
+        --popover-foreground: 240 5% 96%;
+        --primary: 20 100% 50%;
+        --primary-foreground: 220 14% 7%;
+        --secondary: 222 12% 15%;
+        --secondary-foreground: 240 5% 96%;
+        --muted: 222 12% 15%;
+        --muted-foreground: 240 5% 66%;
+        --accent: 20 100% 50%;
+        --accent-foreground: 220 14% 7%;
+        --destructive: 0 62% 50%;
+        --destructive-foreground: 240 5% 96%;
+        --border: 222 8% 18%;
+        --input: 222 8% 18%;
+        --ring: 20 100% 50%;
+        --radius: 0.25rem;
+    }
+}
+
+* {
+    border-color: var(--border);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Sans', sans-serif;
+    margin: 0;
+    padding: 0;
+    overflow-x: hidden;
+}
+
+body {
+    background-image:
+        radial-gradient(1200px 800px at 80% -10%, rgba(255, 90, 0, 0.08), transparent 60%),
+        radial-gradient(900px 700px at -10% 90%, rgba(255, 90, 0, 0.05), transparent 60%);
+}
+
+/* Selection */
+::selection {
+    background: #FF5A00;
+    color: #0F1115;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: #0F1115;
+}
+::-webkit-scrollbar-thumb {
+    background: #272A30;
+    border-radius: 0;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #FF5A00;
+}
+
+/* Utility classes */
+.font-display {
+    font-family: 'Cabinet Grotesk', sans-serif;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+}
+
+.font-editorial {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    letter-spacing: -0.02em;
+}
+
+.font-mono {
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.font-body {
+    font-family: 'IBM Plex Sans', sans-serif;
+}
+
+/* Grain overlay */
+.grain-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 40;
+    opacity: 0.06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.9'/%3E%3C/svg%3E");
+}
+
+/* Outline text (marquee) */
+.text-outline {
+    -webkit-text-stroke: 1px #FF5A00;
+    color: transparent;
+}
+.text-outline-dim {
+    -webkit-text-stroke: 1px #272A30;
+    color: transparent;
+}
+
+/* Marquee edges fade */
+.marquee-mask {
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+
+/* Underline hover for links */
+.link-line {
+    position: relative;
+    display: inline-block;
+}
+.link-line::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: -2px;
+    width: 100%;
+    height: 1px;
+    background: currentColor;
+    transform: scaleX(0);
+    transform-origin: right;
+    transition: transform 0.5s cubic-bezier(0.77, 0, 0.175, 1);
+}
+.link-line:hover::after {
+    transform: scaleX(1);
+    transform-origin: left;
+}
+
+/* Hero big type mask */
+.mask-hidden {
+    display: inline-block;
+    overflow: hidden;
+    line-height: 0.95;
+    vertical-align: bottom;
+}
+.mask-hidden > span {
+    display: inline-block;
+    line-height: 0.95;
+}
+
+/* Custom cursor dot (optional soft) */
+.blink {
+    animation: blink 1.4s steps(2, start) infinite;
+}
+@keyframes blink {
+    to {
+        visibility: hidden;
+    }
+}
+
+/* Diagonal ticker line */
+.hair-line {
+    background: linear-gradient(90deg, transparent, #272A30, transparent);
+    height: 1px;
+    width: 100%;
+}
+
+/* Prevent lenis from breaking on iOS */
+html.lenis {
+    height: auto;
+}
+.lenis.lenis-smooth {
+    scroll-behavior: auto !important;
+}
+.lenis.lenis-smooth [data-lenis-prevent] {
+    overscroll-behavior: contain;
+}
+.lenis.lenis-stopped {
+    overflow: hidden;
+}
