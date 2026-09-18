@@ -13528,6 +13528,197 @@ async def qty_tariff_template(user: dict = Depends(require_role("administrator")
     )
 
 
+# ---------------------------------------------------------------------------
+# Import Polis & Asuransi (isi nilai POLIS & ASURANSI per AWB, cocok by No. AWB).
+# Nilai ini adalah PENAMBAH INVOICE (addon) -> grand_total dihitung ulang otomatis.
+# total_tariff (DPP), tax (PPN), dan jurnal revenue TIDAK disentuh.
+# ---------------------------------------------------------------------------
+def _parse_polis_asuransi_rows(ws):
+    """Cari header (AWB / Polis / Asuransi) lalu ambil nilainya. Return list dict."""
+    header_row = 1
+    for r in range(1, min(8, ws.max_row) + 1):
+        cells = [_norm(c.value) for c in ws[r]]
+        if any(c == "awb" or c.startswith("awb") or c == "no awb" for c in cells):
+            header_row = r
+            break
+    header = [_norm(c.value) for c in ws[header_row]]
+
+    def idx(match_fn):
+        for i, h in enumerate(header):
+            if match_fn(h):
+                return i
+        return None
+    i_awb = idx(lambda h: h == "awb" or h == "no awb" or h.startswith("awb"))
+    if i_awb is None:
+        i_awb = idx(lambda h: "awb" in h)
+    i_polis = idx(lambda h: "polis" in h)
+    i_asur = idx(lambda h: "asuransi" in h or "asur" in h or "insurance" in h)
+    if i_awb is None:
+        raise HTTPException(400, "Kolom 'AWB' tidak ditemukan di file")
+    if i_polis is None and i_asur is None:
+        raise HTTPException(400, "Kolom 'Polis' atau 'Asuransi' tidak ditemukan di file")
+
+    def _num(v):
+        if v in (None, ""):
+            return None
+        try:
+            return round(float(v), 2)
+        except Exception:
+            try:
+                return round(float(str(v).replace(".", "").replace(",", ".")), 2)
+            except Exception:
+                return None
+
+    rows = []
+    for r in ws.iter_rows(min_row=header_row + 1, values_only=True):
+        if r is None or all(x is None for x in r):
+            continue
+        def g(i):
+            return r[i] if (i is not None and i < len(r)) else None
+        awb = g(i_awb)
+        if awb is None or str(awb).strip() == "" or str(awb).strip().startswith(("ℹ", "•")):
+            continue
+        awbn = str(awb).strip()
+        awbn = awbn[:-2] if awbn.endswith(".0") else awbn
+        rows.append({
+            "awb_number": awbn,
+            "polis": _num(g(i_polis)),
+            "asuransi": _num(g(i_asur)),
+        })
+    return rows
+
+
+async def _polis_asuransi_match(rows):
+    """Cocokkan tiap row ke awb_orders by awb_number. Hitung grand_total baru."""
+    items = []
+    not_found = []
+    seen = set()
+    for r in rows:
+        awbn = str(r.get("awb_number") or "").strip()
+        if not awbn or awbn in seen:
+            continue
+        seen.add(awbn)
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
+        if not awb:
+            not_found.append(awbn)
+            continue
+        base = float(awb.get("total_tariff") or 0)
+        tax = float(awb.get("tax_amount") or 0)
+        spsi = float(awb.get("spsi_amount") or 0)
+        forklift = float(awb.get("sewa_forklift_amount") or 0)
+        cur_polis = float(awb.get("received_polis_amount") or 0)
+        cur_asur = float(awb.get("received_asuransi_amount") or 0)
+        new_polis = r.get("polis") if r.get("polis") is not None else cur_polis
+        new_asur = r.get("asuransi") if r.get("asuransi") is not None else cur_asur
+        cur_gt = float(awb.get("grand_total") or 0)
+        new_gt = round(base + tax + new_polis + new_asur + spsi + forklift, 2)
+        changed = bool(abs(new_polis - cur_polis) >= 0.01 or abs(new_asur - cur_asur) >= 0.01)
+        items.append({
+            "awb_id": str(awb["_id"]), "awb_number": awb["awb_number"],
+            "destination": awb.get("destination"),
+            "current_polis": cur_polis, "current_asuransi": cur_asur,
+            "new_polis": new_polis, "new_asuransi": new_asur,
+            "current_grand_total": cur_gt, "new_grand_total": new_gt,
+            "changed": changed,
+        })
+    return items, not_found
+
+
+@app.post("/api/import/polis-asuransi/preview")
+async def polis_asuransi_preview(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    rows = _parse_polis_asuransi_rows(wb.active)
+    if not rows:
+        raise HTTPException(400, "Tidak ada baris data (kolom AWB kosong semua)")
+    items, not_found = await _polis_asuransi_match(rows)
+    to_change = [it for it in items if it["changed"]]
+    return {
+        "total_rows": len(rows),
+        "matched": len(items),
+        "not_found": not_found,
+        "to_change": len(to_change),
+        "polis_to_fill": sum(1 for it in items if abs(it["new_polis"] - it["current_polis"]) >= 0.01),
+        "asuransi_to_fill": sum(1 for it in items if abs(it["new_asuransi"] - it["current_asuransi"]) >= 0.01),
+        "items": items[:500],
+    }
+
+
+@app.post("/api/import/polis-asuransi/apply")
+async def polis_asuransi_apply(file: UploadFile = File(...), user: dict = Depends(require_role("administrator"))):
+    """Isi POLIS & ASURANSI per AWB + hitung ulang grand_total. DPP/PPN/jurnal TIDAK disentuh."""
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(400, f"File tidak valid: {e}")
+    rows = _parse_polis_asuransi_rows(wb.active)
+    items, not_found = await _polis_asuransi_match(rows)
+    now = datetime.now(timezone.utc)
+    updated = 0
+    for it in items:
+        if not it["changed"]:
+            continue
+        new_polis = it["new_polis"]
+        new_asur = it["new_asuransi"]
+        awb = await db.awb_orders.find_one({"_id": _oid(it["awb_id"])})
+        spsi = float((awb or {}).get("spsi_amount") or 0)
+        forklift = float((awb or {}).get("sewa_forklift_amount") or 0)
+        upd = {
+            "received_polis_enabled": new_polis > 0,
+            "received_polis_amount": new_polis,
+            "received_asuransi_enabled": new_asur > 0,
+            "received_asuransi_amount": new_asur,
+            "addons_total": round(new_polis + new_asur + spsi + forklift, 2),
+            "grand_total": it["new_grand_total"],
+            "updated_at": now,
+            "updated_by": user["id"],
+        }
+        await db.awb_orders.update_one({"_id": _oid(it["awb_id"])}, {"$set": upd})
+        updated += 1
+    try:
+        await log_activity(user, "import", "awb_order", None, "Import Polis & Asuransi (addon invoice)",
+                           {"updated": updated, "not_found": len(not_found)})
+    except Exception:
+        pass
+    return {"updated": updated, "matched": len(items), "not_found": not_found}
+
+
+@app.get("/api/import/polis-asuransi/template")
+async def polis_asuransi_template(user: dict = Depends(require_role("administrator"))):
+    """Template Excel untuk Import Polis & Asuransi. Kolom: AWB, Polis, Asuransi."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Polis_Asuransi"
+    bold_white = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="0F766E")
+    ws.append(["AWB", "Polis", "Asuransi"])
+    for c in ws[1]:
+        c.font = bold_white
+        c.fill = header_fill
+    # contoh AWB dari database (biar user tinggal isi angka), maksimal 15 baris
+    try:
+        sample = await db.awb_orders.find({}, {"awb_number": 1}).sort("created_at", -1).limit(15).to_list(15)
+        for s in sample:
+            ws.append([s.get("awb_number"), None, None])
+    except Exception:
+        ws.append(["205654", 250000, 150000])
+    for col, w in zip(("A", "B", "C"), (22, 16, 16)):
+        ws.column_dimensions[col].width = w
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Template_Polis_Asuransi.xlsx"'},
+    )
+
+
+
 @app.get("/api/admin/bulk-import/template")
 async def bulk_import_template(user: dict = Depends(require_role("administrator"))):
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Import Massal AWB"

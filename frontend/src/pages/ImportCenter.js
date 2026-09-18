@@ -5,7 +5,7 @@ import { errMsg } from "../lib/utils";
 import { toast } from "sonner";
 import {
   Upload, Search, Save, PackagePlus, ListChecks,
-  Ruler, Banknote, CalendarClock, Info,
+  Ruler, Banknote, CalendarClock, Info, ShieldCheck,
 } from "lucide-react";
 import ImportExcel from "./ImportExcel";
 import BulkImport from "./BulkImport";
@@ -17,6 +17,8 @@ const TABS = [
     desc: "Cocokkan Excel (No AWB, DPP, No Invoice, No PO) → isi/ubah DPP, nomor invoice + grouping, dan nomor PO sekaligus." },
   { key: "qty-tariff", label: "Qty & Tarif/Kg (Lampiran)", icon: Ruler,
     desc: "Isi kolom Qty & Tarif/Kg untuk tampilan lampiran invoice. TIDAK mengubah total & jurnal." },
+  { key: "polis-asuransi", label: "Polis & Asuransi", icon: ShieldCheck,
+    desc: "Isi nilai Polis & Asuransi per AWB (cocok by No. AWB). Nilai ini penambah invoice → grand_total dihitung ulang otomatis. DPP & PPN tidak diubah." },
   { key: "bkk", label: "BKK Expense", icon: Banknote,
     desc: "Import biaya BKK (panjar & expense) dari Excel ke modul Expense." },
   { key: "attendance", label: "Absensi Karyawan", icon: CalendarClock,
@@ -56,6 +58,7 @@ export default function ImportCenter() {
       {tab === "awb-detail" && <ImportExcel embedded />}
       {tab === "massal" && <BulkImport embedded />}
       {tab === "qty-tariff" && <QtyTariffImporter />}
+      {tab === "polis-asuransi" && <PolisAsuransiImporter />}
       {tab === "bkk" && <BkkImporter />}
       {tab === "attendance" && <AttendanceImporter />}
     </div>
@@ -119,6 +122,99 @@ function QtyTariffImporter() {
       {result && (
         <div className="mt-3 text-sm bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-emerald-900" data-testid="qt-result">
           ✅ {result.updated} AWB diupdate — Qty: {result.qty_set}, Tarif: {result.tariff_set}. {result.not_found?.length ? `${result.not_found.length} tidak ketemu.` : ""}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ── Polis & Asuransi ─────────────────────────────────────────────────────────
+function PolisAsuransiImporter() {
+  const [file, setFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const runPreview = async () => {
+    if (!file) return toast.error("Pilih file Excel dulu");
+    setBusy(true); setPreview(null); setResult(null);
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const r = await api.post("/import/polis-asuransi/preview", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setPreview(r.data);
+      if (r.data.matched === 0) toast.error("Tidak ada AWB yang cocok");
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
+  const runApply = async () => {
+    if (!file) return;
+    if (!window.confirm(`Terapkan Polis & Asuransi ke ${preview?.to_change || 0} AWB? grand_total akan dihitung ulang.`)) return;
+    setBusy(true);
+    try {
+      const fd = new FormData(); fd.append("file", file);
+      const r = await api.post("/import/polis-asuransi/apply", fd, { headers: { "Content-Type": "multipart/form-data" } });
+      setResult(r.data); toast.success(`Selesai — ${r.data.updated} AWB diupdate`);
+    } catch (e) { toast.error(errMsg(e)); } finally { setBusy(false); }
+  };
+  const dlTemplate = async () => {
+    try {
+      const r = await api.get("/import/polis-asuransi/template", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement("a"); a.href = url; a.download = "Template_Polis_Asuransi.xlsx";
+      document.body.appendChild(a); a.click(); a.remove(); window.URL.revokeObjectURL(url);
+    } catch (e) { toast.error(errMsg(e)); }
+  };
+  const fmt = (n) => "Rp " + (Number(n || 0)).toLocaleString("id-ID", { maximumFractionDigits: 0 });
+  return (
+    <Card className="p-5" data-testid="polis-asuransi-importer">
+      <div className="bg-teal-50 border border-teal-200 rounded p-2 text-xs text-teal-900 mb-3">
+        Mengisi <b>Polis</b> & <b>Asuransi</b> per AWB (cocok by <b>No. AWB</b>). Nilai ini <b>penambah invoice</b> → <b>grand_total dihitung ulang</b> otomatis. DPP, PPN & jurnal <b>TIDAK diubah</b>. Kolom: <code>AWB</code>, <code>Polis</code>, <code>Asuransi</code>. Kolom kosong = nilai lama dipertahankan.
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="secondary" onClick={dlTemplate} data-testid="pa-template"><Upload size={14}/> Unduh Template</Button>
+        <input type="file" accept=".xlsx,.xls" data-testid="pa-file"
+          onChange={(e) => { setFile(e.target.files?.[0] || null); setPreview(null); setResult(null); }} className="text-sm"/>
+        {!preview && <Button data-testid="pa-preview" onClick={runPreview} disabled={busy || !file}><Search size={14}/> {busy ? "Membaca..." : "Preview"}</Button>}
+        {preview && !result && <Button data-testid="pa-apply" onClick={runApply} disabled={busy || preview.to_change === 0}><Save size={14}/> Terapkan ({preview.to_change})</Button>}
+      </div>
+      {preview && !result && (
+        <>
+          <div className="mt-3 text-sm flex flex-wrap gap-4" data-testid="pa-preview-summary">
+            <span className="text-emerald-700">Cocok: <b>{preview.matched}</b></span>
+            <span>Akan berubah: <b>{preview.to_change}</b></span>
+            <span>Polis diisi: <b>{preview.polis_to_fill}</b></span>
+            <span>Asuransi diisi: <b>{preview.asuransi_to_fill}</b></span>
+            {preview.not_found?.length > 0 && <span className="text-rose-700">Tidak ketemu: <b>{preview.not_found.length}</b></span>}
+          </div>
+          {preview.items?.some((it) => it.changed) && (
+            <div className="mt-3 overflow-x-auto border rounded-lg">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="text-left px-3 py-2">AWB</th>
+                    <th className="text-right px-3 py-2">Polis</th>
+                    <th className="text-right px-3 py-2">Asuransi</th>
+                    <th className="text-right px-3 py-2">Grand Total (lama → baru)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.items.filter((it) => it.changed).slice(0, 100).map((it) => (
+                    <tr key={it.awb_id} className="border-t">
+                      <td className="px-3 py-1.5 font-mono">{it.awb_number}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{fmt(it.new_polis)}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">{fmt(it.new_asuransi)}</td>
+                      <td className="px-3 py-1.5 text-right font-mono">
+                        <span className="text-slate-400">{fmt(it.current_grand_total)}</span> → <b className="text-teal-700">{fmt(it.new_grand_total)}</b>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+      {result && (
+        <div className="mt-3 text-sm bg-emerald-50 border border-emerald-200 rounded px-3 py-2 text-emerald-900" data-testid="pa-result">
+          ✅ {result.updated} AWB diupdate (Polis & Asuransi + grand_total). {result.not_found?.length ? `${result.not_found.length} tidak ketemu.` : ""}
         </div>
       )}
     </Card>
