@@ -13220,10 +13220,11 @@ async def _qty_tariff_match(rows):
     seen = set()
     for r in rows:
         awbn = str(r.get("awb_number") or "").strip()
-        if not awbn or awbn in seen:
+        core = awbn.lstrip("0") or "0"
+        if not awbn or core in seen:
             continue
-        seen.add(awbn)
-        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
+        seen.add(core)
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^0*{re.escape(core)}$", "$options": "i"}})
         if not awb:
             not_found.append(awbn)
             continue
@@ -13595,10 +13596,11 @@ async def _polis_asuransi_match(rows):
     seen = set()
     for r in rows:
         awbn = str(r.get("awb_number") or "").strip()
-        if not awbn or awbn in seen:
+        core = awbn.lstrip("0") or "0"
+        if not awbn or core in seen:
             continue
-        seen.add(awbn)
-        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
+        seen.add(core)
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^0*{re.escape(core)}$", "$options": "i"}})
         if not awb:
             not_found.append(awbn)
             continue
