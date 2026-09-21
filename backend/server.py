@@ -2340,7 +2340,8 @@ async def _se_neraca_diff(ctx):
 
 @app.get("/api/admin/super-edit/lookup")
 async def super_edit_lookup(awb: str, user: dict = Depends(require_role("administrator"))):
-    o = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awb.strip())}$", "$options": "i"}})
+    core = (awb.strip().lstrip("0")) or "0"
+    o = await db.awb_orders.find_one({"awb_number": {"$regex": f"^0*{re.escape(core)}$", "$options": "i"}})
     if not o:
         raise HTTPException(404, f"AWB '{awb}' tidak ditemukan")
     oid = o["_id"]
@@ -12888,7 +12889,8 @@ async def _bulk_gather(rows):
         awbn = str(r.get("awb_number") or "").strip()
         if not awbn:
             continue
-        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awbn)}$", "$options": "i"}})
+        core = awbn.lstrip("0") or "0"
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^0*{re.escape(core)}$", "$options": "i"}})
         if not awb:
             not_found.append(awbn)
             continue
@@ -14754,8 +14756,9 @@ async def import_invoice_numbers(
         paid_date_raw = row[col_idx.get("paid_date")] if col_idx.get("paid_date") is not None else None
         if not awb_no:
             continue
-        # Find AWB
-        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^{re.escape(awb_no)}$", "$options": "i"}})
+        # Find AWB (abaikan nol depan)
+        _core = awb_no.lstrip("0") or "0"
+        awb = await db.awb_orders.find_one({"awb_number": {"$regex": f"^0*{re.escape(_core)}$", "$options": "i"}})
         if not awb:
             if len(summary["errors"]) < MAX_ERRORS_REPORTED:
                 summary["errors"].append({"row": ridx, "message": f"AWB '{awb_no}' tidak ditemukan"})
