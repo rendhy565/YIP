@@ -26,6 +26,19 @@
 - Frontend calls API via `src/lib/api.js` using REACT_APP_BACKEND_URL + `/api`.
 - User will send follow-up questions/requests next.
 
+## Update (2026-06): Aturan akuntansi Panjar → BDD + default Operation/Rumah Tangga
+- Panjar Open kini dicatat sebagai **1104 Biaya Dibayar di Muka (BDD)**, bukan 1108 lagi.
+  - `create_cash_advance` & BKK-import create: DR 1104 / CR Kas. Konstanta `PANJAR_ASSET_CODE="1104"`.
+  - Settle (semua flow) meng-CR 1104 (termasuk carry-over).
+- Default akun beban saat settle (helper `cash_advance_default_expense_code`) — HANYA untuk porsi tanpa kategori/breakdown eksplisit:
+  - Penerima cocok ke user role `operation` (match recipient_id atau recipient_name→users.full_name/username) → **5102 Beban Operasional Pengiriman**.
+  - Selain itu → **6201 Beban Rumah Tangga**.
+  - Baris kategori finance eksplisit (62xx) tetap seperti pilihan user.
+- Migrasi retroaktif `backend/scripts/migrate_panjar_bdd.py` (idempoten) dijalankan:
+  - 596 jurnal panjar di-relabel: 1108→1104 (394 create + 202 settle), 100 baris settle 5102→6201 (penerima non-operation).
+  - Saldo 1108=0; 1104(BDD) menyerap saldo panjar; Neraca tetap balanced (verified via /api/reports/balance-sheet).
+- Verified end-to-end: create+settle panjar recipient operation → 5102; recipient non-user → 6201; keduanya DR/CR 1104. Data uji dihapus.
+
 ## Update (2026-06): Re-deploy + restore DB baru + audit jurnal Panjar
 - Restore ulang dari upload user ("Copy of Copy of arc_db.archive.gz") via `mongorestore --gzip --drop`: 24.525 dokumen.
   Koleksi utama: awb_orders 2202, invoices 857, journal_entries 9994, cash_advances 389 (Panjar), fixed_costs 877, users 10.

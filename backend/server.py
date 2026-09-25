@@ -10457,6 +10457,35 @@ async def next_cash_advance_number() -> str:
             seq = int(m.group(1)) + 1
     return f"{prefix}{seq:04d}"
 
+# Panjar Open dicatat sebagai Biaya Dibayar di Muka (BDD) di Neraca
+PANJAR_ASSET_CODE = "1104"  # 1104 Biaya Dibayar di Muka
+
+async def cash_advance_default_expense_code(ca: dict) -> str:
+    """Akun beban default saat settle panjar — dipakai HANYA untuk porsi tanpa kategori/breakdown eksplisit.
+    - Penerima cocok ke user dengan role 'operation' → 5102 Beban Operasional Pengiriman
+    - Selain itu → 6201 Beban Rumah Tangga
+    """
+    role = None
+    rid = ca.get("recipient_id")
+    if rid:
+        try:
+            u = await db.users.find_one({"_id": _oid(rid)})
+            if u:
+                role = u.get("role")
+        except Exception:
+            role = None
+    if role is None:
+        name = (ca.get("recipient_name") or "").strip()
+        if name:
+            u = await db.users.find_one({"$or": [
+                {"full_name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}},
+                {"username": {"$regex": f"^{re.escape(name)}$", "$options": "i"}},
+            ]})
+            if u:
+                role = u.get("role")
+    return "5102" if role == "operation" else "6201"
+
+
 @app.get("/api/cash-advances")
 async def list_cash_advances(
     status_v: Optional[str] = None,  # Open / Settled
@@ -10528,13 +10557,13 @@ async def create_cash_advance(data: CashAdvanceIn, user: dict = Depends(require_
             {"_id": r.inserted_id},
             {"$set": {"approval_status": "Pending", "approval_id": str(approval["_id"])}},
         )
-    # Journal: DR 1108 Panjar Kerja / CR Cash
+    # Journal: DR 1104 Biaya Dibayar di Muka (BDD) / CR Cash — panjar Open tampil sbg BDD di Neraca
     try:
         await post_journal(
             date=adv_date,
             description=f"Panjar kerja {doc['number']} - {data.recipient_name}",
             lines=[
-                {"account_code": "1108", "debit": doc["amount"], "credit": 0, "memo": doc["recipient_name"]},
+                {"account_code": PANJAR_ASSET_CODE, "debit": doc["amount"], "credit": 0, "memo": doc["recipient_name"]},
                 {"account_code": cash_acc, "debit": 0, "credit": doc["amount"], "memo": doc["number"]},
             ],
             reference_type="cash_advance", reference_id=str(r.inserted_id), posted_by=user["id"],
@@ -10775,9 +10804,10 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
         # Semua di-credit ke 1108 (Panjar Kerja) untuk actual + Cash untuk refund.
         # Kalau ada carry-over: split CR 1108 antara panjar source (memo referensi) & panjar sekarang.
         hpp_amount = round(actual - finance_expense_amount, 2)
+        default_code = await cash_advance_default_expense_code(ca)
         lines = []
         if hpp_amount > 0.01:
-            lines.append({"account_code": "5102", "debit": hpp_amount, "credit": 0, "memo": f"Panjar {ca['number']} - {ca['recipient_name']}"})
+            lines.append({"account_code": default_code, "debit": hpp_amount, "credit": 0, "memo": f"Panjar {ca['number']} - {ca['recipient_name']}"})
         for acc_code, amt in finance_expense_lines.items():
             if amt > 0.01:
                 lines.append({"account_code": acc_code, "debit": amt, "credit": 0, "memo": f"Panjar {ca['number']} (finance)"})
@@ -10789,10 +10819,10 @@ async def settle_cash_advance(cid: str, data: CashAdvanceSettleIn, user: dict = 
         for src in carry_over_applied:
             take = min(src["amount"], remaining_cr)
             if take > 0.01:
-                lines.append({"account_code": "1108", "debit": 0, "credit": take, "memo": f"Carry-over dari {src['panjar_number']}"})
+                lines.append({"account_code": PANJAR_ASSET_CODE, "debit": 0, "credit": take, "memo": f"Carry-over dari {src['panjar_number']}"})
                 remaining_cr = round(remaining_cr - take, 2)
         if remaining_cr > 0.01:
-            lines.append({"account_code": "1108", "debit": 0, "credit": remaining_cr, "memo": ca["number"]})
+            lines.append({"account_code": PANJAR_ASSET_CODE, "debit": 0, "credit": remaining_cr, "memo": ca["number"]})
         if total_cr_needed > 0.01:
             await post_journal(
                 date=sd,
@@ -14236,7 +14266,7 @@ async def import_bkk_excel(
                         date=expense_date,
                         description=f"Panjar kerja {pj_doc['number']} - {recipient}",
                         lines=[
-                            {"account_code": "1108", "debit": amount, "credit": 0, "memo": recipient},
+                            {"account_code": PANJAR_ASSET_CODE, "debit": amount, "credit": 0, "memo": recipient},
                             {"account_code": "1101", "debit": 0, "credit": amount, "memo": pj_doc["number"]},
                         ],
                         reference_type="cash_advance", reference_id=str(r.inserted_id), posted_by=user["id"],
@@ -14307,7 +14337,14 @@ async def import_bkk_excel(
                             overspend = max(0.0, amount - panjar_amt)   # extra cash out (settle > panjar)
                             refund    = max(0.0, panjar_amt - amount)   # cash returned to office (settle < panjar)
                             cat = await _resolve_or_create_cat(code or "Operation")
-                            expense_code = cat.get("account_code") or "5102"
+                            code_in = (code or "").strip()
+                            if code_in:
+                                expense_code = cat.get("account_code") or "5102"
+                                cat_name = cat["name"]
+                            else:
+                                # Tanpa kategori eksplisit → default per role penerima
+                                expense_code = await cash_advance_default_expense_code(panjar)
+                                cat_name = "Beban Operasional Pengiriman" if expense_code == "5102" else "Beban Rumah Tangga"
                             # Update panjar
                             update_set = {
                                 "actual_amount": amount,
@@ -14316,7 +14353,7 @@ async def import_bkk_excel(
                                 "overspend_amount": overspend,
                                 "status": "Settled",
                                 "settled_at": expense_date,
-                                "settle_category": cat["name"],
+                                "settle_category": cat_name,
                                 "settle_account_code": expense_code,
                                 "settle_description": desc,
                                 "settle_bkk_source_no": no_bkk,
@@ -14337,10 +14374,10 @@ async def import_bkk_excel(
                                     }},
                                 },
                             )
-                            # Journal: clears 1108 (panjar), records expense, handles refund/overspend cash
+                            # Journal: clears 1104 BDD (panjar), records expense, handles refund/overspend cash
                             lines = [
                                 {"account_code": expense_code, "debit": amount, "credit": 0, "memo": desc[:60]},
-                                {"account_code": "1108", "debit": 0, "credit": panjar_amt, "memo": panjar["number"]},
+                                {"account_code": PANJAR_ASSET_CODE, "debit": 0, "credit": panjar_amt, "memo": panjar["number"]},
                             ]
                             if overspend > 0:
                                 lines.append({"account_code": "1101", "debit": 0, "credit": overspend, "memo": f"Overspend {panjar['number']}"})
