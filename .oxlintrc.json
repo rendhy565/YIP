@@ -1,7 +1,18 @@
 {
+  "env": {
+    "browser": true,
+    "node": true,
+    "es2021": true,
+    "worker": true
+  },
+  "globals": {
+    "WorkerGlobalScope": "readonly",
+    "__REACT_DEVTOOLS_GLOBAL_HOOK__": "readonly"
+  },
   "ignorePatterns": [
     "**/node_modules/**",
     "**/build/**",
+    "**/public/arcweb/**",
     "**/dist/**",
     "**/.next/**",
     "**/coverage/**"

@@ -26,6 +26,21 @@
 - Frontend calls API via `src/lib/api.js` using REACT_APP_BACKEND_URL + `/api`.
 - User will send follow-up questions/requests next.
 
+## Update (2026-06): Re-deploy + restore DB baru + audit jurnal Panjar
+- Restore ulang dari upload user ("Copy of Copy of arc_db.archive.gz") via `mongorestore --gzip --drop`: 24.525 dokumen.
+  Koleksi utama: awb_orders 2202, invoices 857, journal_entries 9994, cash_advances 389 (Panjar), fixed_costs 877, users 10.
+- Services jalan (supervisor): backend :8001, frontend :3000. Login admin/admin123 OK, GET /api/health OK.
+- Fix lint config: `.oxlintrc.json` ignore `**/public/arcweb/**` (false positive di bundle minified).
+- Audit jurnal Panjar Kerja (akun 1108):
+  - Create panjar: DR 1108 Panjar Kerja / CR Kas-Bank (1101/1102). Terverifikasi balance.
+  - Settle panjar: DR beban (5102 HPP / 62xx finance / awb_costs) + DR Kas (refund) / CR 1108. Balance.
+  - Contoh nyata PNJ-202607-0001 (Rp3jt): create DR1108 3jt; multi-partial settle CR1108 total 2.693.638 = settled_amount. Cocok.
+  - REKONSILIASI 1108 (temuan, bukan bug — data legacy/import):
+    - Saldo buku besar 1108 = Rp315.451.543 (DR 422.578.601 / CR 107.127.058).
+    - Outstanding Open panjar sesungguhnya = Rp208.654.600 (9 panjar Open).
+    - Gap ~Rp106,8jt terutama dari 272 panjar berstatus "Settled" tapi settled_amount=0 & tanpa jurnal settle (total amount Rp57.185.000) + partial settle + 5 jurnal create "orphan" (panjar sudah dihapus, jurnal tertinggal).
+    - Carry-over transferred belum dikonsumsi = 0.
+
 ## Update (2026-06): Revenue exclude PPN
 - Requirement: revenue/Selling/Margin/Nilai AWB must EXCLUDE PPN (VAT); PPN only for invoice/payment.
 - Definition chosen (user): selling = grand_total - tax_amount (DPP + addon, exclude PPN).
