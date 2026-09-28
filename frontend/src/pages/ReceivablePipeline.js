@@ -9,7 +9,8 @@ import Pagination, { usePagination } from "../components/Pagination";
 import * as XLSX from "xlsx";
 
 export default function ReceivablePipeline() {
-  const [month, setMonth] = useState("");
+  const [monthFrom, setMonthFrom] = useState("");
+  const [monthTo, setMonthTo] = useState("");
   const [data, setData] = useState({ open: [], ny_po: [], invoiced: [], summary: {} });
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState(null); // 'open' | 'ny_po' | 'invoiced' | null
@@ -17,21 +18,27 @@ export default function ReceivablePipeline() {
   const load = () => {
     setLoading(true);
     const params = {};
-    if (month) params.month = month;
+    if (monthFrom) params.month_from = monthFrom;
+    if (monthTo) params.month_to = monthTo;
     api.get("/reports/receivable-pipeline", { params })
       .then((r) => setData(r.data))
       .catch((e) => toast.error(errMsg(e)))
       .finally(() => setLoading(false));
   };
-  useEffect(() => { load(); }, [month]); // eslint-disable-line
+  useEffect(() => { load(); }, [monthFrom, monthTo]); // eslint-disable-line
 
   const s = data.summary || {};
-  const openPag = usePagination(data.open || [], { resetKey: `${month}|${(data.open || []).length}` });
-  const nyPag = usePagination(data.ny_po || [], { resetKey: `${month}|${(data.ny_po || []).length}` });
-  const invPag = usePagination(data.invoiced || [], { resetKey: `${month}|${(data.invoiced || []).length}` });
-  const monthLabel = month
-    ? new Date(month + "-01").toLocaleDateString("id-ID", { month: "long", year: "numeric" })
-    : "Semua Bulan";
+  const rangeKey = `${monthFrom}|${monthTo}`;
+  const openPag = usePagination(data.open || [], { resetKey: `${rangeKey}|${(data.open || []).length}` });
+  const nyPag = usePagination(data.ny_po || [], { resetKey: `${rangeKey}|${(data.ny_po || []).length}` });
+  const invPag = usePagination(data.invoiced || [], { resetKey: `${rangeKey}|${(data.invoiced || []).length}` });
+  const fmtMonth = (m) => new Date(m + "-01").toLocaleDateString("id-ID", { month: "long", year: "numeric" });
+  const monthLabel = (!monthFrom && !monthTo)
+    ? "Semua Bulan"
+    : (monthFrom && monthTo)
+      ? (monthFrom === monthTo ? fmtMonth(monthFrom) : `${fmtMonth(monthFrom)} — ${fmtMonth(monthTo)}`)
+      : (monthFrom ? `≥ ${fmtMonth(monthFrom)}` : `≤ ${fmtMonth(monthTo)}`);
+  const rangeTag = `${monthFrom || "semua"}_sd_${monthTo || "semua"}`;
 
   const exportXLS = () => {
     const wb = XLSX.utils.book_new();
@@ -57,7 +64,7 @@ export default function ReceivablePipeline() {
       "Umur (hari)": r.age_days ?? "-", "Nilai": r.value,
     })));
     XLSX.utils.book_append_sheet(wb, iv, "Invoiced Belum Bayar");
-    XLSX.writeFile(wb, `Pipeline_Penerimaan_${month || "semua"}.xlsx`);
+    XLSX.writeFile(wb, `Pipeline_Penerimaan_${rangeTag}.xlsx`);
   };
 
   const cards = [
@@ -87,9 +94,16 @@ export default function ReceivablePipeline() {
 
       <div className="flex flex-wrap items-end gap-3 mb-4">
         <div>
-          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1">Filter Bulan (tgl order)</div>
-          <MonthPicker value={month} onChange={setMonth} allowEmpty />
+          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1">Dari Bulan (tgl order)</div>
+          <MonthPicker testId="pipeline-month-from" value={monthFrom} onChange={setMonthFrom} allowEmpty />
         </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider font-bold text-slate-500 mb-1">Sampai Bulan (tgl order)</div>
+          <MonthPicker testId="pipeline-month-to" value={monthTo} onChange={setMonthTo} allowEmpty />
+        </div>
+        {(monthFrom || monthTo) && (
+          <Button data-testid="pipeline-reset-range" variant="ghost" onClick={() => { setMonthFrom(""); setMonthTo(""); }}>Reset</Button>
+        )}
         <Button data-testid="pipeline-export-btn" variant="secondary" onClick={exportXLS}><Download size={14}/> Export Excel</Button>
         {loading && <span className="text-xs text-slate-400 inline-flex items-center gap-1 pb-2"><Loader2 size={13} className="animate-spin"/> memuat…</span>}
         <span className="ml-auto text-xs text-slate-500 pb-2">Menampilkan: <b className="text-slate-700">{monthLabel}</b></span>

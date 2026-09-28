@@ -4840,6 +4840,8 @@ async def profit_loss(
 @app.get("/api/reports/receivable-pipeline")
 async def receivable_pipeline(
     month: Optional[str] = None,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
     user: dict = Depends(require_role("finance", "operation")),
 ):
     """Laporan pipeline penerimaan kas — 3 kategori:
@@ -4866,14 +4868,24 @@ async def receivable_pipeline(
             return None
 
     def _in_month(dt):
-        if not month:
+        # Rentang bulan (YYYY-MM). Prioritas month_from/month_to; fallback ke month tunggal.
+        mf = month_from or month
+        mt = month_to or month
+        if mf and mt and mf > mt:
+            mf, mt = mt, mf
+        if not mf and not mt:
             return True
         if not dt:
             return False
         try:
-            return dt.strftime("%Y-%m") == month
+            ym = dt.strftime("%Y-%m")
         except Exception:
             return False
+        if mf and ym < mf:
+            return False
+        if mt and ym > mt:
+            return False
+        return True
 
     def _age_days(dt):
         dt = _naive(dt)
@@ -4982,6 +4994,8 @@ async def receivable_pipeline(
             "grand_total": round(open_total + ny_total + inv_total, 2),
         },
         "month": month,
+        "month_from": month_from or month,
+        "month_to": month_to or month,
     }
 
 
