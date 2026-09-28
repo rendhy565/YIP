@@ -26,6 +26,11 @@
 - Frontend calls API via `src/lib/api.js` using REACT_APP_BACKEND_URL + `/api`.
 - User will send follow-up questions/requests next.
 
+## Update (2026-06): Pipeline Penerimaan — month range (From–To)
+- Backend `/api/reports/receivable-pipeline`: tambah param `month_from` & `month_to` (YYYY-MM). Filter tgl order kini rentang inklusif; auto-swap jika terbalik; `month` tunggal tetap didukung (backward compat). Response memuat `month_from`/`month_to`.
+- Frontend `ReceivablePipeline.js`: MonthPicker tunggal → dua picker (Dari/Sampai bulan) + tombol Reset. State `monthFrom`/`monthTo`, label rentang, dan nama file export mengikuti rentang. Export Excel (client-side dari `data`) otomatis respect rentang.
+- Verifikasi API: Agustus (open46/ny314/inv84) + September (open329/ny0/inv1) = rentang Agu–Sep (open375/ny314/inv85). Sum cocok persis. Export mengikuti data yg sama.
+
 ## Update (2026-06): Aturan akuntansi Panjar → BDD + default Operation/Rumah Tangga
 - Panjar Open kini dicatat sebagai **1104 Biaya Dibayar di Muka (BDD)**, bukan 1108 lagi.
   - `create_cash_advance` & BKK-import create: DR 1104 / CR Kas. Konstanta `PANJAR_ASSET_CODE="1104"`.
