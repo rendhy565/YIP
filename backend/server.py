@@ -7547,6 +7547,12 @@ async def _run_attendance_import(rows, mode, dry_run, user):
     skipped = []
     conflicts = []
     merge_mode = (mode or "merge").lower() != "overwrite"
+    # Keyword status yang dikenal (untuk deteksi kolom 'status' yang salah diisi jam)
+    _valid_status_kw = {"h", "hadir", "present", "masuk", "s", "sakit", "sick", "i", "izin",
+                        "cuti", "leave", "a", "alfa", "absent", "tanpa keterangan", "l",
+                        "libur", "holiday", "off", "weekend"}
+    def _looks_like_time(v):
+        return bool(v) and bool(re.match(r"^\d{1,2}[:.]\d{2}$", str(v).strip()))
     for idx, r in enumerate(rows):
         # Find employee
         emp_key = _get(r, "employee_id", "id_karyawan", "id")
@@ -7595,6 +7601,17 @@ async def _run_attendance_import(rows, mode, dry_run, user):
         ot_raw = _get(r, "overtime_hours", "lembur_jam", "jam_lembur", "overtime")
         rate_raw = _get(r, "overtime_rate", "tarif_lembur", "rate_lembur")
         note_raw = _get(r, "note", "catatan", "keterangan_detail")
+        # --- Pemulihan kolom tergeser ---
+        # Kalau kolom 'status' berisi JAM (mis. 07:10) — bukan keyword status yang dikenal —
+        # berarti user menaruh jam masuk/pulang bergeser satu kolom ke kiri.
+        # Perlakukan: nilai di kolom 'status' = jam masuk, nilai di kolom 'check_in' = jam pulang.
+        # Status akan diturunkan otomatis dari jam (Hadir).
+        if status_raw and status_raw.strip().lower() not in _valid_status_kw and _looks_like_time(status_raw):
+            shifted_out = check_in if _looks_like_time(check_in) else None
+            check_in = status_raw.strip()
+            if not check_out and shifted_out:
+                check_out = shifted_out
+            status_raw = None
         has_ci = bool(check_in)
         has_co = bool(check_out)
         has_ot = ot_raw not in (None, "")

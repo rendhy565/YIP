@@ -26,6 +26,13 @@
 - Frontend calls API via `src/lib/api.js` using REACT_APP_BACKEND_URL + `/api`.
 - User will send follow-up questions/requests next.
 
+## Update (2026-06): Fix import Absensi (kolom jam tergeser) + catatan Lembur
+- Bug: file user (`template-absensi-2.xlsx`) mengisi JAM (07:10) di kolom `status`, jam pulang di kolom `check_in` (tergeser 1 kolom ke kiri). Importer lama menyimpan status mentah → status jadi jam (data rusak). Semua 265 baris kena.
+- Fix di `_run_attendance_import` (server.py): jika `status` berisi jam (regex HH:MM) & bukan keyword status dikenal → perlakukan sebagai check_in, geser check_in→check_out, status di-derive otomatis (Hadir).
+- Verified via API (bukan testing agent, sesuai permintaan user): import 265 baris → status kini Hadir/Izin/Libur/Alfa/Sakit (bukan jam); Abdul Aziz 26-08 in=07:10 out=21:00 Hadir; late-detection jalan (27-08 in=09:36 late=true).
+- Lembur: BUKAN bug kode. File user punya kolom `overtime_hours`/`overtime_rate` KOSONG semua (0 baris terisi) → tidak ada OT diimport. Pipeline OT terbukti jalan saat kolom diisi (uji 1 baris: ot_hours=3, rate=30000 tersimpan benar).
+- Frontend `Attendance.js` sudah panggil endpoint dgn benar (field "file", param mode/dry_run) — tidak diubah.
+
 ## Update (2026-06): Pipeline Penerimaan — month range (From–To)
 - Backend `/api/reports/receivable-pipeline`: tambah param `month_from` & `month_to` (YYYY-MM). Filter tgl order kini rentang inklusif; auto-swap jika terbalik; `month` tunggal tetap didukung (backward compat). Response memuat `month_from`/`month_to`.
 - Frontend `ReceivablePipeline.js`: MonthPicker tunggal → dua picker (Dari/Sampai bulan) + tombol Reset. State `monthFrom`/`monthTo`, label rentang, dan nama file export mengikuti rentang. Export Excel (client-side dari `data`) otomatis respect rentang.
