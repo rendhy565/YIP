@@ -12,7 +12,7 @@ Iteration 16 — Tests
 import os, uuid, pytest, requests
 from datetime import datetime, timezone
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://deploy-init-2.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://payroll-system-154.preview.emergentagent.com").rstrip("/")
 
 def _login(u, p):
     r = requests.post(f"{BASE_URL}/api/auth/login", json={"username": u, "password": p}, timeout=30)

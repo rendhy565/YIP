@@ -13,7 +13,7 @@ import pytest
 import requests
 from datetime import datetime, timezone, timedelta
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://deploy-init-2.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://payroll-system-154.preview.emergentagent.com").rstrip("/")
 
 
 def _login(username: str, password: str) -> str:
