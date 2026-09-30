@@ -1,76 +1,39 @@
-# ARC — TMS/ERP (AR Cargo) — Deployment PRD
+# PRD — ARC (TMS) / Kacrut Digital
 
-## Origin
-- Source cloned from private GitHub `rendhy565/ARC` (branch main).
-- App = "ARC" (a.k.a TMS "Order to Cash"): FastAPI + Motor backend, React (craco) frontend.
-- Database restored from user-provided `arc_db.archive.gz` (mongodump gzip archive).
+## Problem Statement (asli)
+"Tolong deploy reponya dengan informasi dari doc.md dan database dari file .gz yg saya lampirkan. Terus cek fitur payroll ya."
+Follow-up: "Kok saya udah jalanin payroll september, tp bebannya gk masuk ke expense ya" → "Benahi dan pastikan saat saya deploy di VPS saya terterapkan juga".
 
-## What was deployed (2026-06)
-- Backend `/app/backend` (server.py ~722KB, all routes prefixed `/api`). Runs via supervisor uvicorn on :8001.
-- Frontend `/app/frontend` (craco). Runs via supervisor `yarn start` on :3000.
-- MongoDB local. `DB_NAME=arc_db` restored: 23,343 docs, 10 users, 2098 awb orders, 695 invoices, ~38 collections
-  (invoices, payroll, journal_entries, awb_orders, employees, chart_of_accounts, customers, vendors, etc.).
-- `.env` created:
-  - backend: MONGO_URL, DB_NAME=arc_db, JWT_SECRET, CORS_ORIGINS=*
-  - frontend: REACT_APP_BACKEND_URL=<preview url>
-- No LLM used in this server.py version (no emergentintegrations/EMERGENT_LLM_KEY references found).
+## Konteks
+- Aplikasi: **ARC** = ERP/TMS logistik (Order Mgmt, Accounting PSAK, HR & Payroll, Tax, Asset, Bank Recon).
+- Stack: FastAPI + Motor (Python) · React + craco · MongoDB `arc_db`.
+- Preview Emergent: backend :8001, frontend :3000, Mongo lokal. VPS produksi user: `arc.ar-cargo.com` (lihat doc.md).
+- Backup di-restore: `luxoptic-shared-Kacrut-Digital-2026-09-30.gz` (mongodump --archive --gzip; berisi `arc_db`, `luxoptic_db`, `ocs_production`). 44.256 dokumen ter-restore, `arc_db` ditimpa (--drop).
 
-## Verified
-- POST /api/auth/login (admin/admin123) → returns JWT + user.
-- GET /api/health → {"status":"ok"}
-- GET /api/orders, /api/customers → return real restored data.
-- Frontend login page renders (TMS "Kelola Logistik dari Order hingga Lunas").
+## Setup notes (preview)
+- Fix dependency Python venv preview: pydantic-core==2.23.4 (match pydantic 2.9.2), lxml, et_xmlfile, + deps xhtml2pdf (reportlab/svglib/pyHanko). VPS user build dari requirements sendiri, tidak terpengaruh.
 
-## Notes / Backlog
-- arcweb/ (company profile SPA) also present in repo but NOT deployed here.
-- Frontend calls API via `src/lib/api.js` using REACT_APP_BACKEND_URL + `/api`.
-- User will send follow-up questions/requests next.
+## Root Cause — beban payroll tidak masuk Expense
+- `run_payroll` HANYA posting jurnal `Dr 6101 Beban Gaji` (benar; muncul di Income Statement PSAK).
+- Halaman **Expense** & **Laporan Laba Rugi** (`/api/reports/profit-loss`) baca koleksi `fixed_costs`, BUKAN jurnal.
+- Jan–Agu: user input manual baris Expense "Gaji Karyawan & Lembur" (akun 6207) tiap bulan → muncul di Laba Rugi.
+- September: baris manual belum diinput → beban gaji Sep tidak muncul di Expense/Laba Rugi.
 
-## Update (2026-06): Fix import Absensi (kolom jam tergeser) + catatan Lembur
-- Bug: file user (`template-absensi-2.xlsx`) mengisi JAM (07:10) di kolom `status`, jam pulang di kolom `check_in` (tergeser 1 kolom ke kiri). Importer lama menyimpan status mentah → status jadi jam (data rusak). Semua 265 baris kena.
-- Fix di `_run_attendance_import` (server.py): jika `status` berisi jam (regex HH:MM) & bukan keyword status dikenal → perlakukan sebagai check_in, geser check_in→check_out, status di-derive otomatis (Hadir).
-- Verified via API (bukan testing agent, sesuai permintaan user): import 265 baris → status kini Hadir/Izin/Libur/Alfa/Sakit (bukan jam); Abdul Aziz 26-08 in=07:10 out=21:00 Hadir; late-detection jalan (27-08 in=09:36 late=true).
-- Lembur: BUKAN bug kode. File user punya kolom `overtime_hours`/`overtime_rate` KOSONG semua (0 baris terisi) → tidak ada OT diimport. Pipeline OT terbukti jalan saat kolom diisi (uji 1 baris: ot_hours=3, rate=30000 tersimpan benar).
-- Frontend `Attendance.js` sudah panggil endpoint dgn benar (field "file", param mode/dry_run) — tidak diubah.
+## Fix (implemented 2026-09-30) — server.py
+- `ensure_payroll_expense(pdoc)`: cerminkan beban gaji payroll ke `fixed_costs` (category "Gaji", akun 6101, `no_journal=True`, `source_type="payroll"`, `source_ref`=payroll id). TIDAK posting jurnal baru (hindari dobel dengan 6101). Idempoten + skip bila sudah ada input Expense gaji manual >=50% net di bulan sama (cegah dobel bulan lama).
+- `run_payroll`: panggil `ensure_payroll_expense` setelah post jurnal.
+- `delete_payroll`: hapus juga `fixed_costs` source_type=payroll milik payroll tsb.
+- `update_fixed_cost`: skip re-post jurnal untuk record `no_journal` (auto payroll).
+- `backfill_payroll_expense()` dipanggil di `seed_data()` (selalu jalan tiap startup, sebelum gate SEED_DEMO_DATA) -> memperbaiki payroll yang sudah terlanjur jalan (Sep) otomatis saat backend start / **redeploy di VPS**.
 
-## Update (2026-06): Pipeline Penerimaan — month range (From–To)
-- Backend `/api/reports/receivable-pipeline`: tambah param `month_from` & `month_to` (YYYY-MM). Filter tgl order kini rentang inklusif; auto-swap jika terbalik; `month` tunggal tetap didukung (backward compat). Response memuat `month_from`/`month_to`.
-- Frontend `ReceivablePipeline.js`: MonthPicker tunggal → dua picker (Dari/Sampai bulan) + tombol Reset. State `monthFrom`/`monthTo`, label rentang, dan nama file export mengikuti rentang. Export Excel (client-side dari `data`) otomatis respect rentang.
-- Verifikasi API: Agustus (open46/ny314/inv84) + September (open329/ny0/inv1) = rentang Agu–Sep (open375/ny314/inv85). Sum cocok persis. Export mengikuti data yg sama.
+### Verifikasi
+- Sep: auto expense Gaji Rp 104.049.866 dibuat. P&L Sep total_expense 126.8M -> 230.9M, net profit -> -36.4M. PSAK 6101 Sep tetap single (104M).
+- Agu: TIDAK digandakan (manual 107.9M sudah ada). Idempoten setelah restart (tetap 1 entry Sep).
 
-## Update (2026-06): Aturan akuntansi Panjar → BDD + default Operation/Rumah Tangga
-- Panjar Open kini dicatat sebagai **1104 Biaya Dibayar di Muka (BDD)**, bukan 1108 lagi.
-  - `create_cash_advance` & BKK-import create: DR 1104 / CR Kas. Konstanta `PANJAR_ASSET_CODE="1104"`.
-  - Settle (semua flow) meng-CR 1104 (termasuk carry-over).
-- Default akun beban saat settle (helper `cash_advance_default_expense_code`) — HANYA untuk porsi tanpa kategori/breakdown eksplisit:
-  - Penerima cocok ke user role `operation` (match recipient_id atau recipient_name→users.full_name/username) → **5102 Beban Operasional Pengiriman**.
-  - Selain itu → **6201 Beban Rumah Tangga**.
-  - Baris kategori finance eksplisit (62xx) tetap seperti pilihan user.
-- Migrasi retroaktif `backend/scripts/migrate_panjar_bdd.py` (idempoten) dijalankan:
-  - 596 jurnal panjar di-relabel: 1108→1104 (394 create + 202 settle), 100 baris settle 5102→6201 (penerima non-operation).
-  - Saldo 1108=0; 1104(BDD) menyerap saldo panjar; Neraca tetap balanced (verified via /api/reports/balance-sheet).
-- Verified end-to-end: create+settle panjar recipient operation → 5102; recipient non-user → 6201; keduanya DR/CR 1104. Data uji dihapus.
+## Known issue (pre-existing, belum ditangani)
+- Di **Income Statement PSAK** (basis jurnal), bulan Jan–Agu gaji **dobel**: 6101 (jurnal payroll) + 6207 (jurnal dari input Expense manual). Ini data lama sebelum fix. Sep sudah bersih (single). Perlu keputusan user untuk pembersihan retro (reversal 6207 lama) — RISIKO tinggi, belum dilakukan.
 
-## Update (2026-06): Re-deploy + restore DB baru + audit jurnal Panjar
-- Restore ulang dari upload user ("Copy of Copy of arc_db.archive.gz") via `mongorestore --gzip --drop`: 24.525 dokumen.
-  Koleksi utama: awb_orders 2202, invoices 857, journal_entries 9994, cash_advances 389 (Panjar), fixed_costs 877, users 10.
-- Services jalan (supervisor): backend :8001, frontend :3000. Login admin/admin123 OK, GET /api/health OK.
-- Fix lint config: `.oxlintrc.json` ignore `**/public/arcweb/**` (false positive di bundle minified).
-- Audit jurnal Panjar Kerja (akun 1108):
-  - Create panjar: DR 1108 Panjar Kerja / CR Kas-Bank (1101/1102). Terverifikasi balance.
-  - Settle panjar: DR beban (5102 HPP / 62xx finance / awb_costs) + DR Kas (refund) / CR 1108. Balance.
-  - Contoh nyata PNJ-202607-0001 (Rp3jt): create DR1108 3jt; multi-partial settle CR1108 total 2.693.638 = settled_amount. Cocok.
-  - REKONSILIASI 1108 (temuan, bukan bug — data legacy/import):
-    - Saldo buku besar 1108 = Rp315.451.543 (DR 422.578.601 / CR 107.127.058).
-    - Outstanding Open panjar sesungguhnya = Rp208.654.600 (9 panjar Open).
-    - Gap ~Rp106,8jt terutama dari 272 panjar berstatus "Settled" tapi settled_amount=0 & tanpa jurnal settle (total amount Rp57.185.000) + partial settle + 5 jurnal create "orphan" (panjar sudah dihapus, jurnal tertinggal).
-    - Carry-over transferred belum dikonsumsi = 0.
-
-## Update (2026-06): Revenue exclude PPN
-- Requirement: revenue/Selling/Margin/Nilai AWB must EXCLUDE PPN (VAT); PPN only for invoice/payment.
-- Definition chosen (user): selling = grand_total - tax_amount (DPP + addon, exclude PPN).
-- Added helper `sellingOf()` in frontend/src/lib/utils.js.
-- Changed: OrdersList (Sales/Margin totals, row Selling, receive modal "Nilai AWB (Exc. PPN)"), Recap (Selling/Margin), Costs prorata (basis + displays).
-- Backend server.py: _generate_prorata_children._sales() = grand_total-tax_amount; candidate-awbs & cost-group children now return tax_amount & total_tariff.
-- Kept WITH PPN: InvoicesCreated, Payments, receive modal "Total Invoice (preview)".
-- Verified by testing_agent iteration_1.json: 100% pass. PPN rate in data ~1.1% (explains earlier ~1.011 Excel gap). Canonical test AWB 201189.
+## Backlog / Next
+- P1: Bersihkan dobel 6101 vs 6207 historis (Jan–Agu) di ledger PSAK (butuh konfirmasi & reversal terkontrol).
+- P2: Tandai baris Expense auto-payroll sebagai read-only di UI (cegah user edit/hapus tak sengaja).
+- P2: Satukan kategori "Gaji" (6101) vs "Gaji Karyawan & Lembur" (6207) agar konsisten.

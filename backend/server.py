@@ -943,6 +943,67 @@ async def create_expense_category(name: str, posting_type: str = "expense", user
     return await db.expense_categories.find_one({"_id": r.inserted_id})
 
 # ---------------------------------------------------------------------------
+# Payroll → Expense mirror
+# Saat payroll dijalankan, sistem sudah mem-post jurnal Dr 6101 Beban Gaji.
+# Namun halaman Expense & Laporan Laba Rugi membaca koleksi `fixed_costs`, bukan
+# jurnal — sehingga beban gaji tidak muncul di sana kecuali diinput manual.
+# Fungsi berikut mencerminkan beban gaji payroll ke `fixed_costs` (TANPA jurnal
+# baru, agar tidak dobel dengan jurnal 6101), idempoten, dan tidak menggandakan
+# bila di bulan yang sama sudah ada input Expense gaji manual.
+# ---------------------------------------------------------------------------
+async def ensure_payroll_expense(pdoc: dict, created_by: Optional[str] = None) -> Optional[str]:
+    pid = str(pdoc["_id"])
+    period = pdoc.get("period_month")
+    gross = round(float(pdoc.get("total_gross") or 0), 2)
+    if not period or gross <= 0:
+        return None
+    # Sudah pernah dibuat otomatis untuk payroll ini?
+    if await db.fixed_costs.find_one({"source_type": "payroll", "source_ref": pid}):
+        return None
+    # Sudah ada input Expense gaji manual di bulan ini (>= 50% net → anggap sudah tercatat)?
+    net = float(pdoc.get("total_net") or gross)
+    manual = await db.fixed_costs.find_one({
+        "period_month": period,
+        "posting_type": "expense",
+        "category": {"$regex": "gaji", "$options": "i"},
+        "source_type": {"$ne": "payroll"},
+        "amount": {"$gte": 0.5 * max(net, 0.0)},
+    })
+    if manual:
+        return None
+    cat = await get_expense_category("Gaji")
+    end_str = str(pdoc.get("period_end") or f"{period}-28")[:10]
+    doc = {
+        "category": (cat or {}).get("name", "Gaji"),
+        "posting_type": "expense",
+        "account_code": (cat or {}).get("account_code", "6101"),
+        "description": f"Beban Gaji Payroll {period} (otomatis)",
+        "amount": gross,
+        "expense_date": end_str,
+        "period_month": period,
+        "cash_account_code": pdoc.get("cash_account_code") or "1101",
+        "source_type": "payroll",
+        "source_ref": pid,
+        "no_journal": True,  # jurnal 6101 sudah dibuat proses payroll — jangan dobel
+        "created_by": created_by or pdoc.get("created_by"),
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.fixed_costs.insert_one(doc)
+    return str(r.inserted_id)
+
+
+async def backfill_payroll_expense():
+    """Perbaiki payroll yang sudah terlanjur dijalankan sebelum fitur auto-expense:
+    buat baris Expense beban gaji untuk tiap payroll yang belum punya. Idempoten &
+    aman dijalankan tiap startup (termasuk saat redeploy di VPS)."""
+    async for p in db.payroll.find({}):
+        try:
+            await ensure_payroll_expense(p)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Lifespan / Seeding
 # ---------------------------------------------------------------------------
 async def seed_data():
@@ -1149,6 +1210,10 @@ async def seed_data():
             {"$setOnInsert": {"key_name": k, "key_value": v}},
             upsert=True,
         )
+
+    # Backfill: cerminkan beban gaji dari payroll yang sudah dijalankan ke Expense
+    # (mis. September yang sudah di-run tapi belum masuk Laba Rugi). Idempoten.
+    await backfill_payroll_expense()
 
     # Sample/Demo data — STRICTLY opt-in.
     # Demo data is ONLY seeded when env var SEED_DEMO_DATA=true (default: false).
@@ -4406,25 +4471,27 @@ async def update_fixed_cost(fid: str, data: FixedCostUpdate, user: dict = Depend
     update_set["updated_by"] = user["id"]
     update_set["updated_at"] = datetime.now(timezone.utc)
     await db.fixed_costs.update_one({"_id": _oid(fid)}, {"$set": update_set})
-    # Re-post journal: delete old, post new
-    await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": fid})
     new = await db.fixed_costs.find_one({"_id": _oid(fid)})
-    try:
-        expense_code = new.get("account_code") or "6199"
-        label = "Beban Operasional" if new.get("posting_type") == "cogs" else "Beban"
-        cash_acc = new.get("cash_account_code") or "1101"
-        new_dt = expense_dt or (datetime.strptime(new["expense_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc) if new.get("expense_date") else new.get("created_at"))
-        await post_journal(
-            date=new_dt,
-            description=f"{label} {new['category']} - {new.get('expense_date') or new.get('period_month')} (edited)",
-            lines=[
-                {"account_code": expense_code, "debit": new["amount"], "credit": 0, "memo": new.get("description") or new["category"]},
-                {"account_code": cash_acc, "debit": 0, "credit": new["amount"], "memo": new["category"]},
-            ],
-            reference_type="fixed_cost", reference_id=fid, posted_by=user["id"],
-        )
-    except HTTPException:
-        pass
+    # Re-post journal: delete old, post new — KECUALI beban gaji otomatis dari payroll
+    # (no_journal=True): jurnal 6101 sudah dibuat proses payroll, jangan dobel.
+    if not new.get("no_journal"):
+        await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": fid})
+        try:
+            expense_code = new.get("account_code") or "6199"
+            label = "Beban Operasional" if new.get("posting_type") == "cogs" else "Beban"
+            cash_acc = new.get("cash_account_code") or "1101"
+            new_dt = expense_dt or (datetime.strptime(new["expense_date"], "%Y-%m-%d").replace(tzinfo=timezone.utc) if new.get("expense_date") else new.get("created_at"))
+            await post_journal(
+                date=new_dt,
+                description=f"{label} {new['category']} - {new.get('expense_date') or new.get('period_month')} (edited)",
+                lines=[
+                    {"account_code": expense_code, "debit": new["amount"], "credit": 0, "memo": new.get("description") or new["category"]},
+                    {"account_code": cash_acc, "debit": 0, "credit": new["amount"], "memo": new["category"]},
+                ],
+                reference_type="fixed_cost", reference_id=fid, posted_by=user["id"],
+            )
+        except HTTPException:
+            pass
     return serialize(new)
 
 @app.delete("/api/fixed-costs/{fid}")
@@ -6170,6 +6237,11 @@ async def run_payroll(data: PayrollRunIn, user: dict = Depends(require_feature("
         )
     except HTTPException:
         pass
+    # Cerminkan beban gaji ke halaman Expense / Laba Rugi (tanpa jurnal baru — 6101 sudah dibuat di atas)
+    try:
+        await ensure_payroll_expense({**payroll_doc, "_id": r.inserted_id}, created_by=user["id"])
+    except Exception:
+        pass
     # Update pinjaman kasbon: kurangi outstanding & catat cicilan yang dipotong per slip
     for s in slips:
         for it in s.get("kasbon_items", []):
@@ -6448,6 +6520,8 @@ async def delete_payroll(pid: str, user: dict = Depends(require_feature("hr"))):
             {"$set": {"payments": remaining, "outstanding": new_out, "status": "active"}, "$unset": {"settled_at": ""}},
         )
     await db.journal_entries.delete_many({"reference_type": "payroll", "reference_id": pid})
+    # Hapus baris Expense beban gaji otomatis milik payroll ini (mirror ke Laba Rugi)
+    await db.fixed_costs.delete_many({"source_type": "payroll", "source_ref": pid})
     # Reverse pembayaran PPh21 (jika sudah dibayar) — hapus fixed_cost + jurnalnya
     for fc in await db.fixed_costs.find({"source": "pph21_payment", "source_ref": pid}).to_list(100):
         await db.journal_entries.delete_many({"reference_type": "fixed_cost", "reference_id": str(fc["_id"])})

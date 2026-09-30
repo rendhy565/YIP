@@ -1,13 +1,15 @@
-# ARC (TMS) — Test Credentials
+# Test Credentials — ARC (TMS)
 
-Login via username (not email). Data restored from `arc_db.archive.gz`.
+App: ARC / TMS (FastAPI + React + MongoDB `arc_db`)
+Login via username (bukan email).
 
-| Username | Password | Role |
-|----------|----------|------|
-| admin | admin123 | administrator |
-| rendhy | admin123 | administrator |
-| operation | operation123 | operation |
-| finance | finance123 | finance |
+| Role          | Username   | Password     |
+|---------------|------------|--------------|
+| Administrator | admin      | admin123     |
+| Operation     | operation  | operation123 |
+| Finance       | finance    | finance123   |
 
-Note: passwords above are the defaults/seed. `admin` verified working via login API.
-Other real users exist in DB (operation leader, elvina, echa, rachel, dede, abidin) — passwords unknown (set by owner).
+Catatan:
+- Data di preview di-restore dari backup `luxoptic-shared-Kacrut-Digital-2026-09-30.gz` (koleksi `arc_db`).
+- Password admin di-sync ke `admin123` oleh seed saat startup (idempoten).
+- Data asli produksi juga punya user lain dari backup; kredensial di atas adalah akun seed default yang selalu tersedia.
