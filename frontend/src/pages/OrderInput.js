@@ -74,6 +74,7 @@ export default function OrderInput() {
   const [customers, setCustomers] = useState([]);
   const [contracts, setContracts] = useState([]);
   const [taxOpts, setTaxOpts] = useState([]);
+  const [armadaOptions, setArmadaOptions] = useState(ARMADA_OPTIONS);
 
   // New-customer quick-add modal
   const [showCust, setShowCust] = useState(false);
@@ -130,6 +131,9 @@ export default function OrderInput() {
   useEffect(() => {
     Promise.all([api.get("/customers"), api.get("/settings/tax-options")])
       .then(([c, t]) => { setCustomers(c.data); setTaxOpts(t.data); });
+    api.get("/masters/armada")
+      .then((r) => { if (Array.isArray(r.data) && r.data.length) setArmadaOptions(r.data.map((a) => a.name)); })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -557,7 +561,7 @@ export default function OrderInput() {
                 </Label>
                 <Select data-testid="order-armada-requested-input" value={form.armada_requested} onChange={(e) => setForm({ ...form, armada_requested: e.target.value })}>
                   <option value="">— Pilih Armada —</option>
-                  {ARMADA_OPTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                  {armadaOptions.map((a) => <option key={a} value={a}>{a}</option>)}
                 </Select>
               </div>
               <div>
@@ -567,7 +571,7 @@ export default function OrderInput() {
                 </Label>
                 <Select data-testid="order-armada-internal-input" value={form.armada_internal} onChange={(e) => setForm({ ...form, armada_internal: e.target.value })}>
                   <option value="">— Pilih Armada —</option>
-                  {ARMADA_OPTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
+                  {armadaOptions.map((a) => <option key={a} value={a}>{a}</option>)}
                 </Select>
               </div>
             </div>

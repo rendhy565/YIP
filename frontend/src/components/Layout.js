@@ -8,7 +8,7 @@ import {
   LogOut, FileSpreadsheet, Coins, Building2, Menu, X, Banknote, ShieldCheck,
   BookOpen, BookText, Library, Scale, Building, LineChart, Lock,
   UserCog, Percent, Briefcase, GitMerge, Upload, BarChart3, Repeat, Activity, FileSignature, CalendarClock,
-  ChevronDown, ChevronRight, FileClock, Receipt, Wand2,
+  ChevronDown, ChevronRight, FileClock, Receipt, Wand2, Truck,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 
@@ -79,6 +79,7 @@ const NAV = [
   { to: "/admin/super-edit", label: "Super Edit AWB", icon: Wand2, perm: "*", adminOnly: true },
   { to: "/admin/import-center", label: "Pusat Import", icon: Upload, perm: "*", adminOnly: true },
   { to: "/admin/gabung-customer", label: "Gabung Customer Duplikat", icon: GitMerge, perm: "*", adminOnly: true },
+  { to: "/admin/master-armada", label: "Master Armada", icon: Truck, perm: "*", adminOnly: true },
   { to: "/users", label: "User Management", icon: ShieldCheck, perm: "user_management" },
 ];
 

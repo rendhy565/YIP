@@ -49,6 +49,7 @@ import BulkImport from "./pages/BulkImport";
 import SuperEdit from "./pages/SuperEdit";
 import CustomerMerge from "./pages/CustomerMerge";
 import ImportCenter from "./pages/ImportCenter";
+import MasterArmada from "./pages/MasterArmada";
 import AnalyticsDashboard from "./pages/AnalyticsDashboard";
 import PanjarKerja from "./pages/PanjarKerja";
 import InvoicesCreated from "./pages/InvoicesCreated";
@@ -156,6 +157,7 @@ export default function App() {
             <Route path="/admin/import-massal" element={<Protected roles={["administrator"]}><Shell><ImportCenter /></Shell></Protected>} />
             <Route path="/admin/super-edit" element={<Protected roles={["administrator"]}><Shell><SuperEdit /></Shell></Protected>} />
             <Route path="/admin/gabung-customer" element={<Protected roles={["administrator"]}><Shell><CustomerMerge /></Shell></Protected>} />
+            <Route path="/admin/master-armada" element={<Protected roles={["administrator"]}><Shell><MasterArmada /></Shell></Protected>} />
             <Route path="/analytics" element={<Protected module="pnl"><Shell><AnalyticsDashboard /></Shell></Protected>} />
             <Route path="/panjar" element={<Protected module="fixed_costs"><Shell><PanjarKerja /></Shell></Protected>} />
             <Route path="/purchase-orders" element={<Protected module="purchase_orders"><Shell><PurchaseOrders /></Shell></Protected>} />

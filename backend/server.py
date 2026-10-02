@@ -1100,6 +1100,15 @@ async def seed_data():
             {"$set": {"posting_type": cat["posting_type"], "account_code": cat["account_code"]}},
         )
 
+    # Seed Master Armada (editable via admin "Master Armada"; replaces hardcoded ARMADA_OPTIONS in OrderInput)
+    await db.armada_master.create_index("name", unique=True)
+    for idx, nm in enumerate(ARMADA_MASTER_DEFAULTS):
+        await db.armada_master.update_one(
+            {"name": nm},
+            {"$setOnInsert": {"name": nm, "order": idx, "active": True, "created_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
     # Users
     seeds = [
         {
@@ -8919,6 +8928,103 @@ async def list_fleet_types(user: dict = Depends(get_current_user)):
 @app.get("/api/masters/armada-types")
 async def list_armada_types(user: dict = Depends(get_current_user)):
     return ARMADA_TYPES
+
+# ---- Master Armada (editable list for OrderInput dropdowns) ----
+ARMADA_MASTER_DEFAULTS = [
+    "TRUCKING CHARTER BLIND VAN",
+    "TRUCKING CHARTER MULTIDROP BLIND VAN",
+    "TRUCKING CHARTER 1 TON",
+    "TRUCKING CHARTER MULTIDROP 1 TON",
+    "TRUCKING CHARTER CDE",
+    "TRUCKING CHARTER MULTIDROP CDE",
+    "TRUCKING CHARTER CDD",
+    "TRUCKING CHARTER MULTIDROP CDD",
+    "TRUCKING CHARTER CDD LONG",
+    "TRUCKING CHARTER MULTIDROP CDD LONG",
+    "TRUCKING CHARTER FUSO",
+    "TRUCKING CHARTER MULTIDROP FUSO",
+    "TRUCKING CHARTER FUSO LONG",
+    "TRUCKING CHARTER MULTIDROP FUSO LONG",
+    "TRUCKING CHARTER TRONTON",
+    "TRUCKING CHARTER WING BOX",
+    'TRUCKING CHARTER CONTAINER 20"',
+    'TRUCKING CHARTER CONTAINER 40"',
+    "KONSUL UDARA",
+    "KONSUL DARAT",
+    "KONSUL LAUT",
+    "Multidrop Tronton",
+]
+
+class ArmadaMasterIn(BaseModel):
+    name: str
+    active: Optional[bool] = True
+
+class ArmadaMasterUpdate(BaseModel):
+    name: Optional[str] = None
+    active: Optional[bool] = None
+    order: Optional[int] = None
+
+class ArmadaReorderIn(BaseModel):
+    ids: List[str]
+
+@app.get("/api/masters/armada")
+async def list_armada_master(include_inactive: bool = False, user: dict = Depends(get_current_user)):
+    q = {} if include_inactive else {"active": {"$ne": False}}
+    docs = await db.armada_master.find(q).sort([("order", 1), ("name", 1)]).to_list(1000)
+    return [serialize(d) for d in docs]
+
+@app.post("/api/masters/armada")
+async def create_armada_master(data: ArmadaMasterIn, user: dict = Depends(require_role("administrator"))):
+    name = (data.name or "").strip()
+    if not name:
+        raise HTTPException(400, "Nama armada wajib diisi")
+    exists = await db.armada_master.find_one({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
+    if exists:
+        raise HTTPException(400, f"Armada '{name}' sudah ada")
+    last = await db.armada_master.find_one(sort=[("order", -1)])
+    next_order = (last.get("order", 0) + 1) if last else 0
+    doc = {
+        "name": name,
+        "active": bool(data.active) if data.active is not None else True,
+        "order": next_order,
+        "created_at": datetime.now(timezone.utc),
+    }
+    r = await db.armada_master.insert_one(doc)
+    return serialize(await db.armada_master.find_one({"_id": r.inserted_id}))
+
+@app.put("/api/masters/armada/{aid}")
+async def update_armada_master(aid: str, data: ArmadaMasterUpdate, user: dict = Depends(require_role("administrator"))):
+    doc = await db.armada_master.find_one({"_id": _oid(aid)})
+    if not doc:
+        raise HTTPException(404, "Armada tidak ditemukan")
+    update_set = {}
+    if data.name is not None and data.name.strip() and data.name.strip() != doc["name"]:
+        new_name = data.name.strip()
+        other = await db.armada_master.find_one({"name": {"$regex": f"^{re.escape(new_name)}$", "$options": "i"}})
+        if other and str(other["_id"]) != aid:
+            raise HTTPException(400, f"Armada '{new_name}' sudah ada")
+        update_set["name"] = new_name
+    if data.active is not None:
+        update_set["active"] = bool(data.active)
+    if data.order is not None:
+        update_set["order"] = int(data.order)
+    if update_set:
+        await db.armada_master.update_one({"_id": _oid(aid)}, {"$set": update_set})
+    return serialize(await db.armada_master.find_one({"_id": _oid(aid)}))
+
+@app.delete("/api/masters/armada/{aid}")
+async def delete_armada_master(aid: str, user: dict = Depends(require_role("administrator"))):
+    doc = await db.armada_master.find_one({"_id": _oid(aid)})
+    if not doc:
+        raise HTTPException(404, "Armada tidak ditemukan")
+    await db.armada_master.delete_one({"_id": _oid(aid)})
+    return {"ok": True}
+
+@app.post("/api/masters/armada/reorder")
+async def reorder_armada_master(data: ArmadaReorderIn, user: dict = Depends(require_role("administrator"))):
+    for idx, aid in enumerate(data.ids):
+        await db.armada_master.update_one({"_id": _oid(aid)}, {"$set": {"order": idx}})
+    return {"ok": True}
 
 # ---- WIPE Transactional Data (Admin only, with explicit confirm) ----
 class WipeIn(BaseModel):
