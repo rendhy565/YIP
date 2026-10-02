@@ -37,3 +37,13 @@ Follow-up: "Kok saya udah jalanin payroll september, tp bebannya gk masuk ke exp
 - P1: Bersihkan dobel 6101 vs 6207 historis (Jan–Agu) di ledger PSAK (butuh konfirmasi & reversal terkontrol).
 - P2: Tandai baris Expense auto-payroll sebagai read-only di UI (cegah user edit/hapus tak sengaja).
 - P2: Satukan kategori "Gaji" (6101) vs "Gaji Karyawan & Lembur" (6207) agar konsisten.
+
+---
+## Update 2026-10-02 — Master Armada (admin module)
+Problem: "Edit list armada pada Input Order + modul khusus edit armada di administrator."
+- Armada list was hardcoded (ARMADA_OPTIONS, 22 items) in OrderInput.js. Now DB-driven via `db.armada_master`.
+- Backend: GET/POST/PUT/DELETE `/api/masters/armada` + POST `/api/masters/armada/reorder` (writes = administrator only). Startup seeds 22 existing armada (idempotent, $setOnInsert). Fields: name, active, order.
+- Frontend: new admin page `MasterArmada.js` (route `/admin/master-armada`, admin-only) — add/edit/delete, active toggle, up/down reorder. Sidebar item "Master Armada" (Administrator section).
+- OrderInput.js now loads armada from `/masters/armada` (only active) for both dropdowns; keeps hardcoded list as fallback.
+- Fixed broken env deps during startup: pinned pydantic_core==2.23.4, added et_xmlfile==2.0.0 in requirements.txt.
+- Tested: backend curl (CRUD/reorder/validation/role-gating) + testing agent frontend 8/8 scenarios PASS.
